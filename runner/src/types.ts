@@ -1,0 +1,87 @@
+// `meta-docs` is reserved for Phase 3a meta-repo adoption (see Scope Boundary /
+// Follow-Up Phase 3a); no Phase 1a fixture uses it and it needs no validator coverage now.
+export type Stack = 'node-service' | 'frontend-web' | 'n8n-ops' | 'meta-docs';
+export type SchedulerClass =
+  | 'github-actions-push-and-schedule'
+  | 'n8n-webhook-and-schedule'
+  | 'schedule-only'
+  | 'local-only';
+export type FilesetSource = 'git_staged' | 'repo_all';
+export type CheckMode = 'blocking' | 'report-only';
+export type TierName = 'staged' | 'fast' | 'full' | 'audit';
+
+export interface Fileset {
+  name: string;
+  source: FilesetSource;
+  include: string[];
+  exclude?: string[];
+  diff_filter?: string;
+}
+
+export interface Check {
+  name: string;
+  argv: string[];
+  timeout_seconds: number;
+  skip_if_empty?: string;
+  mode?: CheckMode;
+  baseline?: string;
+  bypassable?: boolean;
+}
+
+export interface Workspace {
+  name: string;
+  path: string;
+  stack: Stack;
+  package_manager: 'npm' | 'pnpm' | 'yarn' | 'none';
+}
+
+export interface Manifest {
+  version: 1;
+  repo: string;
+  stack: Stack;
+  scheduler_class: SchedulerClass;
+  budgets: {
+    staged_seconds: number;
+    fast_seconds: number;
+    full_seconds: number;
+    audit_seconds: number;
+  };
+  policy: {
+    mutates_by_default: boolean;
+    format_fix_staged_allowed: boolean;
+    typed_eslint_in_precommit: boolean;
+    block_new_dead_code_only: boolean;
+  };
+  paths: { reports: string; baselines: string };
+  generated: { hooks_dir: string; ci_quality?: string };
+  workspaces: Workspace[];
+  filesets: Fileset[];
+  tiers: {
+    staged: Check[];
+    fast: Check[];
+    full: Check[];
+    audit?: Check[];
+  };
+  workflow?: { enabled: false };
+}
+
+export interface ValidationError {
+  path: string;
+  rule: string;
+  message: string;
+  value?: unknown;
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  errors: ValidationError[];
+}
+
+export interface CheckResult {
+  name: string;
+  tier: TierName;
+  status: 'pass' | 'fail' | 'skipped' | 'timeout';
+  exitCode: number | null;
+  durationMs: number;
+  mode: CheckMode;
+}
