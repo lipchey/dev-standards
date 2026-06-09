@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "repo": "dev-standards",
+  "stack": "node-service",
+  "scheduler_class": "local-only",
+  "budgets": {
+    "staged_seconds": 15,
+    "fast_seconds": 90,
+    "full_seconds": 300,
+    "audit_seconds": 300
+  },
+  "policy": {
+    "mutates_by_default": false,
+    "format_fix_staged_allowed": false,
+    "typed_eslint_in_precommit": false,
+    "block_new_dead_code_only": true
+  },
+  "paths": {
+    "reports": "reports/quality",
+    "baselines": "quality-baselines"
+  },
+  "generated": {
+    "hooks_dir": ".githooks"
+  },
+  "workspaces": [
+    {
+      "name": "root",
+      "path": ".",
+      "stack": "node-service",
+      "package_manager": "npm"
+    }
+  ],
+  "filesets": [
+    {
+      "name": "repo_ts",
+      "source": "repo_all",
+      "include": ["runner/src/**/*.ts", "tests/**/*.ts"],
+      "exclude": []
+    }
+  ],
+  "tiers": {
+    "staged": [],
+    "fast": [
+      {
+        "name": "runner-tests",
+        "argv": ["npm", "run", "test:runner"],
+        "timeout_seconds": 60
+      }
+    ],
+    "full": [
+      {
+        "name": "runner-typecheck",
+        "argv": ["npm", "run", "typecheck"],
+        "timeout_seconds": 60
+      },
+      {
+        "name": "runner-tests",
+        "argv": ["npm", "run", "test:runner"],
+        "timeout_seconds": 60
+      },
+      {
+        "name": "runner-build",
+        "argv": ["npm", "run", "build"],
+        "timeout_seconds": 60
+      }
+    ],
+    "audit": []
+  },
+  "workflow": {
+    "enabled": false
+  }
+}

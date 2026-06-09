@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dev-standards.local/quality.schema.json",
+  "title": "quality.json — self-maintaining quality-system manifest (v1)",
+  "description": "Per-repo manifest consumed by verify-runner. `version` is the MAJOR schema version (integer). This schema expresses structure, types, enums, and required keys; cross-field semantic rules (timeout-budget sums, fileset-reference integrity, argv shape, workflow-enabled gate) are enforced by the runner's hand-written validator and listed in the design spec §6.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "repo", "stack", "scheduler_class", "budgets", "policy", "paths", "generated", "workspaces", "filesets", "tiers"],
+  "properties": {
+    "version": { "const": 1, "description": "MAJOR schema version. dev-standards supports the current major and the immediately previous major." },
+    "repo": { "type": "string", "minLength": 1, "description": "Repository identifier." },
+    "stack": { "enum": ["node-service", "frontend-web", "n8n-ops", "meta-docs"], "description": "Primary stack template. meta-docs = the self-maintaining-system planning repo (lightweight markdown/secret checks)." },
+    "scheduler_class": { "enum": ["github-actions-push-and-schedule", "n8n-webhook-and-schedule", "schedule-only", "local-only"], "description": "Honest declaration of async/scheduled verification capability (plan §9)." },
+    "budgets": {
+      "type": "object", "additionalProperties": false,
+      "required": ["staged_seconds", "fast_seconds", "full_seconds", "audit_seconds"],
+      "properties": {
+        "staged_seconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "fast_seconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "full_seconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "audit_seconds": { "type": "integer", "exclusiveMinimum": 0 }
+      },
+      "description": "Hard wall-clock budgets per tier. The runner enforces sum(check timeout_seconds) <= the tier budget (see §6)."
+    },
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mutates_by_default", "format_fix_staged_allowed", "typed_eslint_in_precommit", "block_new_dead_code_only"],
+      "properties": {
+        "mutates_by_default": { "type": "boolean" },
+        "format_fix_staged_allowed": { "type": "boolean" },
+        "typed_eslint_in_precommit": { "type": "boolean" },
+        "block_new_dead_code_only": { "type": "boolean" }
+      }
+    },
+    "paths": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reports", "baselines"],
+      "properties": {
+        "reports": { "type": "string", "minLength": 1, "description": "Directory for generated reports; git-ignored." },
+        "baselines": { "type": "string", "minLength": 1, "description": "Directory for committed baselines." }
+      }
+    },
+    "generated": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hooks_dir"],
+      "properties": {
+        "hooks_dir": { "type": "string", "minLength": 1, "description": "core.hooksPath target holding generated native git hooks." },
+        "ci_quality": { "type": "string", "description": "Optional generated CI workflow path." }
+      }
+    },
+    "workspaces": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "path", "stack", "package_manager"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "stack": { "enum": ["node-service", "frontend-web", "n8n-ops", "meta-docs"] },
+          "package_manager": { "enum": ["npm", "pnpm", "yarn", "none"] }
+        }
+      }
+    },
+    "filesets": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "source", "include"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "source": { "enum": ["git_staged", "repo_all"], "description": "git_staged = `git diff --cached --name-only -z`; repo_all = `git ls-files -z`." },
+          "include": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Restricted glob dialect: `**` (any depth), `*` (within one path segment), literal segments, `*.ext`. Other glob features (`?`, `[...]`, `{...}`) are rejected by the validator." },
+          "exclude": { "type": "array", "items": { "type": "string" } },
+          "diff_filter": { "type": "string", "pattern": "^[ACDMRTUXB]+$", "default": "ACMR", "description": "git --diff-filter letters; applies only to git_staged. Defaults to ACMR." }
+        }
+      }
+    },
+    "tiers": {
+      "type": "object", "additionalProperties": false,
+      "required": ["staged", "fast", "full"],
+      "properties": {
+        "staged": { "$ref": "#/$defs/checkArray" },
+        "fast": { "$ref": "#/$defs/checkArray" },
+        "full": { "$ref": "#/$defs/checkArray" },
+        "audit": { "$ref": "#/$defs/checkArray" }
+      }
+    },
+    "workflow": { "$ref": "#/$defs/workflow" }
+  },
+  "$defs": {
+    "checkArray": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "argv", "timeout_seconds"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "argv": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Executed via spawnSync(file, args, {shell:false}). May contain at most one `{files:<fileset>}` token, expanded to N argv elements." },
+          "timeout_seconds": { "type": "integer", "exclusiveMinimum": 0, "description": "Mandatory per-check timeout." },
+          "skip_if_empty": { "type": "string", "description": "Fileset name; skip this check when that fileset expands to zero files." },
+          "mode": { "enum": ["blocking", "report-only"], "default": "blocking" },
+          "baseline": { "type": "string", "description": "Committed baseline path (baseline-diff semantics are out of pre-flight scope)." },
+          "bypassable": { "type": "boolean", "default": false, "description": "Whether QUALITY_BYPASS_REASON may relax this check. Secret/credential checks must keep this false. Enforcement is out of pre-flight scope." }
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional semi-automatic workflow layer. Absent, or `{\"enabled\": false}`, is valid. `enabled:true` is rejected in v1 until the full workflow-helper schema and validator ship.",
+      "required": ["enabled"],
+      "properties": { "enabled": { "const": false } }
+    }
+  }
+}
