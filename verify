@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+BUNDLE="${REPO_ROOT}/runner/dist/verify-runner.mjs"
+
+if [[ ! -f "${BUNDLE}" ]]; then
+  echo "verify-runner bundle not found. Please run: npm run build" >&2
+  exit 127
+fi
+
+exec node "${BUNDLE}" --manifest "${REPO_ROOT}/quality.json" "$@"

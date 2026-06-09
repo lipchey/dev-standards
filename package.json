@@ -1,0 +1,25 @@
+{
+  "name": "dev-standards",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "esbuild runner/src/verify-runner.ts runner/src/validate-quality-manifest.ts runner/src/migrate-quality-manifest.ts --bundle --platform=node --target=node20 --format=esm --sourcemap=external --outdir=runner/dist --out-extension:.js=.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/runner/*.test.ts",
+    "test:runner": "tsx --test tests/runner/*.test.ts",
+    "test:file": "tsx --test",
+    "validate:manifest": "node runner/dist/validate-quality-manifest.mjs --manifest quality.json",
+    "verify:full": "./verify --full"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "ajv": "^8.17.1",
+    "esbuild": "^0.24.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
