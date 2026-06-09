@@ -11,7 +11,7 @@ const manifestPath = fileURLToPath(new URL('../../quality.json', import.meta.url
 const schema = JSON.parse(readFileSync(schemaPath, 'utf-8')) as AnySchemaObject;
 const manifest: unknown = JSON.parse(readFileSync(manifestPath, 'utf-8'));
 
-const ajv = new Ajv2020();
+const ajv = new Ajv2020({ allErrors: true });
 const validateFn = ajv.compile(schema);
 
 test('root quality.json validates against quality.schema.json', () => {
