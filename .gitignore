@@ -3,3 +3,4 @@ runner/dist/
 reports/quality/
 *.tsbuildinfo
 .DS_Store
+.vscode/
