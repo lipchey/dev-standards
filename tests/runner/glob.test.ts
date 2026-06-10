@@ -34,3 +34,24 @@ test('* does not cross /', () => {
   // Negative: it must not match a deeper path.
   assert.equal(matches('src/nested/index.ts', 'src/*.ts'), false);
 });
+
+test('a middle ** matches zero or more intervening directories', () => {
+  // `a/**/c` == a, then zero-or-more dirs, then c.
+  assert.equal(matches('a/c', 'a/**/c'), true); // zero dirs
+  assert.equal(matches('a/b/c', 'a/**/c'), true); // one dir
+  assert.equal(matches('a/b/d/c', 'a/**/c'), true); // many dirs
+  assert.equal(matches('a/b/cx', 'a/**/c'), false); // anchored end
+});
+
+test('matches resists catastrophic backtracking on many doublestars (ReDoS)', () => {
+  // The old regex translation produced adjacent `(?:.*/)?` groups whose
+  // backtracking is exponential: ~7s at 14 doublestars. A linear matcher must
+  // return promptly even when the input does not match.
+  const pattern = '**/'.repeat(14) + 'x.ts';
+  const input = 'a/'.repeat(14) + 'no-match.js';
+  const start = process.hrtime.bigint();
+  const result = matches(input, pattern);
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.equal(result, false);
+  assert.ok(elapsedMs < 1000, `glob match took ${elapsedMs.toFixed(1)}ms, expected < 1000ms (ReDoS)`);
+});

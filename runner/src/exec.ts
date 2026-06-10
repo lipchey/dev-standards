@@ -12,10 +12,25 @@ export interface RunCheckInput {
 const FILES_TOKEN = /^\{files:([A-Za-z0-9_-]+)\}$/;
 
 /**
+ * A token-expanded operand beginning with `-` would be parsed as an OPTION by
+ * the spawned tool rather than as a file path (argv option injection). Filesets
+ * come from repo contents, so a pull request can introduce a file literally
+ * named `--config=evil.ts` that an honest TypeScript fileset then selects; with
+ * `shell:false` this is the residual injection vector. Only expanded operands
+ * are screened — a `--flag` the manifest author wrote directly into the argv is
+ * author-controlled and trusted.
+ */
+const OPTION_LIKE_OPERAND = /^-/;
+
+/**
  * Expands file tokens in an argv. Each `{files:<name>}` element is replaced by
  * the spread of `filesByName.get(name) ?? []`; every other element passes
  * through unchanged. The result is flattened, so a token whose fileset is empty
  * simply contributes nothing.
+ *
+ * Throws if any expanded operand is option-like (see `OPTION_LIKE_OPERAND`), so
+ * such an operand never reaches `spawnSync`; the run fails closed rather than
+ * handing an attacker-controlled flag to the tool.
  */
 export function expandArgv(argv: string[], filesByName: Map<string, string[]>): string[] {
   const expanded: string[] = [];
@@ -23,7 +38,17 @@ export function expandArgv(argv: string[], filesByName: Map<string, string[]>): 
     const match = FILES_TOKEN.exec(element);
     if (match) {
       const [, name] = match;
-      if (name !== undefined) expanded.push(...(filesByName.get(name) ?? []));
+      if (name !== undefined) {
+        for (const file of filesByName.get(name) ?? []) {
+          if (OPTION_LIKE_OPERAND.test(file)) {
+            throw new Error(
+              `fileset "${name}" produced an option-like operand ${JSON.stringify(file)}; ` +
+                'refusing to pass it as a command argument (possible argv option injection)',
+            );
+          }
+          expanded.push(file);
+        }
+      }
       continue;
     }
     expanded.push(element);

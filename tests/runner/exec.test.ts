@@ -45,6 +45,30 @@ test('expandArgv replaces a {files:x} token with the fileset spread', () => {
   assert.deepEqual(out, ['tool', 'a.ts', 'b.ts']);
 });
 
+test('expandArgv rejects an option-like expanded file operand (argv option injection)', () => {
+  // A repo file literally named `--config=evil.ts` can match an honest `**/*.ts`
+  // fileset; passed straight into argv a tool parses it as an option, not a path.
+  assert.throws(
+    () => expandArgv(['eslint', '{files:ts}'], new Map([['ts', ['--config=evil.ts', 'src/good.ts']]])),
+    /option-like|injection/i,
+  );
+  // A bare `-` prefix is just as dangerous (e.g. `-rf.ts` at the repo root).
+  assert.throws(
+    () => expandArgv(['tool', '{files:ts}'], new Map([['ts', ['-rf.ts']]])),
+    /option-like|injection/i,
+  );
+});
+
+test('expandArgv passes through a literal option the manifest author wrote', () => {
+  // Only token-expanded operands are guarded; a `--flag` written directly into
+  // the argv is author-controlled and trusted, and a dash mid-path is fine.
+  const out = expandArgv(
+    ['tool', '--max-warnings=0', '{files:ts}'],
+    new Map([['ts', ['src/my-file.ts', 'src/a.ts']]]),
+  );
+  assert.deepEqual(out, ['tool', '--max-warnings=0', 'src/my-file.ts', 'src/a.ts']);
+});
+
 test('argv collapsing to zero elements becomes status skipped, no throw', () => {
   const result = runCheck(input(check(['{files:empty}']), new Map([['empty', []]])));
   assert.equal(result.status, 'skipped');

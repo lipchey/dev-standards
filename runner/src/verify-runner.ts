@@ -1,9 +1,11 @@
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from './cli.ts';
 import { loadManifest } from './manifest.ts';
 import type { ManifestLoadResult } from './manifest.ts';
 import { expandFileset } from './filesets.ts';
 import { runCheck } from './exec.ts';
+import { assertWithinBudget } from './budget.ts';
 import { writeReport } from './report.ts';
 import { doctor } from './doctor.ts';
 import type { Check, CheckResult, Manifest, TierName } from './types.ts';
@@ -85,8 +87,17 @@ function main(argv: string[]): number {
  * structured report, prints a concise summary, and returns the exit code: 1
  * when any BLOCKING check failed or timed out, else 0. `report-only` outcomes
  * are recorded but never fail the run.
+ *
+ * After each check the tier's wall-clock budget is enforced: a tier that
+ * overruns `budgets.<scope>_seconds` throws (caught by `main` → clean non-zero
+ * exit) rather than running unbounded. A valid manifest's per-check timeouts
+ * already sum within budget (`tier-budget` rule), so this only bites a check
+ * that escapes its own timeout — e.g. a child that ignores the kill signal.
  */
-function runTier(manifest: Manifest, root: string, scope: TierName): number {
+export function runTier(manifest: Manifest, root: string, scope: TierName): number {
+  const startedAt = Date.now();
+  const budgetSeconds = manifest.budgets[`${scope}_seconds`];
+
   const filesByName = new Map<string, string[]>();
   for (const fileset of manifest.filesets) {
     filesByName.set(fileset.name, expandFileset(fileset, { cwd: root }));
@@ -97,11 +108,13 @@ function runTier(manifest: Manifest, root: string, scope: TierName): number {
     const result = runCheck({ check, tier: scope, cwd: root, filesByName });
     results.push(result);
     process.stdout.write(summarize(result));
+    assertWithinBudget(startedAt, budgetSeconds);
   }
 
   const reportPath = writeReport(
     { repo: manifest.repo, scope, generatedAt: new Date().toISOString(), results },
-    path.resolve(root, manifest.paths.reports),
+    root,
+    manifest.paths.reports,
   );
   process.stdout.write(`report: ${reportPath}\n`);
 
@@ -123,4 +136,10 @@ function summarize(r: CheckResult): string {
   return `  ${r.status.padEnd(7)} ${r.name} [${r.mode}] ${r.durationMs}ms exit ${exit}\n`;
 }
 
-process.exit(main(process.argv.slice(2)));
+// Run the CLI only when this module is the process entrypoint (executed
+// directly or via the bundled binary), not when it is imported by a test. This
+// is the seam that lets runTier be unit-tested without `main` calling
+// `process.exit` at import time.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exit(main(process.argv.slice(2)));
+}
