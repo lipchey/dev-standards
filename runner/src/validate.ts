@@ -166,7 +166,7 @@ function requireRecord(
   return undefined;
 }
 
-/** `required` — reports the missing key's full path. */
+/** `required` — reports the missing key's full path. Only own properties count. */
 function requireKeys(
   record: Record<string, unknown>,
   parentPath: string,
@@ -174,7 +174,7 @@ function requireKeys(
   errors: ValidationError[],
 ): void {
   for (const key of keys) {
-    if (!(key in record)) {
+    if (!Object.hasOwn(record, key)) {
       addError(errors, childPath(parentPath, key), 'required', `missing required key "${key}"`);
     }
   }
@@ -275,20 +275,20 @@ function validateStringArray(
 function validateStructure(root: Record<string, unknown>, errors: ValidationError[]): void {
   requireKeys(root, '', TOP_LEVEL_REQUIRED, errors);
   rejectUnknownKeys(root, '', TOP_LEVEL_ALLOWED, errors);
-  if ('version' in root) validateVersion(root['version'], errors);
-  if ('repo' in root) validateNonEmptyString(root['repo'], 'repo', errors);
-  if ('stack' in root) validateEnum(root['stack'], 'stack', STACKS, errors);
-  if ('scheduler_class' in root) {
+  if (Object.hasOwn(root, 'version')) validateVersion(root['version'], errors);
+  if (Object.hasOwn(root, 'repo')) validateNonEmptyString(root['repo'], 'repo', errors);
+  if (Object.hasOwn(root, 'stack')) validateEnum(root['stack'], 'stack', STACKS, errors);
+  if (Object.hasOwn(root, 'scheduler_class')) {
     validateEnum(root['scheduler_class'], 'scheduler_class', SCHEDULER_CLASSES, errors);
   }
-  if ('budgets' in root) validateBudgets(root['budgets'], errors);
-  if ('policy' in root) validatePolicy(root['policy'], errors);
-  if ('paths' in root) validatePaths(root['paths'], errors);
-  if ('generated' in root) validateGenerated(root['generated'], errors);
-  if ('workspaces' in root) validateWorkspaces(root['workspaces'], errors);
-  if ('filesets' in root) validateFilesets(root['filesets'], errors);
-  if ('tiers' in root) validateTiers(root['tiers'], errors);
-  if ('workflow' in root) validateWorkflow(root['workflow'], errors);
+  if (Object.hasOwn(root, 'budgets')) validateBudgets(root['budgets'], errors);
+  if (Object.hasOwn(root, 'policy')) validatePolicy(root['policy'], errors);
+  if (Object.hasOwn(root, 'paths')) validatePaths(root['paths'], errors);
+  if (Object.hasOwn(root, 'generated')) validateGenerated(root['generated'], errors);
+  if (Object.hasOwn(root, 'workspaces')) validateWorkspaces(root['workspaces'], errors);
+  if (Object.hasOwn(root, 'filesets')) validateFilesets(root['filesets'], errors);
+  if (Object.hasOwn(root, 'tiers')) validateTiers(root['tiers'], errors);
+  if (Object.hasOwn(root, 'workflow')) validateWorkflow(root['workflow'], errors);
 }
 
 /** `const: 1` — a single-value enum. */
@@ -310,7 +310,7 @@ function validateBudgets(value: unknown, errors: ValidationError[]): void {
   requireKeys(budgets, 'budgets', BUDGET_KEYS, errors);
   rejectUnknownKeys(budgets, 'budgets', BUDGET_KEYS, errors);
   for (const key of BUDGET_KEYS) {
-    if (key in budgets) validatePositiveInteger(budgets[key], `budgets.${key}`, errors);
+    if (Object.hasOwn(budgets, key)) validatePositiveInteger(budgets[key], `budgets.${key}`, errors);
   }
 }
 
@@ -320,7 +320,7 @@ function validatePolicy(value: unknown, errors: ValidationError[]): void {
   requireKeys(policy, 'policy', POLICY_KEYS, errors);
   rejectUnknownKeys(policy, 'policy', POLICY_KEYS, errors);
   for (const key of POLICY_KEYS) {
-    if (key in policy) validateBoolean(policy[key], `policy.${key}`, errors);
+    if (Object.hasOwn(policy, key)) validateBoolean(policy[key], `policy.${key}`, errors);
   }
 }
 
@@ -330,7 +330,7 @@ function validatePaths(value: unknown, errors: ValidationError[]): void {
   requireKeys(paths, 'paths', PATH_KEYS, errors);
   rejectUnknownKeys(paths, 'paths', PATH_KEYS, errors);
   for (const key of PATH_KEYS) {
-    if (key in paths) validateNonEmptyString(paths[key], `paths.${key}`, errors);
+    if (Object.hasOwn(paths, key)) validateNonEmptyString(paths[key], `paths.${key}`, errors);
   }
 }
 
@@ -339,17 +339,17 @@ function validateGenerated(value: unknown, errors: ValidationError[]): void {
   if (generated === undefined) return;
   requireKeys(generated, 'generated', ['hooks_dir'], errors);
   rejectUnknownKeys(generated, 'generated', ['hooks_dir', 'ci_quality'], errors);
-  if ('hooks_dir' in generated) {
+  if (Object.hasOwn(generated, 'hooks_dir')) {
     validateNonEmptyString(generated['hooks_dir'], 'generated.hooks_dir', errors);
   }
-  if ('ci_quality' in generated) {
+  if (Object.hasOwn(generated, 'ci_quality')) {
     validateString(generated['ci_quality'], 'generated.ci_quality', errors);
   }
 }
 
 function validateWorkspaces(value: unknown, errors: ValidationError[]): void {
   if (!isUnknownArray(value)) {
-    addError(errors, 'workspaces', 'type', `must be an array, got ${describeValue(value)}`, value);
+    addError(errors, 'workspaces', 'type', `must be an array of workspaces, got ${describeValue(value)}`, value);
     return;
   }
   if (value.length === 0) {
@@ -365,10 +365,10 @@ function validateWorkspace(value: unknown, path: string, errors: ValidationError
   if (workspace === undefined) return;
   requireKeys(workspace, path, WORKSPACE_KEYS, errors);
   rejectUnknownKeys(workspace, path, WORKSPACE_KEYS, errors);
-  if ('name' in workspace) validateNonEmptyString(workspace['name'], `${path}.name`, errors);
-  if ('path' in workspace) validateNonEmptyString(workspace['path'], `${path}.path`, errors);
-  if ('stack' in workspace) validateEnum(workspace['stack'], `${path}.stack`, STACKS, errors);
-  if ('package_manager' in workspace) {
+  if (Object.hasOwn(workspace, 'name')) validateNonEmptyString(workspace['name'], `${path}.name`, errors);
+  if (Object.hasOwn(workspace, 'path')) validateNonEmptyString(workspace['path'], `${path}.path`, errors);
+  if (Object.hasOwn(workspace, 'stack')) validateEnum(workspace['stack'], `${path}.stack`, STACKS, errors);
+  if (Object.hasOwn(workspace, 'package_manager')) {
     validateEnum(workspace['package_manager'], `${path}.package_manager`, PACKAGE_MANAGERS, errors);
   }
 }
@@ -376,7 +376,7 @@ function validateWorkspace(value: unknown, path: string, errors: ValidationError
 /** `filesets` has no minItems — an empty array is a valid (if useless) declaration. */
 function validateFilesets(value: unknown, errors: ValidationError[]): void {
   if (!isUnknownArray(value)) {
-    addError(errors, 'filesets', 'type', `must be an array, got ${describeValue(value)}`, value);
+    addError(errors, 'filesets', 'type', `must be an array of filesets, got ${describeValue(value)}`, value);
     return;
   }
   value.forEach((entry, index) => {
@@ -389,11 +389,11 @@ function validateFileset(value: unknown, path: string, errors: ValidationError[]
   if (fileset === undefined) return;
   requireKeys(fileset, path, FILESET_REQUIRED, errors);
   rejectUnknownKeys(fileset, path, FILESET_ALLOWED, errors);
-  if ('name' in fileset) validateNonEmptyString(fileset['name'], `${path}.name`, errors);
-  if ('source' in fileset) validateEnum(fileset['source'], `${path}.source`, FILESET_SOURCES, errors);
-  if ('include' in fileset) validateStringArray(fileset['include'], `${path}.include`, 1, errors);
-  if ('exclude' in fileset) validateStringArray(fileset['exclude'], `${path}.exclude`, 0, errors);
-  if ('diff_filter' in fileset) validateString(fileset['diff_filter'], `${path}.diff_filter`, errors);
+  if (Object.hasOwn(fileset, 'name')) validateNonEmptyString(fileset['name'], `${path}.name`, errors);
+  if (Object.hasOwn(fileset, 'source')) validateEnum(fileset['source'], `${path}.source`, FILESET_SOURCES, errors);
+  if (Object.hasOwn(fileset, 'include')) validateStringArray(fileset['include'], `${path}.include`, 1, errors);
+  if (Object.hasOwn(fileset, 'exclude')) validateStringArray(fileset['exclude'], `${path}.exclude`, 0, errors);
+  if (Object.hasOwn(fileset, 'diff_filter')) validateString(fileset['diff_filter'], `${path}.diff_filter`, errors);
 }
 
 function validateTiers(value: unknown, errors: ValidationError[]): void {
@@ -402,7 +402,7 @@ function validateTiers(value: unknown, errors: ValidationError[]): void {
   requireKeys(tiers, 'tiers', REQUIRED_TIERS, errors);
   rejectUnknownKeys(tiers, 'tiers', TIER_NAMES, errors);
   for (const tier of TIER_NAMES) {
-    if (tier in tiers) validateCheckArray(tiers[tier], `tiers.${tier}`, errors);
+    if (Object.hasOwn(tiers, tier)) validateCheckArray(tiers[tier], `tiers.${tier}`, errors);
   }
 }
 
@@ -421,15 +421,15 @@ function validateCheck(value: unknown, path: string, errors: ValidationError[]):
   if (check === undefined) return;
   requireKeys(check, path, CHECK_REQUIRED, errors);
   rejectUnknownKeys(check, path, CHECK_ALLOWED, errors);
-  if ('name' in check) validateNonEmptyString(check['name'], `${path}.name`, errors);
-  if ('argv' in check) validateStringArray(check['argv'], `${path}.argv`, 1, errors);
-  if ('timeout_seconds' in check) {
+  if (Object.hasOwn(check, 'name')) validateNonEmptyString(check['name'], `${path}.name`, errors);
+  if (Object.hasOwn(check, 'argv')) validateStringArray(check['argv'], `${path}.argv`, 1, errors);
+  if (Object.hasOwn(check, 'timeout_seconds')) {
     validatePositiveInteger(check['timeout_seconds'], `${path}.timeout_seconds`, errors);
   }
-  if ('skip_if_empty' in check) validateString(check['skip_if_empty'], `${path}.skip_if_empty`, errors);
-  if ('mode' in check) validateEnum(check['mode'], `${path}.mode`, CHECK_MODES, errors);
-  if ('baseline' in check) validateString(check['baseline'], `${path}.baseline`, errors);
-  if ('bypassable' in check) validateBoolean(check['bypassable'], `${path}.bypassable`, errors);
+  if (Object.hasOwn(check, 'skip_if_empty')) validateString(check['skip_if_empty'], `${path}.skip_if_empty`, errors);
+  if (Object.hasOwn(check, 'mode')) validateEnum(check['mode'], `${path}.mode`, CHECK_MODES, errors);
+  if (Object.hasOwn(check, 'baseline')) validateString(check['baseline'], `${path}.baseline`, errors);
+  if (Object.hasOwn(check, 'bypassable')) validateBoolean(check['bypassable'], `${path}.bypassable`, errors);
 }
 
 function validateWorkflow(value: unknown, errors: ValidationError[]): void {
@@ -437,7 +437,7 @@ function validateWorkflow(value: unknown, errors: ValidationError[]): void {
   if (workflow === undefined) return;
   requireKeys(workflow, 'workflow', WORKFLOW_KEYS, errors);
   rejectUnknownKeys(workflow, 'workflow', WORKFLOW_KEYS, errors);
-  if (!('enabled' in workflow)) return;
+  if (!Object.hasOwn(workflow, 'enabled')) return;
   const enabled = workflow['enabled'];
   // `true` is left to the semantic workflow-enabled gate so it yields exactly
   // one clear error; any other non-`false` value breaks the `const: false`.
@@ -510,7 +510,7 @@ function validateTierCheckSemantics(
   for (const tier of TIER_NAMES) {
     const checks = tiers[tier];
     if (!isUnknownArray(checks)) continue;
-    reportDuplicateNames(checks, `tiers.${tier}`, 'check-name-unique', `check in tier "${tier}"`, errors);
+    reportDuplicateNames(checks, `tiers.${tier}`, 'check-name-unique', 'check', ` in tier "${tier}"`, errors);
     checks.forEach((check, index) => {
       if (!isRecord(check)) return;
       validateCheckSemantics(check, `tiers.${tier}[${index}]`, filesetNames, errors);
@@ -585,7 +585,7 @@ function validateArgvFileTokens(
 function validateFilesetSemantics(root: Record<string, unknown>, errors: ValidationError[]): void {
   const filesets = root['filesets'];
   if (!isUnknownArray(filesets)) return;
-  reportDuplicateNames(filesets, 'filesets', 'fileset-name-unique', 'fileset', errors);
+  reportDuplicateNames(filesets, 'filesets', 'fileset-name-unique', 'fileset', '', errors);
   filesets.forEach((fileset, index) => {
     if (!isRecord(fileset)) return;
     const filesetPath = `filesets[${index}]`;
@@ -621,7 +621,7 @@ function validateDiffFilterScope(
   filesetPath: string,
   errors: ValidationError[],
 ): void {
-  if ('diff_filter' in fileset && fileset['source'] === 'repo_all') {
+  if (Object.hasOwn(fileset, 'diff_filter') && fileset['source'] === 'repo_all') {
     addError(
       errors,
       `${filesetPath}.diff_filter`,
@@ -635,15 +635,19 @@ function validateDiffFilterScope(
 function validateWorkspaceUniqueness(root: Record<string, unknown>, errors: ValidationError[]): void {
   const workspaces = root['workspaces'];
   if (!isUnknownArray(workspaces)) return;
-  reportDuplicateNames(workspaces, 'workspaces', 'workspace-name-unique', 'workspace', errors);
+  reportDuplicateNames(workspaces, 'workspaces', 'workspace-name-unique', 'workspace', '', errors);
 }
 
-/** Flags every entry whose string `name` repeats an earlier one. */
+/**
+ * Flags every entry whose string `name` repeats an earlier one. `context` is
+ * appended after the quoted name (`''`, or a locator like ` in tier "fast"`).
+ */
 function reportDuplicateNames(
   entries: readonly unknown[],
   basePath: string,
   rule: UniquenessRule,
   label: string,
+  context: string,
   errors: ValidationError[],
 ): void {
   const seen = new Set<string>();
@@ -652,7 +656,13 @@ function reportDuplicateNames(
     const name = entry['name'];
     if (typeof name !== 'string') return;
     if (seen.has(name)) {
-      addError(errors, `${basePath}[${index}].name`, rule, `duplicate ${label} name ${JSON.stringify(name)}`, name);
+      addError(
+        errors,
+        `${basePath}[${index}].name`,
+        rule,
+        `duplicate ${label} name ${JSON.stringify(name)}${context}`,
+        name,
+      );
     }
     seen.add(name);
   });
