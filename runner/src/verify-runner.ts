@@ -2,7 +2,7 @@ import path from 'node:path';
 import { parseArgs } from './cli.ts';
 import { loadManifest } from './manifest.ts';
 import type { ManifestLoadResult } from './manifest.ts';
-import { formatErrorLine, isMainModule } from './manifest-cli.ts';
+import { EXIT_MANIFEST, EXIT_USAGE, formatErrorLine, isMainModule } from './manifest-cli.ts';
 import { expandFileset } from './filesets.ts';
 import { runCheck } from './exec.ts';
 import { assertWithinBudget } from './budget.ts';
@@ -10,10 +10,6 @@ import { writeReport } from './report.ts';
 import { doctor } from './doctor.ts';
 import type { Check, CheckResult, Manifest, TierName } from './types.ts';
 
-/** Exit code for CLI/usage faults (bad args, reserved scope). */
-const EXIT_USAGE = 2;
-/** Exit code for a manifest that cannot be read or fails validation. */
-const EXIT_MANIFEST = 1;
 /** Exit code when a blocking check failed or timed out during a tier run. */
 const EXIT_CHECK_FAILED = 1;
 

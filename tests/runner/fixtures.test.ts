@@ -49,8 +49,10 @@ function ensureFixtureRepo(name: string): void {
 
   const opts = { cwd: fixtureDir, stdio: 'inherit' as const };
   const init = spawnSync('git', ['init', '-q'], opts);
+  assert.equal(init.error, undefined, `git init must spawn for fixture ${name}: ${init.error?.message}`);
   assert.equal(init.status, 0, `git init must succeed for fixture ${name}`);
   const add = spawnSync('git', ['add', '.'], opts);
+  assert.equal(add.error, undefined, `git add must spawn for fixture ${name}: ${add.error?.message}`);
   assert.equal(add.status, 0, `git add must succeed for fixture ${name}`);
   const commit = spawnSync(
     'git',
@@ -65,6 +67,11 @@ function ensureFixtureRepo(name: string): void {
       'fixture baseline',
     ],
     opts,
+  );
+  assert.equal(
+    commit.error,
+    undefined,
+    `git commit must spawn for fixture ${name}: ${commit.error?.message}`,
   );
   assert.equal(commit.status, 0, `git commit must succeed for fixture ${name}`);
 }
@@ -87,6 +94,7 @@ before(() => {
     ],
     { cwd: repoRoot, stdio: 'inherit' },
   );
+  assert.equal(build.error, undefined, `esbuild must spawn: ${build.error?.message}`);
   assert.equal(build.status, 0, 'esbuild build of verify-runner.ts must succeed');
 
   // Fresh-clone robustness: re-create each fixture's local-only git repo when
@@ -113,6 +121,21 @@ for (const name of FIXTURES) {
     assert.ok(
       fs.existsSync(fixtureReport(name, 'full')),
       `--full must write ${fixtureReport(name, 'full')}`,
+    );
+
+    // The reports just written must not dirty the fixture's nested repo: its
+    // `.gitignore` (`reports/`) keeps the written reports untracked, so the
+    // nested worktree stays clean. An empty `--porcelain` output proves it.
+    const fixtureDir = path.join(repoRoot, 'tests', 'fixtures', name);
+    const status = spawnSync('git', ['-C', fixtureDir, 'status', '--porcelain'], {
+      encoding: 'utf8',
+    });
+    assert.equal(status.error, undefined, `git status must spawn for ${name}: ${status.error?.message}`);
+    assert.equal(status.status, 0, `git status must succeed for ${name}`);
+    assert.equal(
+      status.stdout,
+      '',
+      `fixture ${name} nested repo must stay clean (reports/ gitignored), got: ${status.stdout}`,
     );
   });
 }
