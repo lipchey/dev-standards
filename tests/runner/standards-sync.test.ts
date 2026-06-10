@@ -103,7 +103,47 @@ test('standards-sync: a missing schema exits 1', () => {
       encoding: 'utf8',
     });
     assert.equal(result.status, 1, `expected exit 1; got ${result.status}: ${combined(result)}`);
-    assert.ok((result.stderr ?? '').length > 0, 'expected an error on stderr about the missing schema');
+    // Exit 1 must come from the schema check, not a skipped/half-run validator.
+    // The manifest in this temp root is valid, so the validator must genuinely
+    // run and emit its success phrase; the missing-schema message must name the
+    // schema. (Pre-fix, the symlinked /var temp path made the entrypoint guard
+    // export-only and exit 0 — both assertions below would have failed.)
+    assert.match(combined(result), /valid quality manifest/, 'validator must actually run on the valid manifest');
+    assert.match(result.stderr ?? '', /schema/i, 'expected the missing-schema message on stderr');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: an invalid manifest propagates the validator exit 1 with a validation error', () => {
+  // Bundle AND schema are present, but quality.json is invalid (bad `stack`
+  // enum). This pins that the validator genuinely runs through the shim and its
+  // exit 1 propagates — the exact failure the symlink-safe entrypoint guard
+  // protects: under a symlinked (/var) temp path the pre-fix guard exported only
+  // and exited 0, swallowing the invalid manifest.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-sync-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'runner', 'dist'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'schemas'), { recursive: true });
+    fs.copyFileSync(path.join(repoRoot, bundleRel), path.join(dir, bundleRel));
+    fs.copyFileSync(
+      path.join(repoRoot, 'schemas', 'quality.schema.json'),
+      path.join(dir, 'schemas', 'quality.schema.json'),
+    );
+    fs.copyFileSync(shimPath, path.join(dir, 'tools', 'standards-sync'));
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, 'quality.json'), 'utf8'));
+    manifest.stack = 'not-a-real-stack';
+    fs.writeFileSync(path.join(dir, 'quality.json'), JSON.stringify(manifest, null, 2));
+
+    const result = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 1, `expected exit 1; got ${result.status}: ${combined(result)}`);
+    assert.match(result.stderr ?? '', /^stack: must be one of/m, `expected a validation error line; got ${JSON.stringify(result.stderr)}`);
+    assert.doesNotMatch(combined(result), /standards-sync check passed/, 'the shim must not report success on an invalid manifest');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

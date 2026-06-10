@@ -1,10 +1,10 @@
-import { pathToFileURL } from 'node:url';
 import { loadManifest } from './manifest.ts';
 import type { ManifestLoadResult } from './manifest.ts';
 import {
   EXIT_MANIFEST,
   EXIT_USAGE,
   formatErrorLine,
+  isMainModule,
   parseManifestArg,
   type CliResult,
 } from './manifest-cli.ts';
@@ -52,7 +52,7 @@ export function run(argv: string[]): CliResult {
 
 // Run the CLI only when this module is the process entrypoint, not when a test
 // imports `run`. This seam keeps `run` exitless and capturable.
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   const result = run(process.argv.slice(2));
   for (const line of result.stdout) process.stdout.write(`${line}\n`);
   for (const line of result.stderr) process.stderr.write(`${line}\n`);

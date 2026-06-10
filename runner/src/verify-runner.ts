@@ -1,9 +1,8 @@
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { parseArgs } from './cli.ts';
 import { loadManifest } from './manifest.ts';
 import type { ManifestLoadResult } from './manifest.ts';
-import { formatErrorLine } from './manifest-cli.ts';
+import { formatErrorLine, isMainModule } from './manifest-cli.ts';
 import { expandFileset } from './filesets.ts';
 import { runCheck } from './exec.ts';
 import { assertWithinBudget } from './budget.ts';
@@ -138,6 +137,6 @@ function summarize(r: CheckResult): string {
 // directly or via the bundled binary), not when it is imported by a test. This
 // is the seam that lets runTier be unit-tested without `main` calling
 // `process.exit` at import time.
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   process.exit(main(process.argv.slice(2)));
 }

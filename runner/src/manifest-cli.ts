@@ -1,4 +1,32 @@
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { ValidationError } from './types.ts';
+
+/**
+ * Reports whether the module identified by `metaUrl` (pass `import.meta.url`) is
+ * the process entrypoint, so a CLI runs only when executed directly and stays
+ * inert when a test imports it.
+ *
+ * The naive guard `metaUrl === pathToFileURL(process.argv[1]).href` is unsafe
+ * under symlinks: Node realpath-resolves `import.meta.url` but not
+ * `process.argv[1]`, so on macOS temp dirs (`/var` -> `/private/var`) or any
+ * symlinked checkout the two never match and the CLI silently exports-only,
+ * exiting 0 without doing its work. We therefore realpath BOTH sides before
+ * comparing. `realpathSync` can throw (e.g. argv path vanished between launch
+ * and import); we fall back to the literal comparison so this can never throw at
+ * import time. Returns false when there is no `process.argv[1]` at all.
+ */
+export function isMainModule(metaUrl: string): boolean {
+  const argvPath = process.argv[1];
+  if (argvPath === undefined) return false;
+
+  const metaPath = fileURLToPath(metaUrl);
+  try {
+    return realpathSync(argvPath) === realpathSync(metaPath);
+  } catch {
+    return argvPath === metaPath;
+  }
+}
 
 /** Exit code for CLI/usage faults (bad args). */
 export const EXIT_USAGE = 2;

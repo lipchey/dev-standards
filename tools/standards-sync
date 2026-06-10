@@ -7,7 +7,7 @@ set -euo pipefail
 # rule; Phase 1a generates no hooks/adapters, so hooks-presence and adapter-drift
 # have nothing to check yet. This shim lives at tools/standards-sync, so the repo
 # root is one level up from its own directory.
-REPO_ROOT="$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)"
 BUNDLE="${REPO_ROOT}/runner/dist/validate-quality-manifest.mjs"
 SCHEMA="${REPO_ROOT}/schemas/quality.schema.json"
 MANIFEST="${REPO_ROOT}/quality.json"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(CDPATH= cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd "$(dirname "$0")" && pwd -P)"
 BUNDLE="${REPO_ROOT}/runner/dist/verify-runner.mjs"
 
 if [[ ! -f "${BUNDLE}" ]]; then
