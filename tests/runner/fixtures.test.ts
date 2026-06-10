@@ -34,6 +34,41 @@ function runRunner(manifest: string, scopeFlag: string): ReturnType<typeof spawn
   });
 }
 
+/**
+ * Ensures a fixture is a git repo with its baseline commit. The nested `.git`
+ * dirs are local-only (never cloned into the parent repo), so a fresh clone has
+ * the fixture FILES tracked as ordinary blobs but no `.git`. The runner shells
+ * out to `git ls-files` from the fixture root, which would fail there. This
+ * re-creates the baseline repo when `.git` is absent; an existing repo is left
+ * untouched. The committer identity is set inline so it also works in clean CI
+ * environments with no global git config.
+ */
+function ensureFixtureRepo(name: string): void {
+  const fixtureDir = path.join(repoRoot, 'tests', 'fixtures', name);
+  if (fs.existsSync(path.join(fixtureDir, '.git'))) return;
+
+  const opts = { cwd: fixtureDir, stdio: 'inherit' as const };
+  const init = spawnSync('git', ['init', '-q'], opts);
+  assert.equal(init.status, 0, `git init must succeed for fixture ${name}`);
+  const add = spawnSync('git', ['add', '.'], opts);
+  assert.equal(add.status, 0, `git add must succeed for fixture ${name}`);
+  const commit = spawnSync(
+    'git',
+    [
+      '-c',
+      'user.email=fixtures@dev-standards.local',
+      '-c',
+      'user.name=fixtures',
+      'commit',
+      '-q',
+      '-m',
+      'fixture baseline',
+    ],
+    opts,
+  );
+  assert.equal(commit.status, 0, `git commit must succeed for fixture ${name}`);
+}
+
 before(() => {
   // Build only verify-runner.ts (Task 9 entrypoints do not exist yet), with the
   // same flags as the root build script, so the suite is robust to task order.
@@ -53,6 +88,10 @@ before(() => {
     { cwd: repoRoot, stdio: 'inherit' },
   );
   assert.equal(build.status, 0, 'esbuild build of verify-runner.ts must succeed');
+
+  // Fresh-clone robustness: re-create each fixture's local-only git repo when
+  // its `.git` is missing, so the runner's `git ls-files` discovery works.
+  for (const name of FIXTURES) ensureFixtureRepo(name);
 });
 
 for (const name of FIXTURES) {

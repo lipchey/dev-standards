@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "repo": "fixture-n8n-ops",
+  "stack": "n8n-ops",
+  "scheduler_class": "local-only",
+  "budgets": { "staged_seconds": 10, "fast_seconds": 20, "full_seconds": 30, "audit_seconds": 30 },
+  "policy": { "mutates_by_default": false, "format_fix_staged_allowed": false, "typed_eslint_in_precommit": false, "block_new_dead_code_only": true },
+  "paths": { "reports": "reports/quality", "baselines": "quality-baselines" },
+  "generated": { "hooks_dir": ".githooks" },
+  "workspaces": [ { "name": "root", "path": ".", "stack": "n8n-ops", "package_manager": "none" } ],
+  "filesets": [ { "name": "repo_workflows", "source": "repo_all", "include": ["workflows/**/*.json"], "exclude": [] } ],
+  "tiers": {
+    "staged": [],
+    "fast": [
+      { "name": "ok", "argv": ["node", "../../stubs/ok.mjs"], "timeout_seconds": 5 },
+      { "name": "echo-files", "argv": ["node", "../../stubs/echo-files.mjs", "{files:repo_workflows}"], "timeout_seconds": 5, "skip_if_empty": "repo_workflows" }
+    ],
+    "full": [ { "name": "ok", "argv": ["node", "../../stubs/ok.mjs"], "timeout_seconds": 5 } ],
+    "audit": []
+  },
+  "workflow": { "enabled": false }
+}
