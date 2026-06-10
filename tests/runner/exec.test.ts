@@ -59,6 +59,27 @@ test('expandArgv rejects an option-like expanded file operand (argv option injec
   );
 });
 
+test('expandArgv rejects an @-prefixed expanded file operand (response-file injection)', () => {
+  // A repo file literally named `@evil` can match an honest fileset; tools like
+  // `tsc` parse a leading `@` operand as a response file and splice its contents
+  // in as further arguments, so it must fail closed (P2a).
+  assert.throws(
+    () => expandArgv(['tsc', '{files:ts}'], new Map([['ts', ['@evil', 'src/good.ts']]])),
+    /option-like|injection/i,
+  );
+});
+
+test('runCheck fails closed on an @-prefixed expanded operand (response-file injection)', () => {
+  // The throw must propagate through runCheck, not just expandArgv.
+  assert.throws(
+    () =>
+      runCheck(
+        input(check([process.execPath, '{files:ts}']), new Map([['ts', ['@evil']]])),
+      ),
+    /option-like|injection/i,
+  );
+});
+
 test('expandArgv passes through a literal option the manifest author wrote', () => {
   // Only token-expanded operands are guarded; a `--flag` written directly into
   // the argv is author-controlled and trusted, and a dash mid-path is fine.

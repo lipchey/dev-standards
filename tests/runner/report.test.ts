@@ -83,3 +83,54 @@ test('writeReport rejects a symlinked report directory that escapes the repo roo
     fs.rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test('writeReport replaces a symlinked report leaf instead of following it (P1)', () => {
+  const root = tmp();
+  const victimDir = tmp('verify-victim-');
+  const victim = path.join(victimDir, 'victim.txt');
+  const original = 'ORIGINAL VICTIM CONTENT\n';
+  try {
+    fs.writeFileSync(victim, original);
+    // Hostile repo content: the in-repo report leaf is a symlink to an outside
+    // operator-writable file (manifest `paths.reports: "."` selects the root).
+    const leaf = path.join(root, 'verify-fast.json');
+    fs.symlinkSync(victim, leaf);
+
+    const report = makeReport();
+    const written = writeReport(report, root, '.');
+
+    assert.equal(written, leaf);
+    assert.equal(
+      fs.readFileSync(victim, 'utf8'),
+      original,
+      'the out-of-repo symlink target must be left untouched',
+    );
+    assert.ok(
+      !fs.lstatSync(leaf).isSymbolicLink(),
+      'the report leaf must be replaced by a real file, not the symlink',
+    );
+    assert.deepEqual(JSON.parse(fs.readFileSync(leaf, 'utf8')), report);
+    // No stray temp file may survive a successful write.
+    assert.deepEqual(
+      fs.readdirSync(root).filter((entry) => entry.endsWith('.tmp')),
+      [],
+      'the atomic-write temp file must not be left behind',
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(victimDir, { recursive: true, force: true });
+  }
+});
+
+test('writeReport overwrites an existing real report leaf (regression for atomic rename)', () => {
+  const root = tmp();
+  try {
+    writeReport(makeReport(), root, 'reports');
+    const second = makeReport();
+    second.generatedAt = new Date(Date.now() + 1000).toISOString();
+    const written = writeReport(second, root, 'reports');
+    assert.deepEqual(JSON.parse(fs.readFileSync(written, 'utf8')), second);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

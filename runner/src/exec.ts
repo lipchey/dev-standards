@@ -12,15 +12,20 @@ export interface RunCheckInput {
 const FILES_TOKEN = /^\{files:([A-Za-z0-9_-]+)\}$/;
 
 /**
- * A token-expanded operand beginning with `-` would be parsed as an OPTION by
- * the spawned tool rather than as a file path (argv option injection). Filesets
- * come from repo contents, so a pull request can introduce a file literally
- * named `--config=evil.ts` that an honest TypeScript fileset then selects; with
- * `shell:false` this is the residual injection vector. Only expanded operands
- * are screened — a `--flag` the manifest author wrote directly into the argv is
- * author-controlled and trusted.
+ * A token-expanded operand beginning with `-` or `@` is a tool DIRECTIVE rather
+ * than a file path, so it must never reach the spawned tool:
+ *   - a leading `-` is parsed as an OPTION (argv option injection), e.g. a repo
+ *     file literally named `--config=evil.ts`;
+ *   - a leading `@` is parsed by tools such as `tsc` as a RESPONSE FILE whose
+ *     contents are spliced in as further arguments (response-file injection),
+ *     e.g. a repo file literally named `@evil`.
+ * Filesets come from repo contents, so a pull request can introduce such a file
+ * that an honest fileset then selects; with `shell:false` this is the residual
+ * injection vector. Only expanded operands are screened — a `--flag` or `@list`
+ * the manifest author wrote directly into the argv is author-controlled and
+ * trusted.
  */
-const OPTION_LIKE_OPERAND = /^-/;
+const OPTION_LIKE_OPERAND = /^[-@]/;
 
 /**
  * Expands file tokens in an argv. Each `{files:<name>}` element is replaced by
@@ -28,9 +33,10 @@ const OPTION_LIKE_OPERAND = /^-/;
  * through unchanged. The result is flattened, so a token whose fileset is empty
  * simply contributes nothing.
  *
- * Throws if any expanded operand is option-like (see `OPTION_LIKE_OPERAND`), so
- * such an operand never reaches `spawnSync`; the run fails closed rather than
- * handing an attacker-controlled flag to the tool.
+ * Throws if any expanded operand is a tool directive — option-like (`-`) or a
+ * response file (`@`); see `OPTION_LIKE_OPERAND` — so such an operand never
+ * reaches `spawnSync`; the run fails closed rather than handing an
+ * attacker-controlled flag or argument file to the tool.
  */
 export function expandArgv(argv: string[], filesByName: Map<string, string[]>): string[] {
   const expanded: string[] = [];
@@ -43,7 +49,8 @@ export function expandArgv(argv: string[], filesByName: Map<string, string[]>): 
           if (OPTION_LIKE_OPERAND.test(file)) {
             throw new Error(
               `fileset "${name}" produced an option-like operand ${JSON.stringify(file)}; ` +
-                'refusing to pass it as a command argument (possible argv option injection)',
+                'refusing to pass it as a command argument ' +
+                '(possible argv option or response-file injection)',
             );
           }
           expanded.push(file);
@@ -90,6 +97,12 @@ export function runCheck(input: RunCheckInput): CheckResult {
   if (file === undefined) return skipped(check.name, tier, mode);
 
   const startedAt = Date.now();
+  // On timeout `spawnSync` signals only the immediate child, not its process
+  // group, so detached grandchildren can outlive a `timeout` result (backlog
+  // P2b). A POSIX group-kill needs `detached:true` plus killing `-pid`, but
+  // `spawnSync` reaps the group leader before returning, making a post-hoc
+  // group-kill PID-reuse racy; a race-free fix requires an async timer that
+  // would break this function's synchronous, sequential contract.
   const result = spawnSync(file, args, {
     shell: false,
     stdio: 'inherit',
