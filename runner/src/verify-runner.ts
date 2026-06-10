@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from './cli.ts';
 import { loadManifest } from './manifest.ts';
 import type { ManifestLoadResult } from './manifest.ts';
+import { formatErrorLine } from './manifest-cli.ts';
 import { expandFileset } from './filesets.ts';
 import { runCheck } from './exec.ts';
 import { assertWithinBudget } from './budget.ts';
@@ -49,10 +50,7 @@ function main(argv: string[]): number {
   }
 
   if (!load.ok) {
-    for (const err of load.errors) {
-      const where = err.path === '' ? '(root)' : err.path;
-      process.stderr.write(`${where}: ${err.message}\n`);
-    }
+    for (const err of load.errors) process.stderr.write(`${formatErrorLine(err)}\n`);
     return EXIT_MANIFEST;
   }
 
