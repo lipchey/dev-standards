@@ -29,7 +29,8 @@ test('root quality.json validates against quality.schema.json', () => {
 // agree with each other and with `expectValid`. Only structural mutations
 // belong here — semantic rules (tier budgets, token/reference integrity,
 // uniqueness, glob dialect, diff_filter coherence, argv[0] position) are
-// invisible to the schema by design and are asserted in validate.test.ts.
+// invisible to the schema by design and are asserted in validate.test.ts
+// and validate.semantic.test.ts.
 // ---------------------------------------------------------------------------
 
 /** Deep clone of the root manifest, narrowed via the hand validator's guard. */

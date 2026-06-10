@@ -12,8 +12,9 @@ import type {
 /**
  * Additive quality-pass coverage of the frozen semantic rule vocabulary: one
  * focused failure case per semantic rule that previously had no committed
- * test, plus a collect-all case proving independent violations surface in a
- * single `validate()` result. The 7 plan-pinned cases live in
+ * test, path-pinning cases for the rules the plan-pinned tests assert by
+ * rule only, plus a collect-all case proving independent violations surface
+ * in a single `validate()` result. The 7 plan-pinned cases live in
  * validate.test.ts; the structural dual-validator battery lives in
  * validate.conformance.test.ts. Assertions here pin paths and rules only —
  * never message text — so wording may evolve without touching this file.
@@ -111,6 +112,14 @@ test('{files:...} token in argv[0] fails with rule files-token-position', () => 
   expectError(validate(manifest), { path: 'tiers.fast[0].argv[0]', rule: 'files-token-position' });
 });
 
+test('undeclared {files:...} token pins its error to the token argv index', () => {
+  const manifest = makeManifest();
+  // validate.test.ts pins this rule (plan case 6) by rule only; this case
+  // additionally pins the reported path to the offending argv element.
+  firstFastCheck(manifest).argv = ['tool', '{files:nope}'];
+  expectError(validate(manifest), { path: 'tiers.fast[0].argv[1]', rule: 'files-token-reference' });
+});
+
 test('skip_if_empty naming an undeclared fileset fails with rule skip-if-empty-reference', () => {
   const manifest = makeManifest();
   // Type-valid mutation: skip_if_empty is any string; "nope" is not a declared fileset.
@@ -170,6 +179,14 @@ test('duplicate workspace names fail with rule workspace-name-unique', () => {
     package_manager: 'npm',
   });
   expectError(validate(manifest), { path: 'workspaces[1].name', rule: 'workspace-name-unique' });
+});
+
+test('workflow.enabled true pins its error to workflow.enabled', () => {
+  const manifest = makeManifest();
+  // validate.test.ts pins this rule (plan case 7) by rule only; this case
+  // additionally pins the reported path.
+  (manifest as unknown as { workflow: { enabled: boolean } }).workflow = { enabled: true };
+  expectError(validate(manifest), { path: 'workflow.enabled', rule: 'workflow-enabled' });
 });
 
 test('independent violations are all collected in one validate() result', () => {
