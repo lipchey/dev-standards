@@ -67,8 +67,17 @@ function main(argv: string[]): number {
     return EXIT_USAGE;
   }
 
-  // `scope` is now narrowed to a `TierName`.
-  return runTier(manifest, root, scope);
+  // `scope` is now narrowed to a `TierName`. `runTier` shells out to git (via
+  // fileset expansion) and writes the report, so an environment fault (no git,
+  // a bad diff_filter, an fs error) can throw. Mirror the `loadManifest` guard
+  // so such faults are a clean non-zero exit, not an uncaught stack trace.
+  try {
+    return runTier(manifest, root, scope);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`error running ${scope} tier: ${detail}\n`);
+    return 1;
+  }
 }
 
 /**
