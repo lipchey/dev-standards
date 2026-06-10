@@ -7,7 +7,6 @@ import { run as runValidate } from '../../runner/src/validate-quality-manifest.t
 import { run as runMigrate } from '../../runner/src/migrate-quality-manifest.ts';
 import type { Manifest } from '../../runner/src/types.ts';
 
-/** A minimal, fully valid manifest used as the on-disk fixture for the happy path. */
 const validManifest: Manifest = {
   version: 1,
   repo: 'fixture-repo',
@@ -37,7 +36,6 @@ const validManifest: Manifest = {
   workflow: { enabled: false },
 };
 
-/** Writes `contents` to a fresh temp dir and returns its path plus a cleanup fn. */
 function writeTempManifest(contents: string): { manifestPath: string; cleanup: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-cli-'));
   const manifestPath = path.join(dir, 'quality.json');
@@ -45,7 +43,6 @@ function writeTempManifest(contents: string): { manifestPath: string; cleanup: (
   return { manifestPath, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
-/** A path inside a fresh temp dir where no file is ever written. */
 function missingManifestPath(): { manifestPath: string; cleanup: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-cli-'));
   return {
@@ -53,8 +50,6 @@ function missingManifestPath(): { manifestPath: string; cleanup: () => void } {
     cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
 }
-
-// --- validator CLI ---------------------------------------------------------
 
 test('validate: missing --manifest prints usage on stderr and exits 2', () => {
   const result = runValidate([]);
@@ -90,8 +85,7 @@ test('validate: a nonexistent manifest path exits 1', () => {
 });
 
 test('validate: invalid manifest exits 1 and prints every validation error', () => {
-  // Two independent faults: a bad enum AND a bad version, so we can assert the
-  // CLI surfaces EVERY error from the validator, not just the first.
+  // Two independent faults prove every validator error is surfaced.
   const broken = { ...validManifest, stack: 'not-a-stack', version: 2 };
   const { manifestPath, cleanup } = writeTempManifest(JSON.stringify(broken));
   try {
@@ -131,8 +125,6 @@ test('validate: a valid manifest exits 0 with the "valid quality manifest" phras
     cleanup();
   }
 });
-
-// --- migrate CLI -----------------------------------------------------------
 
 test('migrate: missing --manifest exits 2', () => {
   const result = runMigrate([]);

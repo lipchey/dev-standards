@@ -6,19 +6,7 @@ export type ManifestLoadResult =
   | { ok: true; manifest: Manifest }
   | { ok: false; errors: ValidationError[] };
 
-/**
- * Reads and validates a quality manifest from `filePath`.
- *
- * It parses UTF-8 JSON, mapping any parse failure into the shared
- * `ValidationError` model (rule `json-parse`, path `""`) so callers handle one
- * uniform error shape. Structurally parseable input is handed to the hand
- * validator, whose full error list is returned on failure. This function never
- * executes runner checks — loading and validation are its entire contract.
- *
- * Filesystem read errors (e.g. a missing file) are an environment fault rather
- * than a manifest-content fault, so they propagate to the caller instead of
- * being disguised as a `json-parse` error.
- */
+// Parse failures become ValidationErrors; filesystem faults remain caller errors.
 export function loadManifest(filePath: string): ManifestLoadResult {
   const raw = readFileSync(filePath, 'utf8');
 
@@ -37,6 +25,6 @@ export function loadManifest(filePath: string): ManifestLoadResult {
   if (!result.ok) {
     return { ok: false, errors: result.errors };
   }
-  // `validate` is the gate: an ok result guarantees the `Manifest` shape.
+  // validate() is the runtime gate for this cast.
   return { ok: true, manifest: parsed as Manifest };
 }

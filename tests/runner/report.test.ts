@@ -6,7 +6,6 @@ import path from 'node:path';
 import { writeReport } from '../../runner/src/report.ts';
 import type { RunnerReport } from '../../runner/src/report.ts';
 
-/** A representative report; scope drives the output filename. */
 function makeReport(scope = 'fast'): RunnerReport {
   return {
     repo: 'dev-standards',
@@ -18,7 +17,6 @@ function makeReport(scope = 'fast'): RunnerReport {
   };
 }
 
-/** Makes a fresh tmp dir; the caller removes it. */
 function tmp(prefix = 'verify-report-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -70,8 +68,7 @@ test('writeReport rejects a symlinked report directory that escapes the repo roo
   const root = tmp();
   const outside = tmp('verify-outside-');
   try {
-    // An honest manifest (`reports/quality`) plus a repo-introduced symlink that
-    // redirects `reports` outside the checkout — the symlink-escape attack.
+    // Repo-controlled report directories can be symlink escapes.
     fs.symlinkSync(outside, path.join(root, 'reports'), 'dir');
     assert.throws(() => writeReport(makeReport(), root, 'reports/quality'), /outside the repo root/i);
     assert.ok(
@@ -91,8 +88,7 @@ test('writeReport replaces a symlinked report leaf instead of following it (P1)'
   const original = 'ORIGINAL VICTIM CONTENT\n';
   try {
     fs.writeFileSync(victim, original);
-    // Hostile repo content: the in-repo report leaf is a symlink to an outside
-    // operator-writable file (manifest `paths.reports: "."` selects the root).
+    // A repo-controlled report leaf can target an operator-writable file.
     const leaf = path.join(root, 'verify-fast.json');
     fs.symlinkSync(victim, leaf);
 
@@ -110,7 +106,6 @@ test('writeReport replaces a symlinked report leaf instead of following it (P1)'
       'the report leaf must be replaced by a real file, not the symlink',
     );
     assert.deepEqual(JSON.parse(fs.readFileSync(leaf, 'utf8')), report);
-    // No stray temp file may survive a successful write.
     assert.deepEqual(
       fs.readdirSync(root).filter((entry) => entry.endsWith('.tmp')),
       [],

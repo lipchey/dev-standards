@@ -1,26 +1,9 @@
 import type { Manifest, ValidationError, ValidationResult } from './types.ts';
 
 /**
- * Hand-written manifest validator (design spec §6). Pure and dependency-free:
- * it takes an `unknown` value and returns every violation it can find.
- *
- * Two passes:
- *
- * 1. Structural — mirrors schemas/quality.schema.json exactly (required keys,
- *    closed objects, types, enums, minLength/minItems). The one schema keyword
- *    intentionally not mirrored is the `diff_filter` content pattern
- *    (`^[ACDMRTUXB]+$`): the frozen rule vocabulary has no `pattern` rule, so
- *    in Phase 1a that constraint is schema-only. Only the field's placement is
- *    checked here (semantic rule `diff-filter-scope`).
- * 2. Semantic — cross-field rules the schema cannot express (tier budget sums,
- *    `{files:<fileset>}` token shape and references, name uniqueness, the
- *    restricted glob dialect, diff_filter placement, and the Phase 1a
- *    workflow-enabled gate). Each semantic walk re-narrows from `unknown` and
- *    skips structurally broken sections — their structural errors are already
- *    reported — so the pass never throws on malformed input.
- *
- * Error paths are dotted + indexed (`tiers.fast[0].argv[1]`), top-level keys
- * are bare (`stack`), and the root itself is the empty string.
+ * Hand validator for quality manifests. Structural checks mirror the schema
+ * except diff_filter's pattern (schema-only in Phase 1a); semantic checks cover
+ * cross-field rules. Error paths are dotted/indexed.
  */
 
 type RuleName =
@@ -89,20 +72,11 @@ const REQUIRED_TIERS = ['staged', 'fast', 'full'] as const;
 const TIER_NAMES = ['staged', 'fast', 'full', 'audit'] as const;
 const WORKFLOW_KEYS = ['enabled'] as const;
 
-/** Exactly one argv element of this whole shape is a fileset token; anything else is a literal. */
 const FILES_TOKEN = /^\{files:([A-Za-z0-9_-]+)\}$/;
-/** The restricted dialect allows `**`, `*`, and literal segments — never `?`, `[...]`, `{...}`. */
+// The schema dialect allows only `*`, `**`, and literals.
 const UNSUPPORTED_GLOB_SYNTAX = /[?\[{]/;
 
-// ---------------------------------------------------------------------------
-// Error collection
-// ---------------------------------------------------------------------------
-
-/**
- * The single error builder. The optional rest slot makes "value supplied"
- * explicit: missing-key errors have nothing to attach, every other call site
- * passes the offending value through.
- */
+// Rest tuple distinguishes "no value" from an explicit undefined value.
 function addError(
   errors: ValidationError[],
   path: string,
@@ -117,10 +91,6 @@ function addError(
   errors.push(error);
 }
 
-// ---------------------------------------------------------------------------
-// Narrowing and formatting
-// ---------------------------------------------------------------------------
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -133,7 +103,6 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
 
-/** Short human description of a found value, for "expected X, got Y" messages. */
 function describeValue(value: unknown): string {
   if (value === null) return 'null';
   if (isUnknownArray(value)) return 'an array';
@@ -151,11 +120,6 @@ function childPath(parentPath: string, key: string): string {
   return parentPath === '' ? key : `${parentPath}.${key}`;
 }
 
-// ---------------------------------------------------------------------------
-// Structural primitives — each mirrors one JSON-Schema keyword
-// ---------------------------------------------------------------------------
-
-/** `type: object`. Returns the record on success, undefined after reporting. */
 function requireRecord(
   value: unknown,
   path: string,
@@ -166,7 +130,6 @@ function requireRecord(
   return undefined;
 }
 
-/** `required` — reports the missing key's full path. Only own properties count. */
 function requireKeys(
   record: Record<string, unknown>,
   parentPath: string,
@@ -180,7 +143,6 @@ function requireKeys(
   }
 }
 
-/** `additionalProperties: false`. */
 function rejectUnknownKeys(
   record: Record<string, unknown>,
   parentPath: string,
@@ -200,7 +162,6 @@ function rejectUnknownKeys(
   }
 }
 
-/** `type: string` with `minLength: 1`. */
 function validateNonEmptyString(value: unknown, path: string, errors: ValidationError[]): void {
   if (typeof value !== 'string') {
     addError(errors, path, 'type', `must be a string, got ${describeValue(value)}`, value);
@@ -209,28 +170,24 @@ function validateNonEmptyString(value: unknown, path: string, errors: Validation
   }
 }
 
-/** Plain `type: string` (no minLength — the empty string is structurally valid). */
 function validateString(value: unknown, path: string, errors: ValidationError[]): void {
   if (typeof value !== 'string') {
     addError(errors, path, 'type', `must be a string, got ${describeValue(value)}`, value);
   }
 }
 
-/** `type: boolean`. */
 function validateBoolean(value: unknown, path: string, errors: ValidationError[]): void {
   if (typeof value !== 'boolean') {
     addError(errors, path, 'type', `must be a boolean, got ${describeValue(value)}`, value);
   }
 }
 
-/** `type: integer` with `exclusiveMinimum: 0` (one `type` violation either way). */
 function validatePositiveInteger(value: unknown, path: string, errors: ValidationError[]): void {
   if (!isPositiveInteger(value)) {
     addError(errors, path, 'type', `must be a positive integer, got ${describeValue(value)}`, value);
   }
 }
 
-/** `enum` — any non-member value (including non-strings) is one `enum` violation. */
 function validateEnum(
   value: unknown,
   path: string,
@@ -247,7 +204,6 @@ function validateEnum(
   );
 }
 
-/** `type: array` of strings with optional `minItems: 1`. */
 function validateStringArray(
   value: unknown,
   path: string,
@@ -268,10 +224,6 @@ function validateStringArray(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Structural pass — mirrors schemas/quality.schema.json
-// ---------------------------------------------------------------------------
-
 function validateStructure(root: Record<string, unknown>, errors: ValidationError[]): void {
   requireKeys(root, '', TOP_LEVEL_REQUIRED, errors);
   rejectUnknownKeys(root, '', TOP_LEVEL_ALLOWED, errors);
@@ -291,7 +243,6 @@ function validateStructure(root: Record<string, unknown>, errors: ValidationErro
   if (Object.hasOwn(root, 'workflow')) validateWorkflow(root['workflow'], errors);
 }
 
-/** `const: 1` — a single-value enum. */
 function validateVersion(value: unknown, errors: ValidationError[]): void {
   if (value !== 1) {
     addError(
@@ -373,7 +324,6 @@ function validateWorkspace(value: unknown, path: string, errors: ValidationError
   }
 }
 
-/** `filesets` has no minItems — an empty array is a valid (if useless) declaration. */
 function validateFilesets(value: unknown, errors: ValidationError[]): void {
   if (!isUnknownArray(value)) {
     addError(errors, 'filesets', 'type', `must be an array of filesets, got ${describeValue(value)}`, value);
@@ -439,18 +389,11 @@ function validateWorkflow(value: unknown, errors: ValidationError[]): void {
   rejectUnknownKeys(workflow, 'workflow', WORKFLOW_KEYS, errors);
   if (!Object.hasOwn(workflow, 'enabled')) return;
   const enabled = workflow['enabled'];
-  // `true` is left to the semantic workflow-enabled gate so it yields exactly
-  // one clear error; any other non-`false` value breaks the `const: false`.
+  // true gets the semantic workflow-enabled error; other values fail const:false here.
   if (enabled !== false && enabled !== true) {
     addError(errors, 'workflow.enabled', 'enum', `must be false, got ${describeValue(enabled)}`, enabled);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Semantic pass — cross-field rules the schema cannot express (spec §6).
-// Every walk re-guards its slice of the tree, so sections that failed the
-// structural pass are skipped here instead of crashing the traversal.
-// ---------------------------------------------------------------------------
 
 function validateSemantics(root: Record<string, unknown>, errors: ValidationError[]): void {
   const filesetNames = collectDeclaredFilesetNames(root);
@@ -461,7 +404,6 @@ function validateSemantics(root: Record<string, unknown>, errors: ValidationErro
   validateWorkflowGate(root, errors);
 }
 
-/** Declared fileset names; undefined when `filesets` itself is structurally broken. */
 function collectDeclaredFilesetNames(
   root: Record<string, unknown>,
 ): ReadonlySet<string> | undefined {
@@ -476,7 +418,7 @@ function collectDeclaredFilesetNames(
   return names;
 }
 
-/** `tier-budget` — report-only checks count too: the budget is wall-clock time. */
+// report-only checks still consume the tier's wall-clock budget.
 function validateTierBudgets(root: Record<string, unknown>, errors: ValidationError[]): void {
   const budgets = root['budgets'];
   const tiers = root['tiers'];
@@ -611,11 +553,7 @@ function validateGlobDialect(patterns: unknown, path: string, errors: Validation
   });
 }
 
-/**
- * `diff-filter-scope` — `diff_filter` belongs to git_staged filesets only
- * (its absence there is fine: callers default to ACMR). An invalid `source`
- * already failed structurally, so only a definite `repo_all` is flagged.
- */
+// diff_filter belongs only to git_staged; invalid source values already failed structurally.
 function validateDiffFilterScope(
   fileset: Record<string, unknown>,
   filesetPath: string,
@@ -638,10 +576,6 @@ function validateWorkspaceUniqueness(root: Record<string, unknown>, errors: Vali
   reportDuplicateNames(workspaces, 'workspaces', 'workspace-name-unique', 'workspace', '', errors);
 }
 
-/**
- * Flags every entry whose string `name` repeats an earlier one. `context` is
- * appended after the quoted name (`''`, or a locator like ` in tier "fast"`).
- */
 function reportDuplicateNames(
   entries: readonly unknown[],
   basePath: string,
@@ -668,7 +602,7 @@ function reportDuplicateNames(
   });
 }
 
-/** `workflow-enabled` — the Phase 1a gate on the semi-automatic workflow layer. */
+// Phase 1a gate on the semi-automatic workflow layer.
 function validateWorkflowGate(root: Record<string, unknown>, errors: ValidationError[]): void {
   const workflow = root['workflow'];
   if (!isRecord(workflow)) return;
@@ -682,10 +616,6 @@ function validateWorkflowGate(root: Record<string, unknown>, errors: ValidationE
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 export function validate(value: unknown): ValidationResult {
   const errors: ValidationError[] = [];

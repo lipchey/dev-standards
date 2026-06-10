@@ -5,17 +5,14 @@ import { expandArgv, runCheck } from '../../runner/src/exec.ts';
 import type { RunCheckInput } from '../../runner/src/exec.ts';
 import type { Check } from '../../runner/src/types.ts';
 
-/** Absolute path to a stub under tests/stubs/, resolved off this test file. */
 function stub(name: string): string {
   return fileURLToPath(new URL(`../stubs/${name}`, import.meta.url));
 }
 
-/** A blocking check with sane defaults; argv and overrides vary per test. */
 function check(argv: string[], overrides: Partial<Check> = {}): Check {
   return { name: 'c', argv, timeout_seconds: 30, ...overrides };
 }
 
-/** Wraps a check into a RunCheckInput with a real cwd and optional filesets. */
 function input(c: Check, filesByName = new Map<string, string[]>()): RunCheckInput {
   return { check: c, tier: 'fast', cwd: process.cwd(), filesByName };
 }
@@ -46,13 +43,11 @@ test('expandArgv replaces a {files:x} token with the fileset spread', () => {
 });
 
 test('expandArgv rejects an option-like expanded file operand (argv option injection)', () => {
-  // A repo file literally named `--config=evil.ts` can match an honest `**/*.ts`
-  // fileset; passed straight into argv a tool parses it as an option, not a path.
+  // Token-expanded repo filenames can be parsed as tool options.
   assert.throws(
     () => expandArgv(['eslint', '{files:ts}'], new Map([['ts', ['--config=evil.ts', 'src/good.ts']]])),
     /option-like|injection/i,
   );
-  // A bare `-` prefix is just as dangerous (e.g. `-rf.ts` at the repo root).
   assert.throws(
     () => expandArgv(['tool', '{files:ts}'], new Map([['ts', ['-rf.ts']]])),
     /option-like|injection/i,
@@ -60,9 +55,7 @@ test('expandArgv rejects an option-like expanded file operand (argv option injec
 });
 
 test('expandArgv rejects an @-prefixed expanded file operand (response-file injection)', () => {
-  // A repo file literally named `@evil` can match an honest fileset; tools like
-  // `tsc` parse a leading `@` operand as a response file and splice its contents
-  // in as further arguments, so it must fail closed (P2a).
+  // Tools like tsc treat @ operands as response files.
   assert.throws(
     () => expandArgv(['tsc', '{files:ts}'], new Map([['ts', ['@evil', 'src/good.ts']]])),
     /option-like|injection/i,
@@ -70,7 +63,6 @@ test('expandArgv rejects an @-prefixed expanded file operand (response-file inje
 });
 
 test('runCheck fails closed on an @-prefixed expanded operand (response-file injection)', () => {
-  // The throw must propagate through runCheck, not just expandArgv.
   assert.throws(
     () =>
       runCheck(
@@ -81,8 +73,7 @@ test('runCheck fails closed on an @-prefixed expanded operand (response-file inj
 });
 
 test('expandArgv passes through a literal option the manifest author wrote', () => {
-  // Only token-expanded operands are guarded; a `--flag` written directly into
-  // the argv is author-controlled and trusted, and a dash mid-path is fine.
+  // Only fileset-expanded operands are guarded; manifest-authored flags are trusted.
   const out = expandArgv(
     ['tool', '--max-warnings=0', '{files:ts}'],
     new Map([['ts', ['src/my-file.ts', 'src/a.ts']]]),

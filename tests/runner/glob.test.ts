@@ -4,14 +4,12 @@ import { matches } from '../../runner/src/glob.ts';
 
 test('**/*.ts matches a nested .ts file', () => {
   assert.equal(matches('runner/src/validate.ts', '**/*.ts'), true);
-  // A leading `**/` matches zero directories too, so a root-level file matches.
   assert.equal(matches('validate.ts', '**/*.ts'), true);
   assert.equal(matches('runner/src/validate.js', '**/*.ts'), false);
 });
 
 test('*.md matches a root-level file but does not cross /', () => {
   assert.equal(matches('README.md', '*.md'), true);
-  // `*` never crosses `/`, so a nested README is NOT matched by `*.md`.
   assert.equal(matches('docs/README.md', '*.md'), false);
 });
 
@@ -24,29 +22,23 @@ test('docs/** matches any depth under docs', () => {
 test('literal paths match exactly', () => {
   assert.equal(matches('runner/src/glob.ts', 'runner/src/glob.ts'), true);
   assert.equal(matches('runner/src/glob.ts', 'runner/src/git.ts'), false);
-  // A literal is anchored: it is not a substring/prefix match.
   assert.equal(matches('runner/src/glob.ts.bak', 'runner/src/glob.ts'), false);
 });
 
 test('* does not cross /', () => {
-  // Positive: `src/*.ts` matches a single segment after `src/`.
   assert.equal(matches('src/index.ts', 'src/*.ts'), true);
-  // Negative: it must not match a deeper path.
   assert.equal(matches('src/nested/index.ts', 'src/*.ts'), false);
 });
 
 test('a middle ** matches zero or more intervening directories', () => {
-  // `a/**/c` == a, then zero-or-more dirs, then c.
-  assert.equal(matches('a/c', 'a/**/c'), true); // zero dirs
-  assert.equal(matches('a/b/c', 'a/**/c'), true); // one dir
-  assert.equal(matches('a/b/d/c', 'a/**/c'), true); // many dirs
-  assert.equal(matches('a/b/cx', 'a/**/c'), false); // anchored end
+  assert.equal(matches('a/c', 'a/**/c'), true);
+  assert.equal(matches('a/b/c', 'a/**/c'), true);
+  assert.equal(matches('a/b/d/c', 'a/**/c'), true);
+  assert.equal(matches('a/b/cx', 'a/**/c'), false);
 });
 
 test('matches resists catastrophic backtracking on many doublestars (ReDoS)', () => {
-  // The old regex translation produced adjacent `(?:.*/)?` groups whose
-  // backtracking is exponential: ~7s at 14 doublestars. A linear matcher must
-  // return promptly even when the input does not match.
+  // Former RegExp translation was exponential on adjacent doublestars.
   const pattern = '**/'.repeat(14) + 'x.ts';
   const input = 'a/'.repeat(14) + 'no-match.js';
   const start = process.hrtime.bigint();

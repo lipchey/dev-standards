@@ -10,18 +10,9 @@ import { writeReport } from './report.ts';
 import { doctor } from './doctor.ts';
 import type { Check, CheckResult, Manifest, TierName } from './types.ts';
 
-/** Exit code when a blocking check failed or timed out during a tier run. */
 const EXIT_CHECK_FAILED = 1;
 
-/**
- * Runs the quality runner for one CLI invocation and returns the process exit
- * code. All process exit happens at the single call site below; `main` only
- * returns codes so it stays testable.
- *
- * Order mirrors the Task 8 spec: parse args, derive the repo root from the
- * manifest path, load + validate the manifest BEFORE any check executes, then
- * dispatch on scope (doctor / reserved fix-staged / tier run).
- */
+// Validate the manifest before any check runs; exit happens only at the entrypoint.
 function main(argv: string[]): number {
   const invocation = parseArgs(argv);
   if (!invocation.ok) {
@@ -30,11 +21,9 @@ function main(argv: string[]): number {
   }
 
   const { manifestPath, scope } = invocation;
-  // Root is the manifest's directory: reports and workspaces resolve from here.
   const root = path.dirname(path.resolve(manifestPath));
 
-  // `loadManifest` lets filesystem faults (e.g. a missing manifest) throw; wrap
-  // it so a missing/unreadable manifest is a clean non-zero exit, not a stack.
+  // Convert filesystem faults to clean CLI errors, not stack traces.
   let load: ManifestLoadResult;
   try {
     load = loadManifest(manifestPath);
@@ -62,10 +51,7 @@ function main(argv: string[]): number {
     return EXIT_USAGE;
   }
 
-  // `scope` is now narrowed to a `TierName`. `runTier` shells out to git (via
-  // fileset expansion) and writes the report, so an environment fault (no git,
-  // a bad diff_filter, an fs error) can throw. Mirror the `loadManifest` guard
-  // so such faults are a clean non-zero exit, not an uncaught stack trace.
+  // Tier runs touch git and reports; keep environment faults as clean stderr.
   try {
     return runTier(manifest, root, scope);
   } catch (error) {
@@ -75,18 +61,7 @@ function main(argv: string[]): number {
   }
 }
 
-/**
- * Expands every fileset once, runs the tier's checks sequentially, writes the
- * structured report, prints a concise summary, and returns the exit code: 1
- * when any BLOCKING check failed or timed out, else 0. `report-only` outcomes
- * are recorded but never fail the run.
- *
- * After each check the tier's wall-clock budget is enforced: a tier that
- * overruns `budgets.<scope>_seconds` throws (caught by `main` → clean non-zero
- * exit) rather than running unbounded. A valid manifest's per-check timeouts
- * already sum within budget (`tier-budget` rule), so this only bites a check
- * that escapes its own timeout — e.g. a child that ignores the kill signal.
- */
+// report-only outcomes are recorded but do not fail; wall-clock budget is checked after each run.
 export function runTier(manifest: Manifest, root: string, scope: TierName): number {
   const startedAt = Date.now();
   const budgetSeconds = manifest.budgets[`${scope}_seconds`];
@@ -117,22 +92,17 @@ export function runTier(manifest: Manifest, root: string, scope: TierName): numb
   return blockingFailed ? EXIT_CHECK_FAILED : 0;
 }
 
-/** The checks for `scope`; the optional `audit` tier defaults to empty. */
 function tierChecks(manifest: Manifest, scope: TierName): Check[] {
   if (scope === 'audit') return manifest.tiers.audit ?? [];
   return manifest.tiers[scope];
 }
 
-/** One concise summary line per check result. */
 function summarize(r: CheckResult): string {
   const exit = r.exitCode === null ? '-' : String(r.exitCode);
   return `  ${r.status.padEnd(7)} ${r.name} [${r.mode}] ${r.durationMs}ms exit ${exit}\n`;
 }
 
-// Run the CLI only when this module is the process entrypoint (executed
-// directly or via the bundled binary), not when it is imported by a test. This
-// is the seam that lets runTier be unit-tested without `main` calling
-// `process.exit` at import time.
+// Keep imports test-safe.
 if (isMainModule(import.meta.url)) {
   process.exit(main(process.argv.slice(2)));
 }

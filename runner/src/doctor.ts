@@ -8,20 +8,7 @@ export interface DoctorReport {
   messages: string[];
 }
 
-/**
- * Diagnoses a loaded manifest against the on-disk repo rooted at `root`,
- * without exiting the process. It reports the scheduler class, then applies two
- * Phase 1a environment checks:
- *
- * - A missing generated hooks directory is ADVISORY: it adds a message but does
- *   not flip `ok` (hooks are installed later in the rollout).
- * - A missing workspace directory is a FAILURE: each absent `root/<path>` flips
- *   `ok` to false and adds a message, so a misconfigured manifest is caught
- *   before any check runs.
- *
- * Returns every message it gathered plus the aggregate `ok`; the caller decides
- * the exit code.
- */
+// Phase 1a: missing hooks are advisory; missing workspaces fail the diagnosis.
 export function doctor(manifest: Manifest, root: string): DoctorReport {
   const messages: string[] = [reportSchedulerClass(manifest)];
   let ok = true;
@@ -44,7 +31,6 @@ export function doctor(manifest: Manifest, root: string): DoctorReport {
   return { ok, messages };
 }
 
-/** True when `target` exists and is a directory; false for any missing path. */
 function isDirectory(target: string): boolean {
   return fs.existsSync(target) && fs.statSync(target).isDirectory();
 }

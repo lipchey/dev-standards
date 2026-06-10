@@ -4,17 +4,14 @@ import { expandFileset, filesetByName } from '../../runner/src/filesets.ts';
 import type { FilesetContext } from '../../runner/src/filesets.ts';
 import type { Fileset, Manifest } from '../../runner/src/types.ts';
 
-/** A repo_all fileset; the include/exclude vary per test. */
 function repoAll(overrides: Partial<Fileset> = {}): Fileset {
   return { name: 'fs', source: 'repo_all', include: ['**/*.ts'], ...overrides };
 }
 
-/** A git_staged fileset; the include/exclude vary per test. */
 function gitStaged(overrides: Partial<Fileset> = {}): Fileset {
   return { name: 'fs', source: 'git_staged', include: ['**/*.ts'], ...overrides };
 }
 
-/** A context whose trackedFiles/stagedFiles return fixed lists (never hits git). */
 function fakeContext(files: {
   tracked?: string[];
   staged?: string[];
@@ -55,7 +52,6 @@ test('git_staged uses staged source and default ACMR diff filter', () => {
   };
   const result = expandFileset(gitStaged({ include: ['**/*.ts'] }), context);
   assert.deepEqual(result, ['src/staged.ts']);
-  // No diff_filter on the fileset -> the helper's ACMR default must be requested.
   assert.equal(seenDiffFilter, 'ACMR');
 });
 

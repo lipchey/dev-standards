@@ -6,7 +6,6 @@ import path from 'node:path';
 import { loadManifest } from '../../runner/src/manifest.ts';
 import type { Manifest } from '../../runner/src/types.ts';
 
-/** A minimal, fully valid manifest used as the on-disk fixture for the happy path. */
 const validManifest: Manifest = {
   version: 1,
   repo: 'fixture-repo',
@@ -36,7 +35,6 @@ const validManifest: Manifest = {
   workflow: { enabled: false },
 };
 
-/** Writes `contents` to a fresh temp dir and returns its path plus a cleanup fn. */
 function writeTempManifest(contents: string): { manifestPath: string; cleanup: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-'));
   const manifestPath = path.join(dir, 'quality.json');
@@ -56,8 +54,6 @@ test('loadManifest reads JSON and returns a Manifest', () => {
 });
 
 test('loadManifest returns validation errors before runner execution', () => {
-  // A type-valid JSON whose `stack` is not an enum member: the loader must surface
-  // the validator's error and never reach (let alone run) any runner check.
   const broken = { ...validManifest, stack: 'not-a-stack' };
   const { manifestPath, cleanup } = writeTempManifest(JSON.stringify(broken));
   try {

@@ -9,17 +9,7 @@ import {
   type CliResult,
 } from './manifest-cli.ts';
 
-/**
- * Validates one quality manifest and returns the captured CLI outcome.
- *
- * Contract (frozen): malformed argv → usage on stderr, exit 2; an unreadable or
- * invalid manifest → every validation error on stderr, exit 1; a valid manifest
- * → the `valid quality manifest` success line on stdout, exit 0. The success
- * phrase is asserted by a later `standards-sync --check`, so keep it verbatim.
- *
- * Returning a `CliResult` (rather than writing to `process`) keeps this pure and
- * unit-testable; the entrypoint guard below flushes the streams and exits.
- */
+// Frozen CLI contract: usage -> 2, unreadable/invalid manifest -> 1, valid -> 0.
 export function run(argv: string[]): CliResult {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -30,8 +20,7 @@ export function run(argv: string[]): CliResult {
     return { code: EXIT_USAGE, stdout, stderr };
   }
 
-  // `loadManifest` lets filesystem faults (e.g. a missing manifest) throw; wrap
-  // it so a missing/unreadable manifest is a clean exit-1, not a stack trace.
+  // Convert filesystem faults to clean CLI errors, not stack traces.
   let load: ManifestLoadResult;
   try {
     load = loadManifest(parsed.manifestPath);
@@ -50,8 +39,7 @@ export function run(argv: string[]): CliResult {
   return { code: 0, stdout, stderr };
 }
 
-// Run the CLI only when this module is the process entrypoint, not when a test
-// imports `run`. This seam keeps `run` exitless and capturable.
+// Keep run() import-safe for tests.
 if (isMainModule(import.meta.url)) {
   const result = run(process.argv.slice(2));
   for (const line of result.stdout) process.stdout.write(`${line}\n`);

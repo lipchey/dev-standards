@@ -1,8 +1,3 @@
-/**
- * Throws when the wall-clock elapsed since `startedAtMs` exceeds the tier's
- * `budgetSeconds`; returns normally otherwise. The message names the tier
- * budget and the overrun so a caller can surface a clear failure.
- */
 export function assertWithinBudget(startedAtMs: number, budgetSeconds: number): void {
   const elapsedMs = Date.now() - startedAtMs;
   const budgetMs = budgetSeconds * 1000;

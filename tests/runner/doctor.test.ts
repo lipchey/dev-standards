@@ -7,7 +7,6 @@ import { doctor } from '../../runner/src/doctor.ts';
 import { reportSchedulerClass } from '../../runner/src/scheduler.ts';
 import type { Manifest } from '../../runner/src/types.ts';
 
-/** A minimal, type-complete manifest; tests override only what they exercise. */
 function baseManifest(overrides: Partial<Manifest> = {}): Manifest {
   return {
     version: 1,
@@ -31,7 +30,6 @@ function baseManifest(overrides: Partial<Manifest> = {}): Manifest {
   };
 }
 
-/** A fresh tmp dir to stand in for the repo root, plus a cleanup fn. */
 function tmpRoot(): { root: string; cleanup: () => void } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-doctor-'));
   return { root, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
@@ -52,7 +50,6 @@ test('all workspaces present -> ok:true and scheduler class reported', () => {
     const report = doctor(manifest, root);
 
     assert.equal(report.ok, true);
-    // doctor reports the scheduler class first, in the scheduler module's format.
     assert.equal(report.messages[0], reportSchedulerClass(manifest));
     assert.equal(report.messages[0], 'repo "fixture-repo" scheduler class: local-only');
   } finally {
@@ -86,7 +83,6 @@ test('a missing workspace dir -> ok:false with a message naming it', () => {
 test('a missing hooks dir is advisory -> ok stays true', () => {
   const { root, cleanup } = tmpRoot();
   try {
-    // root '.' exists (the tmp dir itself); no .githooks is created.
     const manifest = baseManifest();
 
     const report = doctor(manifest, root);

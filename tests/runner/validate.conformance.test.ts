@@ -21,19 +21,7 @@ test('root quality.json validates against quality.schema.json', () => {
   assert.ok(valid, `Root manifest failed schema validation:\n${JSON.stringify(validateFn.errors, null, 2)}`);
 });
 
-// ---------------------------------------------------------------------------
-// Dual-validator structural battery
-//
-// Each case mutates a deep clone of the root manifest and runs it through
-// BOTH the hand validator and the compiled schema; the two verdicts must
-// agree with each other and with `expectValid`. Only structural mutations
-// belong here — semantic rules (tier budgets, token/reference integrity,
-// uniqueness, glob dialect, diff_filter coherence, argv[0] position) are
-// invisible to the schema by design and are asserted in validate.test.ts
-// and validate.semantic.test.ts.
-// ---------------------------------------------------------------------------
-
-/** Deep clone of the root manifest, narrowed via the hand validator's guard. */
+// Structural mutations must agree between the hand validator and schema.
 function cloneRootManifest(): Manifest {
   const clone: unknown = structuredClone(manifest);
   if (!isManifest(clone)) {
@@ -42,7 +30,6 @@ function cloneRootManifest(): Manifest {
   return clone;
 }
 
-/** First-element accessor that fails loudly if the fixture loses the element. */
 function firstOf<T>(items: readonly T[], label: string): T {
   const item = items[0];
   if (item === undefined) {
@@ -57,8 +44,6 @@ interface BatteryCase {
   expectValid: boolean;
 }
 
-// Mutations cast narrowly (mirroring validate.test.ts) because each one is
-// invalid by construction against the Manifest type.
 const batteryCases: readonly BatteryCase[] = [
   {
     label: 'valid root manifest (no mutation)',
@@ -175,18 +160,7 @@ for (const batteryCase of batteryCases) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Hand-validator structural contract battery
-//
-// The dual battery above asserts only accept/reject parity, so a frozen
-// structural ValidationError.rule string or path format could drift while every
-// parity case still passes (Ajv emits its own, unrelated errors, so it can't
-// catch hand-output drift). These cases lock the hand validator's output for
-// each structural rule by pinning one representative { path, rule }. Ajv is
-// intentionally absent here: parity is the dual battery's job; this battery is
-// the rule/path contract. `additional-property`, `min-length`, and `min-items`
-// are otherwise pinned by no test at all.
-// ---------------------------------------------------------------------------
+// Parity alone does not pin hand-validator path/rule output, so sample each structural rule.
 
 interface ContractCase {
   label: string;
@@ -264,27 +238,17 @@ for (const contractCase of structuralContractCases) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Schema property-order contract
-//
-// validateFn only proves quality.json conforms to the schema; it says nothing
-// about the schema's own field order. That order is canonical — the validator's
-// key tables (TOP_LEVEL_ALLOWED, BUDGET_KEYS, …) and quality.json mirror it — so
-// a silent reorder during a schema edit should fail loudly. Pin Object.keys for
-// the root and every nested property group against that canonical order.
-// ---------------------------------------------------------------------------
+// Schema property order is canonical and mirrored by validator key tables/quality.json.
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Reads a child node by key, asserting the parent is an object first. */
 function child(node: unknown, key: string): unknown {
   assert.ok(isPlainObject(node), `expected an object to read "${key}" from`);
   return node[key];
 }
 
-/** Declared key order of a schema node's `properties` object. */
 function propertyKeys(node: unknown): string[] {
   const properties = child(node, 'properties');
   assert.ok(isPlainObject(properties), 'expected a "properties" object on the schema node');

@@ -1,5 +1,4 @@
-// `meta-docs` is reserved for Phase 3a meta-repo adoption (see Scope Boundary /
-// Follow-Up Phase 3a); no Phase 1a fixture uses it and it needs no validator coverage now.
+// Reserved for Phase 3a meta-repo adoption; no validator fixture coverage yet.
 export type Stack = 'node-service' | 'frontend-web' | 'n8n-ops' | 'meta-docs';
 export type SchedulerClass =
   | 'github-actions-push-and-schedule'

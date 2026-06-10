@@ -9,15 +9,7 @@ import {
   type CliResult,
 } from './manifest-cli.ts';
 
-/**
- * Migrates one quality manifest and returns the captured CLI outcome.
- *
- * Argument and validation behavior is identical to the validator: malformed
- * argv → usage on stderr, exit 2; an unreadable or invalid manifest → every
- * validation error on stderr, exit 1. Schema version 1 is the only version that
- * exists, so a valid manifest reports that there is no migration to apply and
- * exits 0. When a version 2 is introduced this is where its migration lands.
- */
+// Mirrors the validator CLI; version 1 currently has no migration to apply.
 export function run(argv: string[]): CliResult {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -28,8 +20,7 @@ export function run(argv: string[]): CliResult {
     return { code: EXIT_USAGE, stdout, stderr };
   }
 
-  // `loadManifest` lets filesystem faults (e.g. a missing manifest) throw; wrap
-  // it so a missing/unreadable manifest is a clean exit-1, not a stack trace.
+  // Convert filesystem faults to clean CLI errors, not stack traces.
   let load: ManifestLoadResult;
   try {
     load = loadManifest(parsed.manifestPath);
@@ -50,8 +41,7 @@ export function run(argv: string[]): CliResult {
   return { code: 0, stdout, stderr };
 }
 
-// Run the CLI only when this module is the process entrypoint, not when a test
-// imports `run`. This seam keeps `run` exitless and capturable.
+// Keep run() import-safe for tests.
 if (isMainModule(import.meta.url)) {
   const result = run(process.argv.slice(2));
   for (const line of result.stdout) process.stdout.write(`${line}\n`);
