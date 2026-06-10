@@ -174,3 +174,180 @@ for (const batteryCase of batteryCases) {
     );
   });
 }
+
+// ---------------------------------------------------------------------------
+// Hand-validator structural contract battery
+//
+// The dual battery above asserts only accept/reject parity, so a frozen
+// structural ValidationError.rule string or path format could drift while every
+// parity case still passes (Ajv emits its own, unrelated errors, so it can't
+// catch hand-output drift). These cases lock the hand validator's output for
+// each structural rule by pinning one representative { path, rule }. Ajv is
+// intentionally absent here: parity is the dual battery's job; this battery is
+// the rule/path contract. `additional-property`, `min-length`, and `min-items`
+// are otherwise pinned by no test at all.
+// ---------------------------------------------------------------------------
+
+interface ContractCase {
+  label: string;
+  mutate: (manifest: Manifest) => void;
+  expectedPath: string;
+  expectedRule: string;
+}
+
+const structuralContractCases: readonly ContractCase[] = [
+  {
+    label: 'required (missing top-level key)',
+    mutate: (m) => {
+      delete (m as unknown as { budgets?: unknown }).budgets;
+    },
+    expectedPath: 'budgets',
+    expectedRule: 'required',
+  },
+  {
+    label: 'type (timeout_seconds not a positive integer)',
+    mutate: (m) => {
+      firstOf(m.tiers.fast, 'fast-tier check').timeout_seconds = 0;
+    },
+    expectedPath: 'tiers.fast[0].timeout_seconds',
+    expectedRule: 'type',
+  },
+  {
+    label: 'enum (out-of-range stack)',
+    mutate: (m) => {
+      (m as unknown as { stack: string }).stack = 'not-a-stack';
+    },
+    expectedPath: 'stack',
+    expectedRule: 'enum',
+  },
+  {
+    label: 'additional-property (unknown key on a nested check)',
+    mutate: (m) => {
+      (firstOf(m.tiers.fast, 'fast-tier check') as unknown as Record<string, unknown>)['unexpected_key'] = true;
+    },
+    expectedPath: 'tiers.fast[0].unexpected_key',
+    expectedRule: 'additional-property',
+  },
+  {
+    label: 'min-length (empty required string)',
+    mutate: (m) => {
+      (m as unknown as { repo: string }).repo = '';
+    },
+    expectedPath: 'repo',
+    expectedRule: 'min-length',
+  },
+  {
+    label: 'min-items (empty argv array)',
+    mutate: (m) => {
+      firstOf(m.tiers.fast, 'fast-tier check').argv = [];
+    },
+    expectedPath: 'tiers.fast[0].argv',
+    expectedRule: 'min-items',
+  },
+];
+
+for (const contractCase of structuralContractCases) {
+  test(`structural contract: ${contractCase.label}`, () => {
+    const candidate = cloneRootManifest();
+    contractCase.mutate(candidate);
+
+    const { ok, errors } = validate(candidate);
+    assert.equal(ok, false, `expected the hand validator to reject: ${contractCase.label}`);
+    const match = errors.find(
+      (error) => error.path === contractCase.expectedPath && error.rule === contractCase.expectedRule,
+    );
+    assert.ok(
+      match,
+      `expected an error at path "${contractCase.expectedPath}" with rule "${contractCase.expectedRule}"; got:\n` +
+        JSON.stringify(errors, null, 2),
+    );
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Schema property-order contract
+//
+// validateFn only proves quality.json conforms to the schema; it says nothing
+// about the schema's own field order. That order is canonical — the validator's
+// key tables (TOP_LEVEL_ALLOWED, BUDGET_KEYS, …) and quality.json mirror it — so
+// a silent reorder during a schema edit should fail loudly. Pin Object.keys for
+// the root and every nested property group against that canonical order.
+// ---------------------------------------------------------------------------
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Reads a child node by key, asserting the parent is an object first. */
+function child(node: unknown, key: string): unknown {
+  assert.ok(isPlainObject(node), `expected an object to read "${key}" from`);
+  return node[key];
+}
+
+/** Declared key order of a schema node's `properties` object. */
+function propertyKeys(node: unknown): string[] {
+  const properties = child(node, 'properties');
+  assert.ok(isPlainObject(properties), 'expected a "properties" object on the schema node');
+  return Object.keys(properties);
+}
+
+test('schema declares root properties in canonical order', () => {
+  assert.deepEqual(propertyKeys(schema), [
+    'version',
+    'repo',
+    'stack',
+    'scheduler_class',
+    'budgets',
+    'policy',
+    'paths',
+    'generated',
+    'workspaces',
+    'filesets',
+    'tiers',
+    'workflow',
+  ]);
+});
+
+test('schema declares nested property groups in canonical order', () => {
+  const props = child(schema, 'properties');
+  const defs = child(schema, '$defs');
+
+  assert.deepEqual(propertyKeys(child(props, 'budgets')), [
+    'staged_seconds',
+    'fast_seconds',
+    'full_seconds',
+    'audit_seconds',
+  ]);
+  assert.deepEqual(propertyKeys(child(props, 'policy')), [
+    'mutates_by_default',
+    'format_fix_staged_allowed',
+    'typed_eslint_in_precommit',
+    'block_new_dead_code_only',
+  ]);
+  assert.deepEqual(propertyKeys(child(props, 'paths')), ['reports', 'baselines']);
+  assert.deepEqual(propertyKeys(child(props, 'generated')), ['hooks_dir', 'ci_quality']);
+  assert.deepEqual(propertyKeys(child(child(props, 'workspaces'), 'items')), [
+    'name',
+    'path',
+    'stack',
+    'package_manager',
+  ]);
+  assert.deepEqual(propertyKeys(child(child(props, 'filesets'), 'items')), [
+    'name',
+    'source',
+    'include',
+    'exclude',
+    'diff_filter',
+  ]);
+  assert.deepEqual(propertyKeys(child(props, 'tiers')), ['staged', 'fast', 'full', 'audit']);
+  assert.deepEqual(propertyKeys(child(child(defs, 'checkArray'), 'items')), [
+    'name',
+    'argv',
+    'timeout_seconds',
+    'skip_if_empty',
+    'mode',
+    'baseline',
+    'bypassable',
+  ]);
+  assert.deepEqual(propertyKeys(child(defs, 'workflow')), ['enabled']);
+});

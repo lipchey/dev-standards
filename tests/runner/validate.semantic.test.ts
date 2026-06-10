@@ -130,12 +130,29 @@ test('skip_if_empty naming an undeclared fileset fails with rule skip-if-empty-r
   });
 });
 
-test('"?" in an exclude pattern fails with rule glob-dialect', () => {
-  const manifest = makeManifest();
-  // Type-valid mutation: "?" is outside the restricted dialect (only "**", "*", literals).
-  firstFileset(manifest).exclude = ['src/?.ts'];
-  expectError(validate(manifest), { path: 'filesets[0].exclude[0]', rule: 'glob-dialect' });
-});
+// glob-dialect rejects the full banned set ("?", "[", "{") in BOTH include and
+// exclude — the validator's UNSUPPORTED_GLOB_SYNTAX and the schema's `include`
+// description agree on all three. Table-drive every construct × field so
+// dropping any one from the dialect guard (or stopping the include walk) fails.
+const bannedGlobConstructs: ReadonlyArray<{ label: string; pattern: string }> = [
+  { label: '"?"', pattern: 'src/?.ts' },
+  { label: '"["', pattern: 'src/[abc].ts' },
+  { label: '"{"', pattern: 'src/{a,b}.ts' },
+];
+const globPatternFields = ['include', 'exclude'] as const;
+
+for (const field of globPatternFields) {
+  for (const construct of bannedGlobConstructs) {
+    test(`${construct.label} in a fileset ${field} pattern fails with rule glob-dialect`, () => {
+      const manifest = makeManifest();
+      // Each pattern carries exactly one banned construct over otherwise-literal
+      // segments, so glob-dialect is the only rule in play. source is repo_all,
+      // so swapping include for a bad pattern keeps it the lone violation.
+      firstFileset(manifest)[field] = [construct.pattern];
+      expectError(validate(manifest), { path: `filesets[0].${field}[0]`, rule: 'glob-dialect' });
+    });
+  }
+}
 
 test('diff_filter on a repo_all fileset fails with rule diff-filter-scope', () => {
   const manifest = makeManifest();
