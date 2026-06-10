@@ -5,3 +5,5 @@ reports/quality/
 .DS_Store
 .vscode/
 .codegraph/
+.handoff/
+.idea/
