@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Phase 1a `standards-sync --check`: verifies the root quality manifest parses
+# and validates, and that schemas/quality.schema.json exists. The manifest
+# validator the shim invokes enforces the "workflow absent or { enabled: false }"
+# rule; Phase 1a generates no hooks/adapters, so hooks-presence and adapter-drift
+# have nothing to check yet. This shim lives at tools/standards-sync, so the repo
+# root is one level up from its own directory.
+REPO_ROOT="$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
+BUNDLE="${REPO_ROOT}/runner/dist/validate-quality-manifest.mjs"
+SCHEMA="${REPO_ROOT}/schemas/quality.schema.json"
+MANIFEST="${REPO_ROOT}/quality.json"
+
+usage() {
+  echo "usage: standards-sync --check" >&2
+}
+
+if [[ "$#" -ne 1 || "$1" != "--check" ]]; then
+  usage
+  exit 2
+fi
+
+if [[ ! -f "${BUNDLE}" ]]; then
+  echo "validate-quality-manifest bundle not found at ${BUNDLE}. Run: npm run build" >&2
+  exit 127
+fi
+
+node "${BUNDLE}" --manifest "${MANIFEST}"
+
+if [[ ! -f "${SCHEMA}" ]]; then
+  echo "quality schema not found at ${SCHEMA}" >&2
+  exit 1
+fi
+
+echo "standards-sync check passed"
