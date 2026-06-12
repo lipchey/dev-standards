@@ -19,6 +19,10 @@ import {
 } from './types.ts';
 import type { FrontMatter } from './types.ts';
 import { CorruptStateError, parseFrontMatter } from './front-matter.ts';
+import { LockBusyError } from './lock.ts';
+import type { LockSeams } from './lock.ts';
+import { recover, worktreeOf } from './recover.ts';
+import type { RunGit } from './trailers.ts';
 
 // The planning file lives at the worktree root (spec §3). `status` reads it from
 // the current working directory by default; `--file <path>` overrides for tests
@@ -29,15 +33,20 @@ const USAGE = [
   'usage: workflow <command> [options]',
   '',
   'commands:',
-  '  status [--file <path>]   print the planning file state and per-phase summary',
+  '  status [--file <path>]    print the planning file state and per-phase summary',
+  '  recover [--file <path>]   reconcile front-matter state to HEAD\'s durable trailer',
   '',
 ].join('\n');
 
 // The injected IO edge. Everything side-effecting lives behind these so the
-// dispatch logic is pure and testable.
+// dispatch logic is pure and testable. `writeFile` and `runGit` are the seams
+// `recover` needs (it WRITES the planning file and reads HEAD's git trailer);
+// the runner edge supplies the real fs/git implementations.
 export interface CliIO {
   cwd: () => string;
   readFile: (filePath: string) => string; // throws on a missing/unreadable file
+  writeFile: (filePath: string, content: string) => void; // recover rewrites the planning file
+  runGit: RunGit; // recover/divergence read HEAD's Workflow-Phase trailer
   stdout: (text: string) => void;
   stderr: (text: string) => void;
 }
@@ -47,7 +56,11 @@ function usageError(io: CliIO, message: string): number {
   return EXIT_USAGE;
 }
 
-export function runCli(argv: string[], io: CliIO): number {
+// `lockSeams` is the §2.10 mutex edge that state-mutating commands (recover) run
+// inside. It is injected (not imported here) so cli.ts performs no direct fs/git
+// IO and stays unit-testable; the runner edge passes `realLockSeams()`. Read-only
+// commands (status) ignore it, so it is optional for those call sites.
+export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number {
   const [command, ...rest] = argv;
   if (command === undefined) {
     return usageError(io, 'missing command');
@@ -55,33 +68,47 @@ export function runCli(argv: string[], io: CliIO): number {
   switch (command) {
     case 'status':
       return runStatus(rest, io);
+    case 'recover':
+      return runRecover(rest, io, lockSeams);
     default:
       return usageError(io, `unknown command "${command}"`);
   }
 }
 
-// `status` parses its own flags so an unknown flag / missing value is a usage
-// error (exit 2) distinct from a runtime read failure.
-function runStatus(args: string[], io: CliIO): number {
+// Parses the shared optional `--file <path>` flag (the only flag `status` and
+// `recover` take). A missing value, a repeat, or any unexpected argument is a
+// usage error (exit 2) distinct from a runtime failure; on that path the carried
+// `exitCode` is returned and the command stops. `command` names the offender.
+type FileFlag = { ok: true; filePath: string | undefined } | { ok: false; exitCode: number };
+
+function parseFileFlag(command: string, args: string[], io: CliIO): FileFlag {
   let filePath: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--file') {
       const value = args[i + 1];
       if (value === undefined) {
-        return usageError(io, 'status: missing value for --file <path>');
+        return { ok: false, exitCode: usageError(io, `${command}: missing value for --file <path>`) };
       }
       if (filePath !== undefined) {
-        return usageError(io, 'status: --file may be given only once');
+        return { ok: false, exitCode: usageError(io, `${command}: --file may be given only once`) };
       }
       filePath = value;
       i += 1;
       continue;
     }
-    return usageError(io, `status: unexpected argument "${arg}"`);
+    return { ok: false, exitCode: usageError(io, `${command}: unexpected argument "${arg}"`) };
   }
+  return { ok: true, filePath };
+}
 
-  const resolved = filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+// `status` parses its own flags so an unknown flag / missing value is a usage
+// error (exit 2) distinct from a runtime read failure.
+function runStatus(args: string[], io: CliIO): number {
+  const flag = parseFileFlag('status', args, io);
+  if (!flag.ok) return flag.exitCode;
+
+  const resolved = flag.filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
 
   // A missing/unreadable planning file is a runtime failure (exit 1), not a usage
   // error: the invocation was well-formed (spec §3 "any skill that cannot find
@@ -115,6 +142,64 @@ function runStatus(args: string[], io: CliIO): number {
 
   io.stdout(formatStatus(frontMatter));
   return EXIT_OK;
+}
+
+// `recover` reconciles the runtime front-matter `state` to HEAD's durable
+// Workflow-Phase trailer (one-directional; the trailer wins). It is state
+// mutating, so it runs inside the §2.10 worktree lock — which requires the
+// injected lock seams. Exit-code contract (§2.7): OK (0) on success or no-op,
+// LOCK_BUSY (14) when the mutex is held, NEEDS_HUMAN (13) for a corrupt planning
+// file (recover cannot rebuild broken YAML), FAILURE (1) for a read/git failure.
+function runRecover(args: string[], io: CliIO, lockSeams: LockSeams | undefined): number {
+  const flag = parseFileFlag('recover', args, io);
+  if (!flag.ok) return flag.exitCode;
+
+  if (lockSeams === undefined) {
+    // The runner edge always supplies the lock seams; their absence is an
+    // internal wiring error, never reachable from a well-formed invocation.
+    io.stderr('recover: internal error: lock seams were not provided\n');
+    return EXIT_FAILURE;
+  }
+
+  const resolved = flag.filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+  const worktree = worktreeOf(resolved);
+
+  try {
+    const result = recover({
+      planningFile: resolved,
+      worktree,
+      readFile: io.readFile,
+      writeFile: io.writeFile,
+      run: io.runGit,
+      lockSeams,
+    });
+    if (result.changed) {
+      io.stdout(
+        `recover: reconciled state ${result.fromState} -> ${result.toState} from HEAD Workflow-Phase trailer\n`,
+      );
+    } else if (result.headTrailer === null) {
+      io.stdout('recover: no durable Workflow-Phase trailer reachable from HEAD; nothing to reconcile\n');
+    } else {
+      io.stdout(`recover: front matter already matches HEAD trailer (${result.toState}); nothing to do\n`);
+    }
+    return EXIT_OK;
+  } catch (error) {
+    if (error instanceof LockBusyError) {
+      io.stderr(`recover: ${error.message}\n`);
+      return error.exitCode;
+    }
+    // A structurally corrupt planning file is a `corrupt-state` needs_human_reason
+    // (§2.1): recover v1 reconciles state from the trailer, it does not rebuild
+    // broken YAML, so it surfaces NEEDS_HUMAN (13) for human intervention.
+    if (isCorruptState(error)) {
+      const detail = error instanceof Error ? error.message : String(error);
+      io.stderr(`recover: planning file at "${resolved}" is corrupt (${detail})\n`);
+      return EXIT_NEEDS_HUMAN;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    io.stderr(`recover: failed: ${detail}\n`);
+    return EXIT_FAILURE;
+  }
 }
 
 // True for the typed corrupt-state error. Uses both `instanceof` and the

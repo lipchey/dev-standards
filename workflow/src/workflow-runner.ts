@@ -5,10 +5,12 @@
 // ./cli.ts behind the injected CliIO seam so it stays unit-testable without
 // touching the filesystem or the process. Mirrors runner/src/verify-runner.ts.
 
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { runCli } from './cli.ts';
 import type { CliIO } from './cli.ts';
+import { realLockSeams } from './lock.ts';
+import { runGit } from './trailers.ts';
 
 // Node realpaths import.meta.url under symlinks; realpath both sides for the
 // entrypoint check (the idiom from runner/src/manifest-cli.ts; inlined to keep
@@ -24,10 +26,14 @@ export function isMainModule(metaUrl: string): boolean {
   }
 }
 
-// The real IO edge: fs reads + the process streams.
+// The real IO edge: fs reads/writes, git, and the process streams.
 const realIO: CliIO = {
   cwd: () => process.cwd(),
   readFile: (filePath) => readFileSync(filePath, 'utf8'),
+  writeFile: (filePath, content) => {
+    writeFileSync(filePath, content);
+  },
+  runGit: (args, cwd) => runGit(args, cwd),
   stdout: (text) => {
     process.stdout.write(text);
   },
@@ -37,7 +43,9 @@ const realIO: CliIO = {
 };
 
 export function main(argv: string[]): number {
-  return runCli(argv, realIO);
+  // State-mutating commands (recover) run inside the §2.10 worktree mutex; the
+  // edge supplies the real lock seams (wall clock, blocking sleep, PID oracle).
+  return runCli(argv, realIO, realLockSeams());
 }
 
 // Keep imports test-safe: only run (and exit) when invoked as the entrypoint.

@@ -49,6 +49,8 @@ function makeIO(overrides: Partial<CliIO> = {}): Captured {
   const io: CliIO = {
     cwd: () => '/tmp/worktree',
     readFile: () => serializeFrontMatter(makeFrontMatter()),
+    writeFile: () => {},
+    runGit: () => '',
     stdout: (t) => {
       out.push(t);
     },

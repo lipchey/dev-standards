@@ -1,0 +1,164 @@
+// §6 (spec) durable-authority trailers: the `Workflow-Phase: <state>` git-commit
+// trailer is the DURABLE/recovery authority (the runtime READ authority is the
+// planning-file front-matter `state`). This module is the trailer half of that
+// two-role contract (ADR-012, Phase 3): a PURE formatter + a PURE reader, with
+// the single git invocation isolated at the edge in `runGit` so the parsing
+// logic is unit-testable without git and the recover/divergence integration is
+// tested against real ephemeral repos.
+//
+// Written from day one: `complete` builds EVERY transition commit message
+// through `withWorkflowPhaseTrailer`, so the durable record exists from the very
+// first transition. The two-commit `implement-plan` shape can leave an untrailed
+// CODE commit on top of the trailed planning-file commit, so "HEAD's trailer"
+// means the MOST RECENT `Workflow-Phase` trailer reachable from HEAD — the reader
+// searches back past untrailed commits, it never looks only at HEAD's own message.
+
+import { spawnSync } from 'node:child_process';
+import { WORKFLOW_STATES } from './types.ts';
+import type { WorkflowState } from './types.ts';
+import { CorruptStateError } from './front-matter.ts';
+
+// The exact trailer key (§6). Pinned so call sites read by name and never drift.
+export const WORKFLOW_PHASE_TRAILER_KEY = 'Workflow-Phase';
+
+const STATE_SET: ReadonlySet<string> = new Set<string>(WORKFLOW_STATES);
+
+// A git-trailer-shaped line: `Token: value` (RFC-822-ish). Used to decide whether
+// the last paragraph of a message is already a trailer block (so a new trailer is
+// appended WITHIN it, with no extra blank line) vs ordinary body text.
+const TRAILER_LINE_RE = /^[A-Za-z][A-Za-z0-9-]*: .+$/;
+// Our specific trailer; the value is captured and trimmed of surrounding blanks.
+const WORKFLOW_PHASE_LINE_RE = /^Workflow-Phase:[ \t]*(.+?)[ \t]*$/;
+
+// Record separator placed after each commit body by the git-log format, so the
+// reader can split bodies apart without a body's own blank lines being ambiguous.
+const RECORD_SEP = '\x1e';
+
+export function isWorkflowState(value: string): value is WorkflowState {
+  return STATE_SET.has(value);
+}
+
+// ── Pure formatter ───────────────────────────────────────────────────────────
+
+// Appends a NORMALIZED `Workflow-Phase: <state>` trailer onto a commit message.
+// Idempotent in the key: any existing Workflow-Phase trailer line is removed
+// first, so re-applying replaces the value rather than duplicating the trailer.
+// If the last paragraph is already a trailer block (e.g. a Co-Authored-By line),
+// the new trailer joins that block; otherwise it is separated from the body by a
+// blank line, per git's trailer convention. The result has no trailing newline.
+export function withWorkflowPhaseTrailer(message: string, state: WorkflowState): string {
+  const trailer = `${WORKFLOW_PHASE_TRAILER_KEY}: ${state}`;
+  // Drop trailing whitespace/newlines, then strip any existing Workflow-Phase
+  // trailer line(s) so the key is single-valued (normalize).
+  const lines = message.replace(/\s+$/, '').split('\n');
+  const kept = lines.filter((line) => !WORKFLOW_PHASE_LINE_RE.test(line));
+
+  // Nothing left (the message was empty or only a Workflow-Phase trailer): the
+  // trailer stands alone.
+  if (kept.every((line) => line.trim() === '')) {
+    return trailer;
+  }
+
+  // The last paragraph is the block of lines after the final blank line.
+  const lastBlank = kept.lastIndexOf('');
+  const lastParagraph = kept.slice(lastBlank + 1);
+  const lastIsTrailerBlock =
+    lastParagraph.length > 0 && lastParagraph.every((line) => TRAILER_LINE_RE.test(line));
+
+  // Join within an existing trailer block (single newline); otherwise open a new
+  // trailer paragraph (blank-line separated).
+  const separator = lastIsTrailerBlock ? '\n' : '\n\n';
+  return `${kept.join('\n')}${separator}${trailer}`;
+}
+
+// ── Pure reader ──────────────────────────────────────────────────────────────
+
+// The Workflow-Phase trailer value in a single commit body, or null. Scans from
+// the END (trailers live at the end), so a subject line that happens to contain
+// the key is not mistaken for the trailer.
+function trailerInBody(body: string): string | null {
+  const lines = body.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (line === undefined) continue;
+    const match = WORKFLOW_PHASE_LINE_RE.exec(line);
+    if (match !== null && match[1] !== undefined) return match[1];
+  }
+  return null;
+}
+
+// The most-recent `Workflow-Phase` trailer value across commit bodies given
+// NEWEST-FIRST (git-log default order). Returns the first body that carries the
+// trailer — i.e. the closest to HEAD — skipping untrailed commits on top. Returns
+// the raw string value (membership is validated by `readHeadWorkflowPhase`).
+export function lastWorkflowPhaseTrailer(bodiesNewestFirst: string[]): string | null {
+  for (const body of bodiesNewestFirst) {
+    const value = trailerInBody(body);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+// ── Pure divergence predicate ────────────────────────────────────────────────
+
+// Divergence (§spec-6): the durable record (last reachable Workflow-Phase
+// trailer) names a state the runtime front matter does NOT reflect. The front
+// matter is authoritative at runtime; this is the safety check that the durable
+// record is CONSISTENT with it. A null trailer (no durable record yet, the
+// pre-first-transition window) is never divergence — there is nothing to diverge
+// from. An untrailed code commit on top is also not divergence: the LAST reachable
+// trailer still names the recorded state (the reader looks past the untrailed
+// commit). Divergence is precisely "a durable trailer exists and differs from the
+// front-matter state" — e.g. the record write was lost after the trailer landed.
+export function diverges(
+  frontMatterState: WorkflowState,
+  headTrailer: WorkflowState | null,
+): boolean {
+  return headTrailer !== null && headTrailer !== frontMatterState;
+}
+
+// ── Git edge ─────────────────────────────────────────────────────────────────
+
+// The single git invocation seam. Fixed-argv spawnSync with shell:false (NEVER a
+// shell string, never `git add -A`), so untrusted state never reaches a shell.
+// Injectable as RunGit so recover/divergence are testable against real ephemeral
+// repos while the pure trailer logic above needs no git at all.
+export type RunGit = (args: string[], cwd: string) => string;
+
+export function runGit(args: string[], cwd: string): string {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    shell: false,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error !== undefined) throw result.error;
+  if (result.status !== 0) {
+    const detail = (result.stderr ?? '').trim();
+    throw new Error(`git ${args.join(' ')} failed (status ${result.status}): ${detail}`);
+  }
+  return result.stdout;
+}
+
+// Reads HEAD's durable Workflow-Phase trailer: the most recent reachable trailer
+// value, validated against WORKFLOW_STATES. Returns null when no commit reachable
+// from HEAD carries the trailer. A present-but-invalid trailer value is a corrupt
+// durable record (the recovery authority is unusable) and raises CorruptStateError.
+export function readHeadWorkflowPhase(cwd: string, run: RunGit = runGit): WorkflowState | null {
+  const out = run(['log', `--format=%B${RECORD_SEP}`], cwd);
+  // git appends a newline after each commit's formatted output; the leading
+  // newline of each record (after the prior separator) is trimmed below.
+  const bodies = out
+    .split(RECORD_SEP)
+    .map((body) => body.replace(/^\n+/, ''))
+    .filter((body) => body.trim() !== '');
+  const raw = lastWorkflowPhaseTrailer(bodies);
+  if (raw === null) return null;
+  if (!isWorkflowState(raw)) {
+    throw new CorruptStateError(
+      'bad-trailer-value',
+      `HEAD ${WORKFLOW_PHASE_TRAILER_KEY} trailer value "${raw}" is not a valid WorkflowState`,
+    );
+  }
+  return raw;
+}
