@@ -148,10 +148,27 @@ function toResult(
     phase,
     state: fm.state,
   };
+  // Terminal observation (Task 11.5): the gate REPORTS the needs-human terminal
+  // state — it surfaces WHY (the §2.1 needs_human_reason) and, when present, the
+  // resume return state (needs_human_from) so an operator sees the cause and the
+  // intended exit WITHOUT the gate auto-promoting, auto-spawning, or mutating
+  // anything. Only the `needs-human` outcome on the actual `needs-human` state has
+  // these fields; a failure terminal state carries neither.
+  if (verdict.outcome === 'needs-human' && fm.state === 'needs-human') {
+    result.message = needsHumanMessage(fm);
+  }
   if (includePollCount) {
     result.pollCount = pollCount;
   }
   return result;
+}
+
+// Human-readable detail for a needs-human terminal verdict: the reason and the
+// resume return state when recorded, falling back to a plain note otherwise.
+function needsHumanMessage(fm: FrontMatter): string {
+  const reason = fm.needs_human_reason ?? 'unknown';
+  const from = fm.needs_human_from === undefined ? '' : ` (resume returns to ${fm.needs_human_from})`;
+  return `needs-human: ${reason}${from}; run \`workflow resume\` after resolving`;
 }
 
 // Builds a result that NAMES the phase's required precondition(s): the immediate

@@ -38,6 +38,7 @@ import {
 } from './types.ts';
 import type {
   FrontMatter,
+  NeedsHumanReason,
   PhaseRecord,
   WorkflowPhase,
   WorkflowState,
@@ -117,12 +118,21 @@ export interface TransactionDeps {
   lockSeams: LockSeams;
   now: () => number; // ms since epoch; drives `updated` and the budget clock
   claimedBy: string; // caller identity for the owner check / the phase claim
+  // §8 budget ceilings (Task 11.5), injected by the CLI edge from the §2.8
+  // `workflow.budget` config so the needs-human TRIGGERS are unit-testable with
+  // explicit ceilings. ABSENT => no total/per-pass trigger fires (the loopback
+  // proceeds normally); the loopback-cap trigger is independent of this and uses
+  // the front-matter `loopback_cap` (hard-coded at 2). `totalSeconds` is the
+  // §8 `budget.workflow_total_seconds` total; `perPassSeconds` is the OPTIONAL,
+  // sparse per-pass ceiling (§2.8) checked ONLY when configured.
+  budget?: { totalSeconds: number; perPassSeconds?: number };
 }
 
 export type TransactionOutcome =
   | 'started'
   | 'completed'
   | 'changes-requested'
+  | 'needs-human'
   | 'wrong-state'
   | 'wrong-owner'
   | 'divergence';
@@ -499,15 +509,45 @@ function requestChangesInner(
     return wrongStateResult(producer, fromState, `${loopback.reviewRow.start}`);
   }
 
-  // Budget accumulation (this task): add the rejected review pass's duration,
+  // Budget accumulation + needs-human TRIGGERS (Task 11.5).
+  // SEAM: ACCUMULATE first (the rejected pass happened — it counts), THEN evaluate
+  // the triggers on the updated counters. The rejected review pass's duration is
   // measured from the last state change via the injected clock.
-  // SEAM (Task 11.5): the budget-exhausted / loopback-cap needs-human TRIGGERS
-  // are added HERE — checking fm.budget_spent.total_seconds against the configured
-  // budget and fm.loopback_count against fm.loopback_cap, routing to needs-human
-  // instead of committing the loopback. This task only ACCUMULATES; no trigger.
   const elapsed = passDurationSeconds(fm.updated, deps.now());
   fm.budget_spent = { total_seconds: fm.budget_spent.total_seconds + elapsed };
   fm.loopback_count += 1;
+
+  // Evaluate the needs-human triggers on the UPDATED counters. A trigger routes to
+  // the needs-human record (consumed by resume.ts) instead of the normal loopback
+  // commit; absent a trigger the loopback proceeds. The return state for resume is
+  // ALWAYS the producer's changes_requested loop state (`loopback.state`), so
+  // resume returns to the right place for another round / a fresh budget.
+  const trigger = evaluateNeedsHumanTrigger(fm, elapsed, deps.budget);
+  if (trigger !== null) {
+    fm.state = 'needs-human';
+    fm.needs_human_reason = trigger;
+    fm.needs_human_from = loopback.state;
+    fm.updated = nowIso(deps);
+    save(deps, fm, body);
+    // The divergence invariant holds: the resting state is needs-human, so the
+    // commit carries a `Workflow-Phase: needs-human` trailer. The reason rides the
+    // commit body (same shape as the loopback commit) for the durable record.
+    commitPlanningFile(
+      deps,
+      withWorkflowPhaseTrailer(
+        `workflow(${producer}): ${trigger} -> needs-human\n\n${opts.reason}`,
+        'needs-human',
+      ),
+    );
+    return {
+      exitCode: EXIT_NEEDS_HUMAN,
+      outcome: 'needs-human',
+      phase: producer,
+      fromState,
+      toState: 'needs-human',
+      message: `${trigger}: routed to needs-human (resume returns to ${loopback.state})`,
+    };
+  }
 
   fm.state = loopback.state;
   fm.updated = nowIso(deps);
@@ -518,6 +558,43 @@ function requestChangesInner(
   );
   commitPlanningFile(deps, message);
   return { exitCode: EXIT_OK, outcome: 'changes-requested', phase: producer, fromState, toState: loopback.state };
+}
+
+// The §8 needs-human trigger decision — PURE over the already-accumulated front
+// matter, the just-elapsed pass duration, and the injected budget ceilings.
+// Returns the firing reason, or null when no trigger fires (loopback proceeds).
+//
+// Precedence (deterministic, DOCUMENTED): loopback-cap BEFORE total-budget BEFORE
+// per-pass-ceiling. The cap is the operator's hard structural limit on rounds, so
+// it is reported first; total budget is the global wall-clock limit; the per-pass
+// ceiling is the narrowest (and optional/sparse) signal, so it is reported last.
+// Both budget breaches map to the §2.1 `budget-exhausted` reason (there is no
+// separate per-pass reason in the vocabulary — a per-pass ceiling is a budget
+// exhaustion of the per-pass kind).
+function evaluateNeedsHumanTrigger(
+  fm: FrontMatter,
+  passSeconds: number,
+  budget: { totalSeconds: number; perPassSeconds?: number } | undefined,
+): NeedsHumanReason | null {
+  // (1) loopback-cap — independent of the injected budget; uses the front-matter
+  // cap (hard-coded at 2; resume raises it via the extend-cap waiver). Fires when
+  // the just-incremented round count exceeds the cap.
+  if (fm.loopback_count > fm.loopback_cap) {
+    return 'loopback-cap';
+  }
+  if (budget === undefined) {
+    return null; // no total/per-pass ceiling configured => no budget trigger
+  }
+  // (2) total-budget — the accumulated spend reaches the configured total.
+  if (fm.budget_spent.total_seconds >= budget.totalSeconds) {
+    return 'budget-exhausted';
+  }
+  // (3) per-pass-ceiling — OPTIONAL/sparse: checked ONLY when configured. A single
+  // pass exceeding the ceiling is a per-pass budget exhaustion.
+  if (budget.perPassSeconds !== undefined && passSeconds > budget.perPassSeconds) {
+    return 'budget-exhausted';
+  }
+  return null;
 }
 
 // Whole-second duration between the previous `updated` timestamp and now, clamped

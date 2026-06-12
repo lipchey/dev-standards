@@ -123,6 +123,9 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
         lockSeams,
         { reason: true, reasonRequired: true },
         (phase, deps, args) => requestChanges(phase, { reason: args.reason ?? '' }, deps),
+        // request-changes is the only verb that evaluates the §8 budget triggers,
+        // so it threads the budget ceilings from quality.json into the deps.
+        loadBudget,
       );
     case 'gate':
       return runGate(rest, io, lockSeams);
@@ -396,6 +399,7 @@ function runTransactionCommand(
   lockSeams: LockSeams | undefined,
   allowed: AllowedFlags,
   invoke: (phase: WorkflowPhase, deps: TransactionDeps, args: ParsedArgs) => TransactionResult,
+  loadBudgetFor?: (io: CliIO, worktree: string) => { totalSeconds: number; perPassSeconds?: number },
 ): number {
   const parsed = parseCommandArgs(command, argv, io, allowed);
   if (!parsed.ok) return parsed.exitCode;
@@ -403,9 +407,10 @@ function runTransactionCommand(
   if (typeof edge === 'number') return edge;
 
   const resolved = parsed.args.filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+  const worktree = worktreeOf(resolved);
   const deps: TransactionDeps = {
     planningFile: resolved,
-    worktree: worktreeOf(resolved),
+    worktree,
     readFile: io.readFile,
     writeFile: io.writeFile,
     run: io.runGit,
@@ -413,6 +418,9 @@ function runTransactionCommand(
     now: edge.now,
     claimedBy: edge.claimedBy,
   };
+  if (loadBudgetFor !== undefined) {
+    deps.budget = loadBudgetFor(io, worktree);
+  }
 
   try {
     const result = invoke(parsed.args.phase, deps, parsed.args);
@@ -426,6 +434,49 @@ function runTransactionCommand(
   } catch (error) {
     return mapMutationError(io, command, resolved, error);
   }
+}
+
+// The §8 total-budget default (`budget.workflow_total_seconds`) when quality.json
+// is absent or the workflow block omits a budget. Pinned to the §8 default.
+const DEFAULT_WORKFLOW_TOTAL_SECONDS = 5400;
+
+// Loads the §8 budget ceilings for the request-changes triggers from the §2.8
+// `workflow.budget` block of quality.json at the worktree root. This is the CLI
+// EDGE READ only — `doctor` (CHECK_CONFIG) owns §2.8 validation, so this never
+// re-validates: it reads the configured total (defaulting to the §8 5400 when the
+// file/block/field is absent or non-numeric) and the OPTIONAL, sparse per-pass
+// ceiling. The per-pass ceiling is read defensively — present only after the
+// §2.8 sparse per-phase map lands — and omitted otherwise (=> no per-pass check).
+function loadBudget(io: CliIO, worktree: string): { totalSeconds: number; perPassSeconds?: number } {
+  const manifestPath = path.join(worktree, MANIFEST_FILE_NAME);
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(io.readFile(manifestPath));
+  } catch {
+    // Absent/unreadable/invalid quality.json => fall back to the §8 default total
+    // and no per-pass ceiling. (doctor surfaces a malformed manifest separately.)
+    return { totalSeconds: DEFAULT_WORKFLOW_TOTAL_SECONDS };
+  }
+  const workflow = readRecord(manifest, 'workflow');
+  const budget = workflow === undefined ? undefined : readRecord(workflow, 'budget');
+  const totalRaw = budget?.['workflow_total_seconds'];
+  const totalSeconds =
+    typeof totalRaw === 'number' && Number.isFinite(totalRaw) && totalRaw > 0
+      ? totalRaw
+      : DEFAULT_WORKFLOW_TOTAL_SECONDS;
+  const perPassRaw = budget?.['per_pass_seconds'];
+  if (typeof perPassRaw === 'number' && Number.isFinite(perPassRaw) && perPassRaw > 0) {
+    return { totalSeconds, perPassSeconds: perPassRaw };
+  }
+  return { totalSeconds };
+}
+
+// Reads a nested object field as a plain record (object, non-array), or undefined.
+function readRecord(value: unknown, key: string): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const child = (value as Record<string, unknown>)[key];
+  if (typeof child !== 'object' || child === null || Array.isArray(child)) return undefined;
+  return child as Record<string, unknown>;
 }
 
 // ── gate ─────────────────────────────────────────────────────────────────────
