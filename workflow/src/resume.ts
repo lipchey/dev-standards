@@ -49,32 +49,27 @@ import type {
 import {
   CorruptStateError,
   parseFrontMatter,
-  serializeFrontMatter,
   validateReason,
 } from './front-matter.ts';
-import { diverges, readHeadWorkflowPhase, withWorkflowPhaseTrailer } from './trailers.ts';
-import type { RunGit } from './trailers.ts';
+import { withWorkflowPhaseTrailer } from './trailers.ts';
 import { withLock } from './lock.ts';
-import type { LockSeams } from './lock.ts';
 import { TRANSITION_TABLE } from './transitions.ts';
 import type { TransitionRow } from './transitions.ts';
 import { splitPlanningFile } from './recover.ts';
-import { assertOnlyPlanningStaged, planningRelPath } from './commit-scope.ts';
+import {
+  commitPlanningFile,
+  entryDivergence,
+  nowIso,
+  savePlanning,
+} from './planning-io.ts';
+import type { MutatingDeps } from './planning-io.ts';
 
 // ── Injected edge + result ───────────────────────────────────────────────────
 
-// Same mutating-verb seam shape as TransactionDeps (kept local so resume stays
-// decoupled from transactions.ts, mirroring recover's RecoverDeps).
-export interface ResumeDeps {
-  planningFile: string;
-  worktree: string;
-  readFile: (filePath: string) => string;
-  writeFile: (filePath: string, content: string) => void;
-  run: RunGit;
-  lockSeams: LockSeams;
-  now: () => number; // ms since epoch; drives `updated` and the waiver `at`
-  claimedBy: string; // caller identity recorded on the waiver
-}
+// resume shares the mutating-verb seam (MutatingDeps) with the §6 verbs but adds
+// no task-specific fields: `now` here drives `updated` and the waiver `at`, and
+// `claimedBy` is recorded on the waiver.
+export type ResumeDeps = MutatingDeps;
 
 export type ResumeOutcome =
   | 'resumed'
@@ -114,9 +109,10 @@ function resumeInner(deps: ResumeDeps): ResumeResult {
   const observed = fm.state;
 
   // Entry divergence check (parity with the §6 verbs): a needs-human record lands
-  // a `needs-human` trailer, so a legitimate needs-human never diverges here.
-  const headTrailer = readHeadWorkflowPhase(deps.worktree, deps.run);
-  if (diverges(observed, headTrailer)) {
+  // a `needs-human` trailer, so a legitimate needs-human never diverges here. The
+  // file is already proven parseable above (the corrupt-state branch returned), so
+  // the shared check (which re-reads + re-parses) cannot throw here.
+  if (entryDivergence(deps)) {
     return {
       exitCode: EXIT_NEEDS_HUMAN,
       outcome: 'divergence',
@@ -167,7 +163,7 @@ function resumeInner(deps: ResumeDeps): ResumeResult {
   delete fm.needs_human_from;
   fm.state = returnState;
   fm.updated = nowIso(deps);
-  save(deps, fm, body);
+  savePlanning(deps, fm, body);
 
   commitPlanningFile(
     deps,
@@ -252,24 +248,4 @@ function corruptNeedsRecover(why: string): ResumeResult {
     toState: 'needs-human',
     message: `${why}; run \`workflow recover\` before resuming`,
   };
-}
-
-// ── Shared edge helpers (mirror transactions.ts) ─────────────────────────────
-
-function save(deps: ResumeDeps, fm: FrontMatter, body: string): void {
-  deps.writeFile(deps.planningFile, serializeFrontMatter(fm) + body);
-}
-
-// The subset accepts only bare-second ISO-8601 UTC; strip toISOString's ms field.
-function nowIso(deps: ResumeDeps): string {
-  return new Date(deps.now()).toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
-
-// Stages exactly the planning file and commits it (asserting the planning-only
-// commit shape first). The message already carries its Workflow-Phase trailer.
-function commitPlanningFile(deps: ResumeDeps, message: string): void {
-  const rel = planningRelPath(deps.worktree, deps.planningFile);
-  deps.run(['add', '--', rel], deps.worktree);
-  assertOnlyPlanningStaged(deps.worktree, rel, deps.run);
-  deps.run(['commit', '-q', '-m', message], deps.worktree);
 }

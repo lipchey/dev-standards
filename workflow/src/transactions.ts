@@ -43,26 +43,26 @@ import type {
   WorkflowPhase,
   WorkflowState,
 } from './types.ts';
-import {
-  parseFrontMatter,
-  serializeFrontMatter,
-  validateReason,
-} from './front-matter.ts';
-import { computeDivergence, splitPlanningFile } from './recover.ts';
+import { validateReason } from './front-matter.ts';
 import { withWorkflowPhaseTrailer } from './trailers.ts';
-import type { RunGit } from './trailers.ts';
 import { withLock } from './lock.ts';
-import type { LockSeams } from './lock.ts';
 import { TRANSITION_TABLE } from './transitions.ts';
 import type { TransitionRow } from './transitions.ts';
 import {
   assertCodeCommitShape,
-  assertOnlyPlanningStaged,
   CommitScopeError,
   planningRelPath,
   stagedPaths,
   worktreeChangesExcept,
 } from './commit-scope.ts';
+import {
+  commitPlanningFile,
+  entryDivergence,
+  loadPlanning,
+  nowIso,
+  savePlanning,
+} from './planning-io.ts';
+import type { MutatingDeps } from './planning-io.ts';
 
 // ── Table lookups (derived from the frozen TRANSITION_TABLE; never name-derived) ─
 
@@ -109,15 +109,9 @@ function rowFor(phase: WorkflowPhase): TransitionRow {
 
 // ── Injected edge + result ───────────────────────────────────────────────────
 
-export interface TransactionDeps {
-  planningFile: string;
-  worktree: string;
-  readFile: (filePath: string) => string;
-  writeFile: (filePath: string, content: string) => void;
-  run: RunGit;
-  lockSeams: LockSeams;
-  now: () => number; // ms since epoch; drives `updated` and the budget clock
-  claimedBy: string; // caller identity for the owner check / the phase claim
+export interface TransactionDeps extends MutatingDeps {
+  // (planningFile, worktree, readFile, writeFile, run, lockSeams, now, claimedBy
+  // are the shared MutatingDeps seam; `now` here also drives the budget clock.)
   // §8 budget ceilings (Task 11.5), injected by the CLI edge from the §2.8
   // `workflow.budget` config so the needs-human TRIGGERS are unit-testable with
   // explicit ceilings. ABSENT => no total/per-pass trigger fires (the loopback
@@ -147,31 +141,10 @@ export interface TransactionResult {
   message?: string;
 }
 
-// ── Shared edge helpers ──────────────────────────────────────────────────────
-
-interface Loaded {
-  fm: FrontMatter;
-  body: string;
-}
-
-// Reads + parses the planning file (markdown front matter + body), reusing the
-// recover.ts split so `serialize(fm) + body` round-trips the markdown.
-function load(deps: TransactionDeps): Loaded {
-  const text = deps.readFile(deps.planningFile);
-  const { frontMatterText, body } = splitPlanningFile(text);
-  return { fm: parseFrontMatter(frontMatterText), body };
-}
-
-function save(deps: TransactionDeps, fm: FrontMatter, body: string): void {
-  deps.writeFile(deps.planningFile, serializeFrontMatter(fm) + body);
-}
-
-// The front-matter subset accepts ONLY bare-second ISO-8601 UTC (`...:SSZ`, no
-// milliseconds), so the millisecond field that toISOString always emits is
-// stripped before it reaches the serializer.
-function nowIso(deps: TransactionDeps): string {
-  return new Date(deps.now()).toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
+// ── Transaction-only edge helpers ────────────────────────────────────────────
+// (load/save/nowIso/commitPlanningFile/entryDivergence are the shared
+// mutating-verb edge in planning-io.ts; only the sha-capture helpers below are
+// specific to the §6 verbs.)
 
 function planningRel(deps: TransactionDeps): string {
   return planningRelPath(deps.worktree, deps.planningFile);
@@ -187,27 +160,6 @@ function headShaOrNull(deps: TransactionDeps): string | null {
   } catch {
     return null; // unborn HEAD (pre-first-commit) — no base sha to record
   }
-}
-
-// The entry divergence check (frozen contract): every transaction, after the
-// lock, refuses when the runtime front matter diverges from HEAD's durable
-// trailer, pointing the caller at `workflow recover`.
-function divergence(deps: TransactionDeps): boolean {
-  return computeDivergence({
-    planningFile: deps.planningFile,
-    worktree: deps.worktree,
-    readFile: deps.readFile,
-    run: deps.run,
-  });
-}
-
-// Stages exactly the planning file and commits it (asserting the planning-only
-// commit shape first). The message already carries its Workflow-Phase trailer.
-function commitPlanningFile(deps: TransactionDeps, message: string): void {
-  const rel = planningRel(deps);
-  deps.run(['add', '--', rel], deps.worktree);
-  assertOnlyPlanningStaged(deps.worktree, rel, deps.run);
-  deps.run(['commit', '-q', '-m', message], deps.worktree);
 }
 
 // ── Refusal builders ─────────────────────────────────────────────────────────
@@ -302,9 +254,9 @@ export function start(phase: WorkflowPhase, deps: TransactionDeps): TransactionR
 
 function startInner(phase: WorkflowPhase, deps: TransactionDeps): TransactionResult {
   const row = rowFor(phase);
-  const { fm, body } = load(deps);
+  const { fm, body } = loadPlanning(deps);
   const fromState = fm.state;
-  if (divergence(deps)) return divergenceResult(phase, fromState);
+  if (entryDivergence(deps)) return divergenceResult(phase, fromState);
   if (row.start === null) {
     return wrongStateResult(phase, fromState, 'a phase with an in-progress state');
   }
@@ -324,7 +276,7 @@ function startInner(phase: WorkflowPhase, deps: TransactionDeps): TransactionRes
     start_sha: startSha,
     complete_sha: null,
   };
-  save(deps, fm, body);
+  savePlanning(deps, fm, body);
   commitPlanningFile(deps, withWorkflowPhaseTrailer(`workflow(${phase}): start -> ${toState}`, toState));
   return { exitCode: EXIT_OK, outcome: 'started', phase, fromState, toState };
 }
@@ -353,9 +305,9 @@ function completeInner(
   deps: TransactionDeps,
 ): TransactionResult {
   const row = rowFor(phase);
-  const { fm, body } = load(deps);
+  const { fm, body } = loadPlanning(deps);
   const fromState = fm.state;
-  if (divergence(deps)) return divergenceResult(phase, fromState);
+  if (entryDivergence(deps)) return divergenceResult(phase, fromState);
   if (fm.claimed_by !== deps.claimedBy) return wrongOwnerResult(phase, fromState, fm, deps);
   if (row.start === null || fromState !== row.start) {
     return wrongStateResult(phase, fromState, `${row.start ?? '(no in-progress state)'}`);
@@ -401,7 +353,7 @@ function completePlanning(
 
   fm.state = toState;
   fm.updated = nowIso(deps);
-  save(deps, fm, body);
+  savePlanning(deps, fm, body);
   // withWorkflowPhaseTrailer normalizes to ONE value = the final resting state.
   commitPlanningFile(
     deps,
@@ -413,7 +365,7 @@ function completePlanning(
   const sha = headSha(deps);
   recordCompleteSha(fm, phase, sha);
   if (autoAdvance) recordCompleteSha(fm, 'consolidate-plan', sha);
-  save(deps, fm, body);
+  savePlanning(deps, fm, body);
 
   const result: TransactionResult = {
     exitCode: EXIT_OK,
@@ -458,7 +410,7 @@ function completeImplement(
   markPhaseSuccess(fm, phase, fm.loopback_count, codeSha);
   fm.state = row.success; // 'implemented'
   fm.updated = nowIso(deps);
-  save(deps, fm, body);
+  savePlanning(deps, fm, body);
   commitPlanningFile(
     deps,
     withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${row.success}`, row.success),
@@ -495,14 +447,14 @@ function requestChangesInner(
   const loopback = LOOPBACK_BY_PRODUCER.get(producer);
   if (loopback === undefined) {
     // Not a producer that owns a changes_requested loopback (e.g. a review phase).
-    const { fm } = load(deps);
+    const { fm } = loadPlanning(deps);
     return wrongStateResult(producer, fm.state, 'a producer phase with a changes-requested loopback');
   }
   validateReason(opts.reason); // ASCII, <=200, no control chars (front-matter.ts)
 
-  const { fm, body } = load(deps);
+  const { fm, body } = loadPlanning(deps);
   const fromState = fm.state;
-  if (divergence(deps)) return divergenceResult(producer, fromState);
+  if (entryDivergence(deps)) return divergenceResult(producer, fromState);
   if (fm.claimed_by !== deps.claimedBy) return wrongOwnerResult(producer, fromState, fm, deps);
   // Precondition: the review that produced the rejection is in progress.
   if (fromState !== loopback.reviewRow.start) {
@@ -528,7 +480,7 @@ function requestChangesInner(
     fm.needs_human_reason = trigger;
     fm.needs_human_from = loopback.state;
     fm.updated = nowIso(deps);
-    save(deps, fm, body);
+    savePlanning(deps, fm, body);
     // The divergence invariant holds: the resting state is needs-human, so the
     // commit carries a `Workflow-Phase: needs-human` trailer. The reason rides the
     // commit body (same shape as the loopback commit) for the durable record.
@@ -551,7 +503,7 @@ function requestChangesInner(
 
   fm.state = loopback.state;
   fm.updated = nowIso(deps);
-  save(deps, fm, body);
+  savePlanning(deps, fm, body);
   const message = withWorkflowPhaseTrailer(
     `workflow(${producer}): changes requested -> ${loopback.state}\n\n${opts.reason}`,
     loopback.state,
