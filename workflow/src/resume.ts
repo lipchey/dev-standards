@@ -57,10 +57,10 @@ import { TRANSITION_TABLE } from './transitions.ts';
 import type { TransitionRow } from './transitions.ts';
 import { splitPlanningFile } from './recover.ts';
 import {
-  commitPlanningFile,
+  assertNoForeignStaged,
+  commitMutation,
   entryDivergence,
   nowIso,
-  savePlanning,
 } from './planning-io.ts';
 import type { MutatingDeps } from './planning-io.ts';
 
@@ -150,6 +150,10 @@ function resumeInner(deps: ResumeDeps): ResumeResult {
     };
   }
 
+  // Atomicity: pre-flight the planning-only commit-shape refusal BEFORE mutating,
+  // so a foreign staged file refuses with the needs-human file untouched.
+  assertNoForeignStaged(deps);
+
   // Per-reason counter resolution (mutates fm in place).
   const waiverNote = applyReason(fm, reason);
 
@@ -163,10 +167,14 @@ function resumeInner(deps: ResumeDeps): ResumeResult {
   delete fm.needs_human_from;
   fm.state = returnState;
   fm.updated = nowIso(deps);
-  savePlanning(deps, fm, body);
 
-  commitPlanningFile(
+  // commitMutation restores the pre-transaction (needs-human) file on ANY throw,
+  // so a refused/failed resume commit leaves `state` at needs-human, non-divergent.
+  commitMutation(
     deps,
+    text,
+    fm,
+    body,
     withWorkflowPhaseTrailer(`workflow(resume): ${reason} -> ${returnState}`, returnState),
   );
 

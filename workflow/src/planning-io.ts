@@ -14,7 +14,12 @@
 import { parseFrontMatter, serializeFrontMatter } from './front-matter.ts';
 import type { FrontMatter } from './types.ts';
 import { computeDivergence, splitPlanningFile } from './recover.ts';
-import { assertOnlyPlanningStaged, planningRelPath } from './commit-scope.ts';
+import {
+  assertOnlyPlanningStaged,
+  CommitScopeError,
+  planningRelPath,
+  stagedPaths,
+} from './commit-scope.ts';
 import type { RunGit } from './trailers.ts';
 import type { LockSeams } from './lock.ts';
 
@@ -35,14 +40,16 @@ export interface MutatingDeps {
 export interface LoadedPlanning {
   fm: FrontMatter;
   body: string;
+  text: string; // the EXACT raw bytes read (the pre-transaction restore point)
 }
 
 // Reads + parses the planning file (markdown front matter + body), reusing the
-// recover.ts split so `serialize(fm) + body` round-trips the markdown.
+// recover.ts split so `serialize(fm) + body` round-trips the markdown. `text` is
+// the raw bytes read, captured so a refused/failed transaction can restore them.
 export function loadPlanning(deps: MutatingDeps): LoadedPlanning {
   const text = deps.readFile(deps.planningFile);
   const { frontMatterText, body } = splitPlanningFile(text);
-  return { fm: parseFrontMatter(frontMatterText), body };
+  return { fm: parseFrontMatter(frontMatterText), body, text };
 }
 
 // Writes the planning file back: serialized front matter + the preserved body.
@@ -76,4 +83,42 @@ export function commitPlanningFile(deps: MutatingDeps, message: string): void {
   deps.run(['add', '--', rel], deps.worktree);
   assertOnlyPlanningStaged(deps.worktree, rel, deps.run);
   deps.run(['commit', '-q', '-m', message], deps.worktree);
+}
+
+// PRE-FLIGHT commit-shape refusal (atomicity, part 1): for the planning-only
+// verbs, refuse BEFORE any front-matter mutation/save when the index already
+// carries a FOREIGN path (anything other than the planning file). This moves the
+// `assertOnlyPlanningStaged` refusal AHEAD of the file write, so a refused
+// transaction never advances `state` on disk. Same EXIT_WRONG_STATE family as the
+// in-commit assert (a CommitScopeError), so callers map it identically.
+export function assertNoForeignStaged(deps: MutatingDeps): void {
+  const rel = planningRelPath(deps.worktree, deps.planningFile);
+  const foreign = stagedPaths(deps.worktree, deps.run).filter((p) => p !== rel);
+  if (foreign.length > 0) {
+    throw new CommitScopeError(
+      `a transition cannot run with a foreign path staged (the planning commit must stage only "${rel}"), but the index also has: ${foreign.join(', ')}`,
+    );
+  }
+}
+
+// Atomic planning-file commit (atomicity, part 2): saves the advanced front
+// matter then commits it, and on ANY throw after the save (the in-commit shape
+// assert, a pre-commit hook rejection, a git error) WRITES BACK the exact
+// `originalText` before re-throwing — leaving `state` exactly as it was and the
+// tree non-divergent. `originalText` is the raw planning-file bytes read at the
+// TOP of the verb (before any mutation). Used by every state-mutating verb.
+export function commitMutation(
+  deps: MutatingDeps,
+  originalText: string,
+  fm: FrontMatter,
+  body: string,
+  message: string,
+): void {
+  savePlanning(deps, fm, body);
+  try {
+    commitPlanningFile(deps, message);
+  } catch (error) {
+    deps.writeFile(deps.planningFile, originalText); // restore the pre-transaction file
+    throw error;
+  }
 }

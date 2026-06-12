@@ -56,11 +56,11 @@ import {
   worktreeChangesExcept,
 } from './commit-scope.ts';
 import {
-  commitPlanningFile,
+  assertNoForeignStaged,
+  commitMutation,
   entryDivergence,
   loadPlanning,
   nowIso,
-  savePlanning,
 } from './planning-io.ts';
 import type { MutatingDeps } from './planning-io.ts';
 
@@ -142,9 +142,9 @@ export interface TransactionResult {
 }
 
 // ── Transaction-only edge helpers ────────────────────────────────────────────
-// (load/save/nowIso/commitPlanningFile/entryDivergence are the shared
-// mutating-verb edge in planning-io.ts; only the sha-capture helpers below are
-// specific to the §6 verbs.)
+// (loadPlanning/nowIso/entryDivergence/commitMutation/assertNoForeignStaged are
+// the shared mutating-verb edge in planning-io.ts; only the sha-capture helpers
+// below are specific to the §6 verbs.)
 
 function planningRel(deps: TransactionDeps): string {
   return planningRelPath(deps.worktree, deps.planningFile);
@@ -247,7 +247,7 @@ export function start(phase: WorkflowPhase, deps: TransactionDeps): TransactionR
 
 function startInner(phase: WorkflowPhase, deps: TransactionDeps): TransactionResult {
   const row = rowFor(phase);
-  const { fm, body } = loadPlanning(deps);
+  const { fm, body, text } = loadPlanning(deps);
   const fromState = fm.state;
   if (entryDivergence(deps)) return divergenceResult(phase, fromState);
   if (row.start === null) {
@@ -256,6 +256,9 @@ function startInner(phase: WorkflowPhase, deps: TransactionDeps): TransactionRes
   if (!row.preconditions.includes(fromState)) {
     return wrongStateResult(phase, fromState, `one of: ${row.preconditions.join(', ')}`);
   }
+  // Atomicity: pre-flight the commit-shape refusal BEFORE mutating/saving, so a
+  // foreign staged file refuses with the tree untouched (never advances `state`).
+  assertNoForeignStaged(deps);
 
   const startSha = headShaOrNull(deps); // base of this attempt (the prior resting commit)
   const prev = fm.phases[phase];
@@ -269,8 +272,7 @@ function startInner(phase: WorkflowPhase, deps: TransactionDeps): TransactionRes
     start_sha: startSha,
     complete_sha: null,
   };
-  savePlanning(deps, fm, body);
-  commitPlanningFile(deps, withWorkflowPhaseTrailer(`workflow(${phase}): start -> ${toState}`, toState));
+  commitMutation(deps, text, fm, body, withWorkflowPhaseTrailer(`workflow(${phase}): start -> ${toState}`, toState));
   return { exitCode: EXIT_OK, outcome: 'started', phase, fromState, toState };
 }
 
@@ -298,7 +300,7 @@ function completeInner(
   deps: TransactionDeps,
 ): TransactionResult {
   const row = rowFor(phase);
-  const { fm, body } = loadPlanning(deps);
+  const { fm, body, text } = loadPlanning(deps);
   const fromState = fm.state;
   if (entryDivergence(deps)) return divergenceResult(phase, fromState);
   if (fm.claimed_by !== deps.claimedBy) return wrongOwnerResult(phase, fromState, fm, deps);
@@ -306,9 +308,14 @@ function completeInner(
     return wrongStateResult(phase, fromState, `${row.start ?? '(no in-progress state)'}`);
   }
   if (phase === 'implement-plan') {
-    return completeImplement(phase, row, fromState, fm, body, deps);
+    // implement-plan intentionally stages code paths for commit 1; its pre-flight
+    // shape check (CHECK B / no planning in the code commit) lives in
+    // completeImplement, and commit 2 (planning) is made atomically there.
+    return completeImplement(phase, row, fromState, fm, body, text, deps);
   }
-  return completePlanning(phase, row, opts, fromState, fm, body, deps);
+  // Atomicity: pre-flight the planning-only commit-shape refusal BEFORE mutating.
+  assertNoForeignStaged(deps);
+  return completePlanning(phase, row, opts, fromState, fm, body, text, deps);
 }
 
 // Single-commit completion: the front-matter mutation rides in the SAME commit as
@@ -322,6 +329,7 @@ function completePlanning(
   fromState: WorkflowState,
   fm: FrontMatter,
   body: string,
+  text: string,
   deps: TransactionDeps,
 ): TransactionResult {
   const loop = fm.loopback_count;
@@ -346,10 +354,14 @@ function completePlanning(
 
   fm.state = toState;
   fm.updated = nowIso(deps);
-  savePlanning(deps, fm, body);
   // withWorkflowPhaseTrailer normalizes to ONE value = the final resting state.
-  commitPlanningFile(
+  // commitMutation restores `text` (the pre-transaction file) on ANY throw, so a
+  // refused/failed planning commit leaves `state` unchanged and the tree clean.
+  commitMutation(
     deps,
+    text,
+    fm,
+    body,
     withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${toState}`, toState),
   );
 
@@ -382,6 +394,7 @@ function completeImplement(
   fromState: WorkflowState,
   fm: FrontMatter,
   body: string,
+  text: string,
   deps: TransactionDeps,
 ): TransactionResult {
   const rel = planningRel(deps);
@@ -400,12 +413,18 @@ function completeImplement(
   const codeSha = headSha(deps);
 
   // (2) planning commit — complete_sha = the code commit, durably recorded here.
+  // commitMutation restores the pre-transaction planning file on ANY throw in
+  // commit 2, so a failed planning commit leaves `state` unchanged and the tree
+  // non-divergent. The already-made code commit (commit 1) STAYS: an untrailed
+  // code commit is durable and `recover` handles it — we never undo commit 1.
   markPhaseSuccess(fm, phase, fm.loopback_count, codeSha);
   fm.state = row.success; // 'implemented'
   fm.updated = nowIso(deps);
-  savePlanning(deps, fm, body);
-  commitPlanningFile(
+  commitMutation(
     deps,
+    text,
+    fm,
+    body,
     withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${row.success}`, row.success),
   );
   return { exitCode: EXIT_OK, outcome: 'completed', phase, fromState, toState: row.success };
@@ -445,7 +464,7 @@ function requestChangesInner(
   }
   validateReason(opts.reason); // ASCII, <=200, no control chars (front-matter.ts)
 
-  const { fm, body } = loadPlanning(deps);
+  const { fm, body, text } = loadPlanning(deps);
   const fromState = fm.state;
   if (entryDivergence(deps)) return divergenceResult(producer, fromState);
   if (fm.claimed_by !== deps.claimedBy) return wrongOwnerResult(producer, fromState, fm, deps);
@@ -453,6 +472,8 @@ function requestChangesInner(
   if (fromState !== loopback.reviewRow.start) {
     return wrongStateResult(producer, fromState, `${loopback.reviewRow.start}`);
   }
+  // Atomicity: pre-flight the planning-only commit-shape refusal BEFORE mutating.
+  assertNoForeignStaged(deps);
 
   // Budget accumulation + needs-human TRIGGERS (Task 11.5).
   // SEAM: ACCUMULATE first (the rejected pass happened — it counts), THEN evaluate
@@ -473,12 +494,15 @@ function requestChangesInner(
     fm.needs_human_reason = trigger;
     fm.needs_human_from = loopback.state;
     fm.updated = nowIso(deps);
-    savePlanning(deps, fm, body);
     // The divergence invariant holds: the resting state is needs-human, so the
     // commit carries a `Workflow-Phase: needs-human` trailer. The reason rides the
     // commit body (same shape as the loopback commit) for the durable record.
-    commitPlanningFile(
+    // commitMutation restores the pre-transaction file on any throw.
+    commitMutation(
       deps,
+      text,
+      fm,
+      body,
       withWorkflowPhaseTrailer(
         `workflow(${producer}): ${trigger} -> needs-human\n\n${opts.reason}`,
         'needs-human',
@@ -496,12 +520,11 @@ function requestChangesInner(
 
   fm.state = loopback.state;
   fm.updated = nowIso(deps);
-  savePlanning(deps, fm, body);
   const message = withWorkflowPhaseTrailer(
     `workflow(${producer}): changes requested -> ${loopback.state}\n\n${opts.reason}`,
     loopback.state,
   );
-  commitPlanningFile(deps, message);
+  commitMutation(deps, text, fm, body, message);
   return { exitCode: EXIT_OK, outcome: 'changes-requested', phase: producer, fromState, toState: loopback.state };
 }
 

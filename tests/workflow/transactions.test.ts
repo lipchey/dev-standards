@@ -23,6 +23,8 @@ import { gate } from '../../workflow/src/gate.ts';
 import type { GateDeps } from '../../workflow/src/gate.ts';
 import { complete, requestChanges, start } from '../../workflow/src/transactions.ts';
 import type { TransactionDeps } from '../../workflow/src/transactions.ts';
+import { resume } from '../../workflow/src/resume.ts';
+import type { ResumeDeps } from '../../workflow/src/resume.ts';
 import { runCli } from '../../workflow/src/cli.ts';
 import type { CliIO } from '../../workflow/src/cli.ts';
 
@@ -98,6 +100,10 @@ function txDeps(dir: string, planningPath: string, opts: DepOpts = {}): Transact
     now: opts.now ?? (() => Date.parse(T0)),
     claimedBy: opts.claimedBy ?? PRODUCER,
   };
+}
+
+function resumeDeps(dir: string, planningPath: string, opts: DepOpts = {}): ResumeDeps {
+  return txDeps(dir, planningPath, opts);
 }
 
 function readFm(planningPath: string): FrontMatter {
@@ -645,6 +651,146 @@ test('git-commit-failure-emits-machine-readable-error-as-last-stderr-line', () =
       'the error carries the git stderr tail',
     );
     assert.ok(typeof parsed.error.message === 'string' && parsed.error.message.length > 0, 'a message is populated');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── Atomicity (P1): a refused or failed transaction leaves the tree UNCHANGED ──
+//
+// Every state-mutating verb saves the advanced front matter then commits it. If
+// the commit is REFUSED (a foreign path was pre-staged -> the planning-only
+// commit shape is violated) or FAILS (a pre-commit hook rejects it), the verb
+// must leave the planning file EXACTLY as it was — `state` not advanced, the tree
+// non-divergent — so the next gate/verb does not see a phantom divergence that
+// `recover` would have to rewind.
+
+// Stages an unrelated, already-tracked file so the index carries a FOREIGN path
+// at the top of the transaction (the planning-only commit-shape refusal trigger).
+function stageForeignFile(dir: string): void {
+  const foreign = writeCode(dir, 'foreign.txt', 'v1\n');
+  runGit(['add', '--', 'foreign.txt'], dir);
+  // Make it a tracked, committed file first so it is unambiguously a foreign
+  // staged CHANGE vs HEAD when we re-stage a modification below.
+  runGit(['commit', '-q', '-m', 'chore: add foreign file'], dir);
+  fs.writeFileSync(foreign, 'v2\n');
+  runGit(['add', '--', 'foreign.txt'], dir);
+}
+
+// A foreign staged path violates the planning-only commit shape. The refusal is a
+// thrown CommitScopeError carrying EXIT_WRONG_STATE (the established commit-scope
+// refusal path; the CLI maps it to exit 11). The pre-flight check fires BEFORE any
+// save, so `state` on disk never advances.
+function assertCommitScopeRefusal(fn: () => unknown): void {
+  assert.throws(
+    fn,
+    (err: unknown) =>
+      err instanceof Error &&
+      (err as { kind?: unknown }).kind === 'commit-scope' &&
+      (err as { exitCode?: unknown }).exitCode === EXIT_WRONG_STATE,
+    'refuses with a CommitScopeError carrying EXIT_WRONG_STATE',
+  );
+}
+
+test('start-refusal-with-foreign-staged-file-leaves-state-unchanged', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    stageForeignFile(dir);
+    const before = commitCount(dir);
+    const stateBefore = readFm(planningPath).state;
+
+    assertCommitScopeRefusal(() => start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER })));
+
+    assert.equal(commitCount(dir), before, 'no commit was made');
+    assert.equal(readFm(planningPath).state, stateBefore, 'the planning state is UNCHANGED');
+    assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the refusal');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('complete-refusal-with-foreign-staged-file-leaves-state-unchanged', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    stageForeignFile(dir);
+    const before = commitCount(dir);
+    const stateBefore = readFm(planningPath).state; // plan-inprogress
+
+    assertCommitScopeRefusal(() => complete('plan', {}, txDeps(dir, planningPath, { claimedBy: PRODUCER })));
+
+    assert.equal(commitCount(dir), before, 'no commit was made');
+    assert.equal(readFm(planningPath).state, stateBefore, 'the planning state is UNCHANGED (not advanced to plan-ready)');
+    assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the refusal');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('start-commit-failure-restores-planning-file', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    const stateBefore = readFm(planningPath).state; // created
+    const before = commitCount(dir);
+    installFailingPreCommitHook(dir);
+
+    assert.throws(
+      () => start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER })),
+      'a rejected commit propagates as a throw',
+    );
+
+    assert.equal(commitCount(dir), before, 'the rejected commit did not land');
+    assert.equal(readFm(planningPath).state, stateBefore, 'the planning file was restored (state UNCHANGED)');
+    assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the hook rejection');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('complete-commit-failure-restores-planning-file', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    const stateBefore = readFm(planningPath).state; // plan-inprogress
+    const before = commitCount(dir);
+    installFailingPreCommitHook(dir); // bites the complete planning commit
+
+    assert.throws(
+      () => complete('plan', {}, txDeps(dir, planningPath, { claimedBy: PRODUCER })),
+      'a rejected commit propagates as a throw',
+    );
+
+    assert.equal(commitCount(dir), before, 'the rejected complete commit did not land');
+    assert.equal(readFm(planningPath).state, stateBefore, 'the planning file was restored (not advanced to plan-ready)');
+    assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the hook rejection');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// resume smoke (bonus): a refused resume (foreign staged file) leaves needs-human
+// state untouched and the tree non-divergent — same atomicity guarantee.
+test('resume-refusal-with-foreign-staged-file-leaves-state-unchanged', () => {
+  const dir = initRepo();
+  try {
+    // Seed a needs-human record whose durable trailer agrees (no entry divergence).
+    const planningPath = seed(dir, {
+      state: 'needs-human',
+      needs_human_reason: 'guide-missing',
+      needs_human_from: 'plan-ready',
+    });
+    stageForeignFile(dir);
+    const before = commitCount(dir);
+
+    assertCommitScopeRefusal(() => resume(resumeDeps(dir, planningPath)));
+
+    assert.equal(commitCount(dir), before, 'no commit was made');
+    assert.equal(readFm(planningPath).state, 'needs-human', 'the needs-human state is UNCHANGED');
+    assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the refusal');
   } finally {
     cleanup(dir);
   }
