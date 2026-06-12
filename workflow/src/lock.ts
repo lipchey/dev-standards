@@ -19,10 +19,16 @@
 //     ~RETRY_BUDGET_MS with BACKOFF_MS backoff, then LOCK_BUSY.
 //   - STALE = the holder's PID is not alive (process.kill(pid,0) throws ESRCH)
 //     AND the lock is older than STALE_AGE_MS. BOTH conditions are required.
-//   - A stale lock is stolen ATOMICALLY and at most ONCE: rename it to a unique
-//     token (the loser's rename of the now-missing source throws ENOENT), verify
-//     the renamed content still matches what we observed, drop it, then wx-create
-//     a fresh lock. The steal is recorded as a warning.
+//   - A stale lock is stolen ATOMICALLY and at most ONCE via an exclusive
+//     STEAL-MARKER: a single stealer is elected by wx-creating `<lock>.steal`
+//     (the losers' wx-create throws EEXIST and they back off). While that marker
+//     is held, no other stealer can act and — because the path is still occupied
+//     by the stale lock — no normal acquirer can wx-create either, and the stale
+//     holder is dead (it cannot recreate), so the confirmed-stale lock cannot
+//     change. The elected stealer RE-READS the lock and unlinks it ONLY if it is
+//     STILL the exact observed stale lock (sameLock AND isStale); then it removes
+//     the marker. Every process then retries the normal wx-create — the same
+//     benign fair race any acquire has. The steal is recorded as a warning.
 //   - Reads take no lock. `claimed_by` ownership is a caller concern done INSIDE
 //     the lock; it is NOT part of this mutex.
 //
@@ -31,7 +37,6 @@
 
 import fs from 'node:fs';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
 import { EXIT_LOCK_BUSY } from './types.ts';
 
 // Lockfile name, joined onto the worktree root (§2.10).
@@ -165,35 +170,49 @@ function tryCreate(path: string, seams: LockSeams): LockHandle | null {
   return { path, info };
 }
 
-// Atomic stale-lock steal step (§2.10). Renames the observed stale lockfile to a
-// unique token: fs.renameSync is atomic, so of two racers exactly one rename
-// wins — the loser's source is already gone (ENOENT). On winning, the renamed
-// content is verified to STILL match what we observed (guards a TOCTOU where the
-// lock was released+recreated between observe and rename); on a mismatch the file
-// is restored and the steal declines. Returns the token path holding the claimed
-// stale lock on success (the caller drops it), or null when the steal did not win.
-export function claimStale(path: string, observed: LockInfo, seams: LockSeams): string | null {
-  const token = `${path}.steal.${seams.pid}.${seams.now()}.${randomUUID()}`;
+// The exclusive steal-marker path: only ONE stealer can wx-create it, so it
+// elects a single stealer for a given lock path. Joined onto the lock path so it
+// lives in the same worktree and is removed wholesale on dir cleanup.
+function stealMarkerPath(lockPath: string): string {
+  return `${lockPath}.steal`;
+}
+
+// Atomic stale-lock steal step (§2.10), NEVER displacing a live lock. Elects a
+// SINGLE stealer via an exclusive wx-created steal-marker (`<lock>.steal`); the
+// losers' wx-create throws EEXIST and they decline (returns false). The elected
+// stealer RE-READS the lock under the marker and unlinks it ONLY if it is STILL
+// the exact observed stale lock (sameLock AND isStale) — so a lock that was
+// already reclaimed and recreated as a FRESH live lock by another stealer is
+// left untouched. The marker is removed on every path (finally). Returns true
+// when the caller should retry the wx-create (it either freed the slot or another
+// stealer already did), false when it lost the election (back off normally).
+//
+// Correctness: while one process holds the exclusive marker, no other stealer can
+// act (the marker is occupied); no normal acquirer can wx-create the lock (the
+// path is occupied by the stale lock); and the stale holder is dead (it cannot
+// recreate). So the confirmed-stale lock cannot change between re-read and unlink,
+// and the unlink can only ever remove the SAME stale lock — never a live one. The
+// post-unlink race to wx-create is the ordinary fair race any acquire runs.
+export function claimStale(lockPath: string, observed: LockInfo, seams: LockSeams): boolean {
+  const marker = stealMarkerPath(lockPath);
   try {
-    fs.renameSync(path, token); // atomic claim — loser hits ENOENT here
+    fs.closeSync(fs.openSync(marker, 'wx')); // elect: only one stealer wins this
   } catch (err) {
-    if (isErrno(err) && err.code === 'ENOENT') return null; // lost the race
+    if (isErrno(err) && err.code === 'EEXIST') return false; // another stealer is electing
     throw err;
   }
-  const renamed = readLockInfo(token);
-  if (renamed === null || !sameLock(renamed, observed)) {
-    // The lock changed between observe and rename: not the stale lock we saw.
-    // Put it back (best effort) and decline rather than destroy a newer lock.
-    try {
-      fs.renameSync(token, path);
-    } catch (err) {
-      unlinkIfPresent(token);
-      if (isErrno(err) && err.code === 'ENOENT') return null;
-      throw err;
+  try {
+    // Re-read UNDER the marker: confirm the lock is still the exact stale lock we
+    // observed AND still stale before removing it. A fresh live lock recreated by
+    // a prior winner fails sameLock/isStale and is left intact (no displacement).
+    const current = readLockInfo(lockPath);
+    if (current !== null && sameLock(current, observed) && isStale(current, seams)) {
+      unlinkIfPresent(lockPath); // free the slot for the fair wx-create retry
     }
-    return null;
+    return true; // retry the normal acquire regardless of who freed the slot
+  } finally {
+    unlinkIfPresent(marker); // release the election on every path
   }
-  return token;
 }
 
 function staleWarning(observed: LockInfo, path: string): string {
@@ -219,13 +238,15 @@ export function acquire(worktree: string, seams: LockSeams): LockHandle | null {
       const observed = readLockInfo(path);
       if (observed !== null && isStale(observed, seams)) {
         stolen = true; // the steal is attempted at most ONCE (§2.10)
-        const token = claimStale(path, observed, seams);
-        if (token !== null) {
-          unlinkIfPresent(token); // drop the reclaimed stale lock
+        if (claimStale(path, observed, seams)) {
+          // The slot was freed by us (or a concurrent stealer) — record the steal
+          // and retry the wx-create immediately (the same fair race any acquire
+          // runs; a third process may legitimately win the recreated slot).
           seams.warn(staleWarning(observed, path));
-          continue; // the slot is free now — retry the wx-create immediately
+          continue;
         }
-        // Lost the atomic steal (ENOENT) or the content changed: fall through.
+        // Lost the steal-marker election: another stealer is handling it — fall
+        // through to the bounded backoff and retry the wx-create normally.
       }
     }
 
