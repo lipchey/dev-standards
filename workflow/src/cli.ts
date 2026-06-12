@@ -47,7 +47,12 @@ import type { AgentLaunch, ProcessResult } from './await-and-launch.ts';
 import { createCmuxAdapter } from './cmux-adapter.ts';
 import type { CmuxAdapter } from './cmux-adapter.ts';
 import { isNotifyEvent, sendNotify } from './notify.ts';
-import type { NotifyPayload, NotifyPostJson } from './notify.ts';
+import { sendNotifySync } from './notify.ts';
+import type { NotifyPayload, NotifyPostJson, NotifyPostResult } from './notify.ts';
+import { createGhAdapter } from './gh.ts';
+import type { GhAdapter } from './gh.ts';
+import { ship } from './ship.ts';
+import type { ShipOptions } from './ship.ts';
 
 // The gate's --wait deadline when the caller does not configure one (the §2.8
 // config default lands with the manifest wiring; the CLI uses a fixed fallback).
@@ -83,6 +88,7 @@ const USAGE = [
   '  new-feature <slug>                          create worktree, planning file, and feature record',
   '  feature-start <slug> [--worktree] [--branch <name>] create branch and feature record',
   '  notify <event> --repo r --pr n --url u --message m post the n8n review payload',
+  '  ship [--body-file <path>] [--no-ci-wait] [--file <path>] push, PR, CI, and record',
   '',
 ].join('\n');
 
@@ -115,6 +121,9 @@ export interface CliIO {
   cmuxAdapter?: CmuxAdapter;
   env?: Record<string, string | undefined>;
   postJson?: NotifyPostJson;
+  ghAdapter?: GhAdapter;
+  notifySync?: (payload: NotifyPayload) => NotifyPostResult;
+  scanPrBody?: (body: string) => string | null;
 }
 
 function usageError(io: CliIO, message: string): number {
@@ -196,6 +205,7 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
 export async function runCliAsync(argv: string[], io: CliIO, lockSeams?: LockSeams): Promise<number> {
   const [command, ...rest] = argv;
   if (command === 'notify') return runNotify(rest, io);
+  if (command === 'ship') return runShipCommand(rest, io);
   return runCli(argv, io, lockSeams);
 }
 
@@ -639,6 +649,70 @@ async function runNotify(argv: string[], io: CliIO): Promise<number> {
   return EXIT_FAILURE;
 }
 
+function runShipCommand(argv: string[], io: CliIO): number {
+  const opts: ShipOptions = {};
+  let filePath: string | undefined;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--no-ci-wait') {
+      opts.noCiWait = true;
+      continue;
+    }
+    if (arg === '--body-file') {
+      const value = argv[i + 1];
+      if (value === undefined) return usageError(io, 'ship: missing value for --body-file <path>');
+      if (opts.bodyFile !== undefined) return usageError(io, 'ship: --body-file may be given only once');
+      opts.bodyFile = value;
+      i += 1;
+      continue;
+    }
+    if (arg === '--file') {
+      const value = argv[i + 1];
+      if (value === undefined) return usageError(io, 'ship: missing value for --file <path>');
+      if (filePath !== undefined) return usageError(io, 'ship: --file may be given only once');
+      filePath = value;
+      i += 1;
+      continue;
+    }
+    return usageError(io, `ship: unexpected argument "${arg ?? ''}"`);
+  }
+
+  const repoRoot = io.cwd();
+  const config = loadWorkflowConfigStrict(io, repoRoot);
+  const defaultPlanningFile = path.join(repoRoot, PLANNING_FILE_NAME);
+  const resolvedPlanning = filePath ?? (() => {
+    try {
+      io.readFile(defaultPlanningFile);
+      return defaultPlanningFile;
+    } catch {
+      return undefined;
+    }
+  })();
+  const notify = io.notifySync ?? ((payload: NotifyPayload) => sendNotifySync(payload, {
+    webhookEnv: config.notify.webhook_env,
+    env: io.env ?? {},
+    standalone: false,
+  }));
+  const result = ship(opts, {
+    repoRoot,
+    statePath: path.join(repoRoot, STATE_FILE_REL),
+    ...(resolvedPlanning === undefined ? {} : { planningFile: resolvedPlanning }),
+    config,
+    readFile: io.readFile,
+    writeFile: io.writeFile,
+    mkdir: io.mkdir ?? (() => {}),
+    now: () => new Date((io.now ?? Date.now)()).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    runGit: io.runGit,
+    gh: io.ghAdapter ?? createGhAdapter(),
+    notify,
+    scanPrBody: io.scanPrBody ?? (() => null),
+  });
+  const line = `ship: ${result.message}\n`;
+  (result.exitCode === EXIT_OK ? io.stdout : io.stderr)(line);
+  if (result.error !== undefined) io.stderr(`${JSON.stringify({ error: result.error })}\n`);
+  return result.exitCode;
+}
+
 function runDiffRange(argv: string[], io: CliIO): number {
   const parsed = parseCommandArgs('diff-range', argv, io, {});
   if (!parsed.ok) return parsed.exitCode;
@@ -857,11 +931,10 @@ function runAwaitAndLaunch(argv: string[], io: CliIO): number {
         // forced_action persistence under the workflow lock.
         recordForcedAction: () => {},
         launchAgent: io.launchProcess,
-        runShip: io.runShip ?? (() => ({
-          status: EXIT_FAILURE,
-          stdout: '',
-          stderr: 'ship is not implemented until S14',
-        })),
+        runShip: io.runShip ?? (() => {
+          const status = runShipCommand([], io);
+          return { status, stdout: '', stderr: status === EXIT_OK ? '' : 'ship failed' };
+        }),
         notify: (notice) => notifyCmux(notice.message),
       },
     );

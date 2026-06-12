@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+
 export const NOTIFY_EVENTS = ['ready_for_review', 'work_finished', 'ci_failed'] as const;
 
 export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
@@ -78,4 +80,60 @@ export async function sendNotify(
   }
   const post = opts.postJson ?? postJsonWithFetch;
   return post(url, payload, DEFAULT_NOTIFY_TIMEOUT_MS);
+}
+
+export function postJsonWithNodeSubprocess(
+  url: string,
+  payload: NotifyPayload,
+  timeoutMs: number,
+): NotifyPostResult {
+  const script = `
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const controller = new AbortController();
+const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+fetch(input.url, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(input.payload),
+  signal: controller.signal,
+}).then((response) => {
+  clearTimeout(timeout);
+  const result = response.ok
+    ? { ok: true, status: response.status }
+    : { ok: false, status: response.status, error: 'notify webhook returned HTTP ' + response.status };
+  process.stdout.write(JSON.stringify(result));
+  process.exit(response.ok ? 0 : 1);
+}).catch((error) => {
+  clearTimeout(timeout);
+  const detail = error instanceof Error ? error.message : String(error);
+  process.stdout.write(JSON.stringify({ ok: false, error: 'notify webhook request failed: ' + detail }));
+  process.exit(1);
+});
+`;
+  const result = spawnSync(process.execPath, ['-e', script], {
+    input: JSON.stringify({ url, payload, timeoutMs }),
+    encoding: 'utf8',
+    shell: false,
+    timeout: timeoutMs + 1000,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.error !== undefined) return { ok: false, error: result.error.message };
+  try {
+    return JSON.parse(result.stdout || '{}') as NotifyPostResult;
+  } catch {
+    return { ok: false, error: result.stderr.trim() || 'notify subprocess returned invalid output' };
+  }
+}
+
+export function sendNotifySync(
+  payload: NotifyPayload,
+  opts: Omit<SendNotifyOptions, 'postJson'>,
+): SendNotifyResult {
+  const url = opts.env[opts.webhookEnv];
+  if (url === undefined || url.trim() === '') {
+    const message = `notify webhook env ${opts.webhookEnv} is not set`;
+    if (opts.standalone) return { ok: false, skipped: true, error: message };
+    return { ok: true, skipped: true, warning: message };
+  }
+  return postJsonWithNodeSubprocess(url, payload, DEFAULT_NOTIFY_TIMEOUT_MS);
 }
