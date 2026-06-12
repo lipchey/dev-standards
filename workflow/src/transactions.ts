@@ -25,9 +25,12 @@
 //     state, increments loopback_count, accumulates the rejected pass's budget,
 //     ONE trailered commit.
 //
-// complete_sha lag: for the planning-phase `complete`, complete_sha is the sha of
-// the very commit being made (knowable only post-commit), so it is written as a
-// POST-COMMIT record into the working-tree front matter and left UNCOMMITTED.
+// complete_sha: for a planning-phase `complete`, complete_sha is the sha of the
+// very commit being made (knowable only post-commit) and is NOT consumed by
+// gate/transitions/recover, so it is recorded as null — the trailered transaction
+// commit itself stands as the phase's completion, and the worktree is left CLEAN
+// (the dirty-refusing `ship` must not trip on the helper's own metadata).
+// implement-plan records complete_sha = the code commit (commit 1) in commit 2.
 // recover deliberately ignores complete_sha; `state` is NEVER advanced outside a
 // trailered commit.
 
