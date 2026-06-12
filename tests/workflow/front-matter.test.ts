@@ -183,6 +183,14 @@ test('rejects-outside-subset', () => {
     () => parseSubset(wrap('a:\n  b:\n    c:\n      d: 1')),
     'nesting-too-deep',
   );
+  // Fix B (test gaps): constructs already rejected by code, now pinned.
+  // (a) full-line comment.
+  expectCorrupt(() => parseSubset(wrap('# foo')), 'comment');
+  // (b) inline comment (the value `1 # x` is not a subset scalar).
+  expectCorrupt(() => parseSubset(wrap('a: 1 # x')), 'out-of-subset');
+  // (c) CRLF line endings and a lone CR are both out of subset.
+  expectCorrupt(() => parseSubset('---\r\na: 1\r\n---\r\n'), 'cr-not-allowed');
+  expectCorrupt(() => parseSubset('---\na: 1\r---\n'), 'cr-not-allowed');
 });
 
 test('rejects-bad-state-value', () => {
@@ -288,6 +296,47 @@ test('null-and-timestamp-scalars', () => {
     'updated: 2026-13-99T99:99:99Z',
   );
   expectCorrupt(() => parseFrontMatter(badTs));
+});
+
+test('rejects-control-chars-in-string-scalars', () => {
+  // Fix A (hardening): ANY string scalar (not just `reason`) whose decoded value
+  // carries a control char U+0000..U+001F or U+007F is rejected at the generic
+  // parse layer — these values feed downstream git/fs ops. Escapes that DECODE
+  // to a control char are caught (JSON.parse honors them before the check).
+  // Embedded newline (U+000A) via a \n escape in a non-reason field.
+  expectCorrupt(
+    () => parseSubset('---\nbranch: "feat/x\\ny"\n---\n'),
+    'control-char-in-string',
+  );
+  // DEL (U+007F) via a \u escape.
+  expectCorrupt(
+    () => parseSubset('---\nfeature: "a\\u007fb"\n---\n'),
+    'control-char-in-string',
+  );
+  // NUL (U+0000).
+  expectCorrupt(
+    () => parseSubset('---\nclaimed_by: "p\\u0000c"\n---\n'),
+    'control-char-in-string',
+  );
+  // A control-free string scalar still parses (no false positive on the floor).
+  assert.doesNotThrow(() => parseSubset('---\nbranch: "feat/x-y"\n---\n'));
+});
+
+test('rejects-calendar-invalid-timestamps', () => {
+  // Fix C (fidelity): TIMESTAMP_RE shape-matches but JS Date silently rolls a
+  // bad day over (Feb 30 -> Mar 2). Reject any literal whose re-derived UTC
+  // components do not equal the input fields.
+  expectCorrupt(() => parseSubset('---\nt: 2026-02-30T00:00:00Z\n---\n'), 'bad-timestamp');
+  expectCorrupt(() => parseSubset('---\nt: 2026-04-31T00:00:00Z\n---\n'), 'bad-timestamp');
+  // Non-leap Feb 29 rolls over to Mar 1 -> rejected.
+  expectCorrupt(() => parseSubset('---\nt: 2026-02-29T00:00:00Z\n---\n'), 'bad-timestamp');
+  // A leap-year Feb 29 is a real instant: types as `timestamp` and round-trips
+  // byte-stable through the generic layer.
+  const ok = '---\nt: 2024-02-29T12:00:00Z\n---\n';
+  const doc = parseSubset(ok);
+  const node = doc.entries[0]?.[1];
+  assert.ok(node && node.kind === 'timestamp', 'valid timestamp types as timestamp');
+  assert.equal(serializeSubset(doc), ok, 'valid timestamp round-trips byte-stable');
 });
 
 test('rejects-unknown-and-missing-keys', () => {

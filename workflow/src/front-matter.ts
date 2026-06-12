@@ -20,6 +20,11 @@
 // CorruptStateError — the recover path detects it via `instanceof` (or the
 // cross-realm-safe `err.kind === 'corrupt-state'`, which is also the matching
 // §2.1 needs_human_reason value).
+//
+// Scalar subset = string / int / null / timestamp (plan §2.11) PLUS `bool`,
+// which is added beyond the plan's list solely to carry the §2.9 `auto_advanced`
+// phase marker (also documented in types.ts). As a generic floor, every string
+// scalar must be free of control characters (U+0000..U+001F, U+007F).
 
 import {
   NEEDS_HUMAN_REASONS,
@@ -93,8 +98,42 @@ export type SubsetNode = SubsetScalar | SubsetMap | SubsetSeq;
 const MAX_DEPTH = 3;
 
 const INT_RE = /^(0|-?[1-9][0-9]*)$/;
-const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+// Capturing groups (year/month/day/hour/min/sec) so `isValidTimestamp` can
+// re-derive the UTC components and reject JS Date rollover (e.g. Feb 30).
+const TIMESTAMP_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
 const KEY_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+
+// True iff `value` matches the bare ISO-8601 UTC shape AND names a real calendar
+// instant. The regex pins the shape; `Date.parse` then `new Date` would happily
+// roll an out-of-range day forward (2026-02-30 -> 2026-03-02), so we compare the
+// re-derived UTC components back to the literal fields and reject any mismatch.
+function isValidTimestamp(value: string): boolean {
+  const m = TIMESTAMP_RE.exec(value);
+  if (m === null) return false;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return false;
+  const d = new Date(ms);
+  return (
+    d.getUTCFullYear() === Number(m[1]) &&
+    d.getUTCMonth() + 1 === Number(m[2]) &&
+    d.getUTCDate() === Number(m[3]) &&
+    d.getUTCHours() === Number(m[4]) &&
+    d.getUTCMinutes() === Number(m[5]) &&
+    d.getUTCSeconds() === Number(m[6])
+  );
+}
+
+// True iff `value` carries no control character (U+0000..U+001F or U+007F). The
+// generic floor for ALL string scalars: such chars (embedded newlines, DEL, ...)
+// would feed downstream git/fs ops, so they are rejected as corrupt state even
+// when introduced via a JSON escape that decodes to a control char.
+function controlCharIndex(value: string): number {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return i;
+  }
+  return -1;
+}
 
 // ── Generic parser ──────────────────────────────────────────────────────────
 
@@ -321,6 +360,14 @@ function parseScalar(token: string, lineNo: number): SubsetScalar {
     if (typeof value !== 'string') {
       throw corrupt('bad-string', 'quoted value did not decode to a string', lineNo);
     }
+    const ctrl = controlCharIndex(value);
+    if (ctrl >= 0) {
+      throw corrupt(
+        'control-char-in-string',
+        `string scalar contains a control character (code ${value.charCodeAt(ctrl)}) at index ${ctrl}`,
+        lineNo,
+      );
+    }
     return { kind: 'string', value };
   }
   if (token === 'null') return { kind: 'null' };
@@ -333,7 +380,10 @@ function parseScalar(token: string, lineNo: number): SubsetScalar {
     }
     return { kind: 'int', value: n };
   }
-  if (TIMESTAMP_RE.test(token) && Number.isFinite(Date.parse(token))) {
+  if (TIMESTAMP_RE.test(token)) {
+    if (!isValidTimestamp(token)) {
+      throw corrupt('bad-timestamp', `not a real calendar instant: "${token}"`, lineNo);
+    }
     return { kind: 'timestamp', value: token };
   }
   throw corrupt('out-of-subset', `value not in the subset: "${token}"`, lineNo);
@@ -564,8 +614,8 @@ function required(m: Map<string, SubsetNode>, key: string): SubsetNode {
   return node;
 }
 
-function parsePhases(node: SubsetNode | undefined): Record<string, PhaseRecord> {
-  const out: Record<string, PhaseRecord> = {};
+function parsePhases(node: SubsetNode | undefined): Partial<Record<WorkflowPhase, PhaseRecord>> {
+  const out: Partial<Record<WorkflowPhase, PhaseRecord>> = {};
   if (node === undefined) return out; // empty map is omitted on the wire
   if (node.kind !== 'map') {
     throw corrupt('bad-type', 'phases must be a block map');
@@ -593,7 +643,9 @@ function parsePhases(node: SubsetNode | undefined): Record<string, PhaseRecord> 
     if (autoAdvanced !== undefined) {
       record.auto_advanced = autoAdvanced;
     }
-    out[phaseKey] = record;
+    // `phaseKey` passed the PHASE_SET membership check above, so it is a
+    // WorkflowPhase at runtime (Set.has does not narrow the static type).
+    out[phaseKey as WorkflowPhase] = record;
   }
   return out;
 }
@@ -667,7 +719,10 @@ function frontMatterToSubset(fm: FrontMatter): SubsetMap {
     ['claimed_by', sStr(fm.claimed_by)],
     ['updated', sTs(fm.updated)],
   ];
-  const phaseKeys = Object.keys(fm.phases).sort((a, b) => phaseOrder(a) - phaseOrder(b));
+  // Object.keys widens to string[]; the keys are WorkflowPhase by construction.
+  const phaseKeys = (Object.keys(fm.phases) as WorkflowPhase[]).sort(
+    (a, b) => phaseOrder(a) - phaseOrder(b),
+  );
   if (phaseKeys.length > 0) {
     entries.push(['phases', phasesToSubset(fm.phases, phaseKeys)]);
   }
@@ -690,8 +745,8 @@ function phaseOrder(key: string): number {
 }
 
 function phasesToSubset(
-  phases: Record<string, PhaseRecord>,
-  keys: string[],
+  phases: Partial<Record<WorkflowPhase, PhaseRecord>>,
+  keys: WorkflowPhase[],
 ): SubsetMap {
   const entries: Array<[string, SubsetNode]> = [];
   for (const key of keys) {
@@ -739,7 +794,7 @@ function sInt(value: number): SubsetScalar {
 }
 
 function sTs(value: string): SubsetScalar {
-  if (!TIMESTAMP_RE.test(value) || !Number.isFinite(Date.parse(value))) {
+  if (!isValidTimestamp(value)) {
     throw corrupt('bad-timestamp', `not an ISO-8601 UTC timestamp: "${value}"`);
   }
   return { kind: 'timestamp', value };

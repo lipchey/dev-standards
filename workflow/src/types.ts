@@ -157,7 +157,7 @@ export interface FrontMatter {
   updated: string; // ISO-8601 UTC timestamp
   // Keyed by WorkflowPhase; empty when no phase has been recorded yet. An empty
   // map is OMITTED on the wire because the subset has no block form for `{}`.
-  phases: Record<string, PhaseRecord>;
+  phases: Partial<Record<WorkflowPhase, PhaseRecord>>;
   budget_spent: { total_seconds: number };
   needs_human_reason?: NeedsHumanReason; // present only at needs-human
   forced_actions?: ForcedAction[]; // present only when a forced action occurred
