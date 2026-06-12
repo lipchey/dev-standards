@@ -134,6 +134,53 @@ test('missing-planning-file-exits-failure', () => {
   assert.match(cap.err(), /cannot read planning file/i, 'names the read failure');
 });
 
+test('request-changes-invalid-reason-is-usage-error', () => {
+  // §2.7: an invalid `--reason` ARGUMENT is a USAGE error (exit 2), NOT corrupt
+  // durable state. It must name the `--reason` argument, must NOT call the
+  // planning file "corrupt", and must NOT point at `workflow recover` (which
+  // cannot fix an argv mistake). Without the CLI guard, validateReason throws a
+  // corrupt-state error that the mutation map would mis-report as EXIT_NEEDS_HUMAN
+  // (13) — falsely telling a calling session "stop, a human must repair state".
+
+  // (a) Over the 200-char cap.
+  const tooLong = makeIO();
+  const longReason = 'a'.repeat(201);
+  const codeLong = runCli(
+    ['request-changes', 'implement-plan', '--reason', longReason],
+    tooLong.io,
+  );
+  assert.equal(codeLong, EXIT_USAGE, 'over-cap --reason is a usage error (exit 2)');
+  assert.match(tooLong.err(), /--reason/, 'names the --reason argument');
+  assert.match(tooLong.err(), /201/, 'reports the offending length');
+  assert.doesNotMatch(tooLong.err(), /corrupt/i, 'does NOT call the planning file corrupt');
+  assert.doesNotMatch(tooLong.err(), /recover/i, 'does NOT point at workflow recover');
+
+  // (b) Non-ASCII (and, by the same rule, control chars) in the reason.
+  const nonAscii = makeIO();
+  const codeNon = runCli(
+    ['request-changes', 'implement-plan', '--reason', 'café'],
+    nonAscii.io,
+  );
+  assert.equal(codeNon, EXIT_USAGE, 'non-ASCII --reason is a usage error (exit 2)');
+  assert.match(nonAscii.err(), /--reason/, 'names the --reason argument');
+  assert.doesNotMatch(nonAscii.err(), /corrupt/i, 'does NOT call the planning file corrupt');
+  assert.doesNotMatch(nonAscii.err(), /recover/i, 'does NOT point at workflow recover');
+});
+
+test('request-changes-valid-reason-passes-the-usage-guard', () => {
+  // The happy path is unaffected: a VALID `--reason` is NOT rejected by the new
+  // operand guard — it passes through into the transaction. (The full end-to-end
+  // loopback against real git is covered in transactions.test.ts; here we assert
+  // the CLI guard does not turn a valid reason into a usage error.)
+  const cap = makeIO();
+  const code = runCli(
+    ['request-changes', 'implement-plan', '--reason', 'rework the edge case'],
+    cap.io,
+  );
+  assert.notEqual(code, EXIT_USAGE, 'a valid --reason is not a usage error');
+  assert.doesNotMatch(cap.err(), /invalid --reason/i, 'the valid reason clears the operand guard');
+});
+
 test('unknown-command-usage', () => {
   const cap = makeIO();
   const code = runCli(['frobnicate'], cap.io);

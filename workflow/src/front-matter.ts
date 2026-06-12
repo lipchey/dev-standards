@@ -460,17 +460,40 @@ function emitScalar(scalar: SubsetScalar): string {
 
 // `--reason` strings are stored as quoted single-line scalars: ASCII only,
 // length-capped at 200, control chars rejected. Same safety property as the
-// spec's block scalar (data, never argv), simpler subset. Enforced on both the
-// read and write paths.
-export function validateReason(reason: string): void {
+// spec's block scalar (data, never argv), simpler subset.
+//
+// The single source of truth for the rule (the ≤200 / printable-ASCII literals)
+// is `reasonProblem`: it returns the specific violation as a { code, message }
+// pair, or undefined when the reason is valid. The two callers differ only in
+// how they surface a violation, never in the rule itself:
+//   - `validateReason` (the read/write paths) wraps a violation in a typed
+//     CorruptStateError, because there a bad reason means corrupt FILE CONTENT.
+//   - the CLI (`request-changes` operand guard) surfaces the SAME message as a
+//     usage error, because there a bad reason is a bad CLI ARGUMENT (§2.7 exit 2).
+export function reasonProblem(reason: string): { code: string; message: string } | undefined {
   if (reason.length > 200) {
-    throw corrupt('reason-too-long', `reason exceeds 200 chars (${reason.length})`);
+    return { code: 'reason-too-long', message: `reason exceeds 200 chars (${reason.length})` };
   }
   for (let i = 0; i < reason.length; i += 1) {
     const code = reason.charCodeAt(i);
     if (code < 0x20 || code > 0x7e) {
-      throw corrupt('reason-bad-char', `reason has a control or non-ASCII char (code ${code}) at index ${i}`);
+      return {
+        code: 'reason-bad-char',
+        message: `reason has a control or non-ASCII char (code ${code}) at index ${i}`,
+      };
     }
+  }
+  return undefined;
+}
+
+// Enforced on the planning-file read and write paths: a stored reason that
+// violates the rule is corrupt durable state (CorruptStateError -> the §2.1
+// `corrupt-state` needs_human_reason). The CLI guards the LIVE operator argument
+// separately (as a usage error) so a bad `--reason` argv never reaches here.
+export function validateReason(reason: string): void {
+  const problem = reasonProblem(reason);
+  if (problem !== undefined) {
+    throw corrupt(problem.code, problem.message);
   }
 }
 

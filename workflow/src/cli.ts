@@ -21,6 +21,7 @@ import type { ForcedAction, FrontMatter, WorkflowPhase } from './types.ts';
 import {
   CorruptStateError,
   parseFrontMatter,
+  reasonProblem,
   serializeFrontMatter,
 } from './front-matter.ts';
 import { LockBusyError, withLock } from './lock.ts';
@@ -95,6 +96,16 @@ function usageError(io: CliIO, message: string): number {
   return EXIT_USAGE;
 }
 
+// A focused usage error (exit 2) that does NOT dump the full command list. Used
+// for an invalid VALUE of a known, well-placed flag (e.g. a too-long `--reason`)
+// where the invocation shape is fine and the full USAGE block would only add
+// noise — and, notably, would name the `recover` command, which must not appear
+// for an argv error that `workflow recover` cannot fix.
+function usageErrorBare(io: CliIO, message: string): number {
+  io.stderr(`workflow: ${message}\n`);
+  return EXIT_USAGE;
+}
+
 // `lockSeams` is the §2.10 mutex edge that state-mutating commands (recover) run
 // inside. It is injected (not imported here) so cli.ts performs no direct fs/git
 // IO and stays unit-testable; the runner edge passes `realLockSeams()`. Read-only
@@ -126,6 +137,14 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
         // request-changes is the only verb that evaluates the §8 budget triggers,
         // so it threads the budget ceilings from quality.json into the deps.
         loadBudget,
+        // The operator `--reason` operand is validated as a USAGE error (§2.7
+        // exit 2) BEFORE the transaction runs: an invalid argv `--reason` is a
+        // bad ARGUMENT, not corrupt durable file content. Without this guard the
+        // transaction's `validateReason` would throw `corrupt-state`, which the
+        // mutation error map would misreport as a corrupt planning file needing
+        // `workflow recover` (EXIT_NEEDS_HUMAN). The rule is reused from
+        // front-matter.ts (`reasonProblem`) so the literals are not duplicated.
+        validateReasonOperand,
       );
     case 'gate':
       return runGate(rest, io, lockSeams);
@@ -388,6 +407,19 @@ function requireMutationEdge(
   return { lockSeams, now: io.now, claimedBy: io.claimedBy };
 }
 
+// request-changes' operand guard: the `--reason` argument must satisfy the SAME
+// rule the planning-file path enforces (≤200 chars / printable ASCII / no control
+// chars). On the live argv path a violation is a USAGE error (§2.7 exit 2) naming
+// the `--reason` ARGUMENT — NOT corrupt file content, so it neither calls the file
+// "corrupt" nor points at `workflow recover` (which cannot fix an argv mistake).
+// The rule itself is reused from front-matter.ts (`reasonProblem`); only the
+// presentation differs. `reasonRequired` already guaranteed `--reason` is present.
+function validateReasonOperand(args: ParsedArgs, io: CliIO): number | undefined {
+  const problem = reasonProblem(args.reason ?? '');
+  if (problem === undefined) return undefined;
+  return usageErrorBare(io, `request-changes: invalid --reason: ${problem.message}`);
+}
+
 // Shared body for start / complete / request-changes: parse, build the injected
 // TransactionDeps, invoke the transaction, and map the result/throws to the §2.7
 // exit code. The transaction itself owns the lock, divergence, owner, and
@@ -400,9 +432,19 @@ function runTransactionCommand(
   allowed: AllowedFlags,
   invoke: (phase: WorkflowPhase, deps: TransactionDeps, args: ParsedArgs) => TransactionResult,
   loadBudgetFor?: (io: CliIO, worktree: string) => { totalSeconds: number; perPassSeconds?: number },
+  // Optional operand check run AFTER a successful argv parse but BEFORE any
+  // planning-file/transaction work. It validates the OPERATOR's arguments (e.g.
+  // request-changes' `--reason`) and returns a usage exit code (§2.7 exit 2) on
+  // a bad argument, or undefined to proceed. Keeps a bad CLI argument from
+  // surfacing later as a corrupt-state (file) error.
+  preflight?: (args: ParsedArgs, io: CliIO) => number | undefined,
 ): number {
   const parsed = parseCommandArgs(command, argv, io, allowed);
   if (!parsed.ok) return parsed.exitCode;
+  if (preflight !== undefined) {
+    const usageExit = preflight(parsed.args, io);
+    if (usageExit !== undefined) return usageExit;
+  }
   const edge = requireMutationEdge(io, lockSeams, command);
   if (typeof edge === 'number') return edge;
 
