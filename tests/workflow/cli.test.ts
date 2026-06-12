@@ -36,6 +36,26 @@ function makeFrontMatter(overrides: Partial<FrontMatter> = {}): FrontMatter {
   };
 }
 
+function workflowConfigFixture(): Record<string, unknown> {
+  return {
+    schema: 1,
+    enabled: true,
+    base_branch: 'main',
+    worktree_parent: '/tmp/worktrees',
+    cmux_mode: 'manual',
+    loopback_mode: 'manual',
+    reviewer_independence: 'different-runtime',
+    required_review_guides: [],
+    commit_exclude: [],
+    archive: true,
+    timeouts: { default_wait_seconds: 60, default_work_seconds: 1800 },
+    budget: { workflow_total_seconds: 5400 },
+    agents: { claude: ['claude'], codex: ['codex'] },
+    ship: { ci_wait_seconds: 1800, notify: true },
+    notify: { webhook_env: 'WORKFLOW_NOTIFY_WEBHOOK' },
+  };
+}
+
 interface Captured {
   io: CliIO;
   out: () => string;
@@ -222,21 +242,8 @@ test('feature-start-invalid-slug-is-usage-error', () => {
 
 test('await-and-launch-dispatches-agent-from-config', () => {
   const workflow = {
-    schema: 1,
-    enabled: true,
-    base_branch: 'main',
-    worktree_parent: '/tmp/worktrees',
-    cmux_mode: 'manual',
-    loopback_mode: 'manual',
-    reviewer_independence: 'different-runtime',
-    required_review_guides: [],
-    commit_exclude: [],
-    archive: true,
-    timeouts: { default_wait_seconds: 60, default_work_seconds: 1800 },
-    budget: { workflow_total_seconds: 5400 },
+    ...workflowConfigFixture(),
     agents: { claude: ['claude', '--model', 'opus'], codex: ['codex', 'exec'] },
-    ship: { ci_wait_seconds: 1800, notify: true },
-    notify: { webhook_env: 'WORKFLOW_NOTIFY_WEBHOOK' },
   };
   const launches: Array<{ file: string; args: string[]; cwd: string }> = [];
   const notifications: Array<{ section: string; message: string }> = [];
@@ -278,6 +285,90 @@ test('await-and-launch-dispatches-agent-from-config', () => {
   assert.deepEqual(notifications, [{ section: 'dark-mode-toggle', message: 'launching plan' }]);
 });
 
+test('await-and-launch-notify-failure-does-not-block-launch', () => {
+  const workflow = workflowConfigFixture();
+  const launches: Array<{ file: string; args: string[]; cwd: string }> = [];
+  const cmuxAdapter: CmuxAdapter = {
+    capabilities: () => ({ present: true, version: '1.2.3', verbs: [], missing: [], detail: 'ok' }),
+    plan: () => assert.fail('await-and-launch should not plan panes'),
+    launch: () => assert.fail('await-and-launch should not arm panes'),
+    notify: () => ({ ok: false, error: 'notify refused' }),
+  };
+  const planningFile = `${serializeFrontMatter(makeFrontMatter({
+    state: 'created',
+    worktree: '/tmp/worktree',
+  }))}\n# Plan\n`;
+  const cap = makeIO({
+    readFile: (filePath) => filePath.endsWith('quality.json')
+      ? JSON.stringify({ workflow })
+      : planningFile,
+    now: () => 0,
+    sleep: () => {},
+    runGit: () => '',
+    launchProcess: (launch) => {
+      launches.push(launch);
+      return { status: 0, stdout: '', stderr: '' };
+    },
+    cmuxAdapter,
+  });
+
+  const code = runCli(['await-and-launch', 'plan'], cap.io);
+
+  assert.equal(code, EXIT_OK);
+  assert.equal(launches.length, 1);
+  assert.match(cap.err(), /cmux notify skipped: notify refused/);
+});
+
+test('await-and-launch-corrupt-planning-file-exits-needs-human', () => {
+  const workflow = workflowConfigFixture();
+  const cap = makeIO({
+    readFile: (filePath) => filePath.endsWith('quality.json')
+      ? JSON.stringify({ workflow })
+      : '---\nstate: not-a-real-state\n---\n',
+    now: () => 0,
+    sleep: () => {},
+    launchProcess: () => ({ status: 0, stdout: '', stderr: '' }),
+  });
+
+  const code = runCli(['await-and-launch', 'plan'], cap.io);
+
+  assert.equal(code, EXIT_NEEDS_HUMAN);
+  assert.match(cap.err(), /corrupt/i);
+  assert.match(cap.err(), /recover/i);
+});
+
+test('await-and-launch-git-failure-is-machine-readable-failure', () => {
+  const workflow = workflowConfigFixture();
+  const planningFile = `${serializeFrontMatter(makeFrontMatter({
+    state: 'created',
+    worktree: '/tmp/worktree',
+  }))}\n# Plan\n`;
+  const cap = makeIO({
+    readFile: (filePath) => filePath.endsWith('quality.json')
+      ? JSON.stringify({ workflow })
+      : planningFile,
+    now: () => 0,
+    sleep: () => {},
+    runGit: () => {
+      throw {
+        kind: 'git-error',
+        command: 'git log -1',
+        step: 'divergence-check',
+        message: 'git log failed',
+        stderr_tail: 'fatal: bad object',
+      };
+    },
+    launchProcess: () => ({ status: 0, stdout: '', stderr: '' }),
+  });
+
+  const code = runCli(['await-and-launch', 'plan'], cap.io);
+
+  assert.equal(code, EXIT_FAILURE);
+  assert.match(cap.err(), /git log failed/);
+  assert.match(cap.err(), /"step":"divergence-check"/);
+  assert.match(cap.err(), /fatal: bad object/);
+});
+
 test('cmux-plan-dry-run-prints-planned-actions-without-launching', () => {
   const planned: CmuxSectionSpec[] = [];
   let launched = false;
@@ -300,6 +391,7 @@ test('cmux-plan-dry-run-prints-planned-actions-without-launching', () => {
   };
   const planningFile = `${serializeFrontMatter(makeFrontMatter({
     feature: 'dry-run-demo',
+    cmux_section: 'pane-section',
     state: 'created',
     worktree: '/tmp/worktree',
   }))}\n# Plan\n`;
@@ -313,9 +405,39 @@ test('cmux-plan-dry-run-prints-planned-actions-without-launching', () => {
   assert.equal(code, EXIT_OK);
   assert.equal(launched, false);
   assert.equal(planned.length, 1);
+  assert.equal(planned[0]?.section, 'pane-section');
   assert.deepEqual(
     planned[0]?.panes.map((pane) => pane.pane_id),
     ['plan', 'review-plan', 'consolidate-plan', 'implement-plan', 'review-implementation', 'ship-feature'],
   );
   assert.match(cap.out(), /new_section/);
+});
+
+test('cmux-plan-usage-and-manual-degrade-paths', () => {
+  const missingSubcommand = makeIO();
+  assert.equal(runCli(['cmux'], missingSubcommand.io), EXIT_USAGE);
+  assert.match(missingSubcommand.err(), /expected subcommand "plan"/);
+
+  const missingDryRun = makeIO();
+  assert.equal(runCli(['cmux', 'plan'], missingDryRun.io), EXIT_USAGE);
+  assert.match(missingDryRun.err(), /--dry-run is required/);
+
+  const wrongSubcommand = makeIO();
+  assert.equal(runCli(['cmux', 'launch', '--dry-run'], wrongSubcommand.io), EXIT_USAGE);
+  assert.match(wrongSubcommand.err(), /expected subcommand "plan"/);
+
+  const cmuxAdapter: CmuxAdapter = {
+    capabilities: () => ({ present: false, version: '', verbs: [], missing: ['new_section'], detail: 'cmux unavailable' }),
+    plan: () => ({
+      ready: false,
+      capabilities: { present: false, version: '', verbs: [], missing: ['new_section'], detail: 'cmux unavailable' },
+      actions: [],
+      instructions: 'copy-paste these commands\n',
+    }),
+    launch: () => assert.fail('cmux plan --dry-run must not launch'),
+    notify: () => ({ ok: false, error: 'cmux unavailable' }),
+  };
+  const manual = makeIO({ cmuxAdapter });
+  assert.equal(runCli(['cmux', 'plan', '--dry-run'], manual.io), EXIT_OK);
+  assert.match(manual.out(), /copy-paste/);
 });

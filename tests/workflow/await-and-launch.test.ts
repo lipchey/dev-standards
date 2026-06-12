@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   EXIT_ALREADY_DONE,
+  EXIT_FAILURE,
   EXIT_NEEDS_HUMAN,
   EXIT_OK,
   EXIT_TIMEOUT,
@@ -93,6 +94,7 @@ test('launches-exactly-once-on-gate-open', () => {
 
   assert.equal(result.exitCode, EXIT_OK);
   assert.equal(result.launched, true);
+  assert.equal(result.message, 'process exited successfully');
   assert.equal(launches.length, 1);
   assert.equal(launches[0]?.file, 'claude');
   assert.deepEqual(launches[0]?.args.slice(0, 2), ['--model', 'opus']);
@@ -212,9 +214,49 @@ test('notify-fired-on-transitions-timeouts-needs-human', () => {
     readState: () => fm({ state: 'needs-human', needs_human_reason: 'guide-missing', needs_human_from: 'created' }),
     notify: (notice) => notices.push(notice),
   }));
+  awaitAndLaunch('plan', { wait: true }, deps({
+    checkDivergence: () => true,
+    notify: (notice) => notices.push(notice),
+  }));
+  awaitAndLaunch('review-plan', { wait: false }, deps({
+    readState: () => fm({ state: 'created' }),
+    notify: (notice) => notices.push(notice),
+  }));
 
   assert.deepEqual(
     notices.map((notice) => notice.outcome),
-    ['proceed', 'timeout', 'needs-human'],
+    ['proceed', 'timeout', 'needs-human', 'divergence', 'wrong-state'],
   );
+});
+
+test('launch-failure-and-empty-agent-argv-return-failure-without-marking-launched', () => {
+  const failed = awaitAndLaunch('plan', { wait: true }, deps({
+    launchAgent: () => ({ status: 42, stdout: '', stderr: 'agent refused' }),
+  }));
+
+  assert.equal(failed.exitCode, EXIT_FAILURE);
+  assert.equal(failed.launched, false);
+  assert.match(failed.message, /agent refused/);
+
+  const emptyArgv = awaitAndLaunch('plan', { wait: true }, deps({
+    config: {
+      ...config(),
+      agents: { claude: [], codex: ['codex'] },
+    },
+  }));
+
+  assert.equal(emptyArgv.exitCode, EXIT_FAILURE);
+  assert.equal(emptyArgv.launched, false);
+  assert.match(emptyArgv.message, /no configured agent argv/);
+});
+
+test('ship-phase-propagates-runShip-failure', () => {
+  const result = awaitAndLaunch('ship-feature', { wait: true }, deps({
+    readState: () => fm({ state: 'implementation-reviewed' }),
+    runShip: () => ({ status: 1, stdout: '', stderr: 'ci failed' }),
+  }));
+
+  assert.equal(result.exitCode, EXIT_FAILURE);
+  assert.equal(result.launched, true);
+  assert.match(result.message, /ci failed/);
 });

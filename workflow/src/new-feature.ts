@@ -3,11 +3,21 @@ import path from 'node:path';
 import { addOrReplaceFeatureRecord, defaultFeatureBranch, defaultFeatureWorktree, readFeatureRecords, writeFeatureRecords } from './feature-record.ts';
 import { parseSubset, serializeFrontMatter, serializeSubset } from './front-matter.ts';
 import type { FeatureRecord, FrontMatter, WorkflowConfig } from './types.ts';
+import type { WorkflowPhase } from './types.ts';
 import type { RunGit } from './trailers.ts';
 import { withWorkflowPhaseTrailer } from './trailers.ts';
 import type { CmuxAdapter, CmuxSectionSpec, PaneAgent } from './cmux-adapter.ts';
+import { SEAT_MAP } from './transitions.ts';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
+const PIPELINE_PHASES = [
+  'plan',
+  'review-plan',
+  'consolidate-plan',
+  'implement-plan',
+  'review-implementation',
+  'ship-feature',
+] as const satisfies readonly WorkflowPhase[];
 
 export class SlugError extends Error {
   readonly input: string;
@@ -179,24 +189,24 @@ export function buildPipelineSpec(
   planningFile: string,
   workflowCommand = 'workflow',
 ): CmuxSectionSpec {
-  const phasePanes: Array<{ phase: string; agent: PaneAgent }> = [
-    { phase: 'plan', agent: 'claude' },
-    { phase: 'review-plan', agent: 'codex' },
-    { phase: 'consolidate-plan', agent: 'claude' },
-    { phase: 'implement-plan', agent: 'claude' },
-    { phase: 'review-implementation', agent: 'codex' },
-    { phase: 'ship-feature', agent: 'helper' },
-  ];
   return {
     section: slug,
     worktree,
-    panes: phasePanes.map(({ phase, agent }) => ({
+    panes: PIPELINE_PHASES.map((phase) => ({
       pane_id: phase,
       cwd: worktree,
-      agent,
+      agent: paneAgentForPhase(phase),
       command: [workflowCommand, 'await-and-launch', phase, '--file', planningFile],
     })),
   };
+}
+
+function paneAgentForPhase(phase: WorkflowPhase): PaneAgent {
+  const seat = SEAT_MAP[phase];
+  if (seat === 'Claude') return 'claude';
+  if (seat === 'Codex') return 'codex';
+  if (seat === 'helper') return 'helper';
+  throw new Error(`phase "${phase}" cannot be launched in a cmux pane`);
 }
 
 function armPipeline(slug: string, worktree: string, planningFile: string, deps: NewFeatureDeps): FeatureStartResult['cmux'] {

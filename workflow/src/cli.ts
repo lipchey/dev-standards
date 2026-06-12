@@ -612,6 +612,7 @@ function runCmuxCommand(argv: string[], io: CliIO): number {
   let filePath: string | undefined;
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
+    if (arg === undefined) continue;
     if (arg === '--dry-run') {
       dryRun = true;
       continue;
@@ -624,7 +625,7 @@ function runCmuxCommand(argv: string[], io: CliIO): number {
       i += 1;
       continue;
     }
-    return usageError(io, `cmux plan: unexpected argument "${arg ?? ''}"`);
+    return usageError(io, `cmux plan: unexpected argument "${arg}"`);
   }
   if (!dryRun) return usageError(io, 'cmux plan: --dry-run is required');
 
@@ -632,7 +633,7 @@ function runCmuxCommand(argv: string[], io: CliIO): number {
   try {
     const fm = parseFrontMatter(extractFrontMatter(io.readFile(resolved)));
     const adapter = io.cmuxAdapter ?? createCmuxAdapter();
-    const plan = adapter.plan(buildPipelineSpec(fm.feature, fm.worktree, resolved));
+    const plan = adapter.plan(buildPipelineSpec(fm.cmux_section, fm.worktree, resolved));
     if (!plan.ready) {
       io.stdout(plan.instructions);
       return EXIT_OK;
@@ -787,6 +788,8 @@ function runAwaitAndLaunch(argv: string[], io: CliIO): number {
           computeDivergence({ planningFile: resolved, worktree, readFile: io.readFile, run: io.runGit }),
         now: io.now,
         sleep: io.sleep,
+        // await-and-launch does not accept --force; the gate command owns
+        // forced_action persistence under the workflow lock.
         recordForcedAction: () => {},
         launchAgent: io.launchProcess,
         runShip: io.runShip ?? (() => ({

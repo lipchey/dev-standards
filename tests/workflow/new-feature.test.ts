@@ -10,6 +10,7 @@ import { parseSubset } from '../../workflow/src/front-matter.ts';
 import { runGit } from '../../workflow/src/trailers.ts';
 import type { WorkflowConfig } from '../../workflow/src/types.ts';
 import type { CmuxAdapter, CmuxSectionSpec } from '../../workflow/src/cmux-adapter.ts';
+import { SEAT_MAP } from '../../workflow/src/transitions.ts';
 
 function config(root: string, guides: string[] = ['docs/review.md']): WorkflowConfig {
   return {
@@ -226,7 +227,13 @@ test('arms-full-pane-pipeline-per-plan-2-3', () => {
     );
     assert.deepEqual(
       launched[0]?.panes.map((pane) => pane.agent),
-      ['claude', 'codex', 'claude', 'claude', 'codex', 'helper'],
+      ['plan', 'review-plan', 'consolidate-plan', 'implement-plan', 'review-implementation', 'ship-feature']
+        .map((phase) => {
+          const seat = SEAT_MAP[phase as keyof typeof SEAT_MAP];
+          if (seat === 'Claude') return 'claude';
+          if (seat === 'Codex') return 'codex';
+          return 'helper';
+        }),
     );
     for (const pane of launched[0]?.panes ?? []) {
       assert.equal(pane.cwd, result.worktree);

@@ -26,6 +26,7 @@ export interface CmuxSectionSpec {
 export interface CmuxSpawnOptions {
   shell: false;
   encoding: 'utf8';
+  timeout: number;
 }
 
 export interface CmuxSpawnResult {
@@ -83,6 +84,7 @@ export interface CmuxAdapter {
 interface CmuxAdapterDeps {
   binary?: string;
   spawn?: CmuxSpawn;
+  timeoutMs?: number;
 }
 
 interface RawCapabilities {
@@ -91,15 +93,22 @@ interface RawCapabilities {
 }
 
 const DEFAULT_BINARY = 'cmux';
+const DEFAULT_TIMEOUT_MS = 10_000;
 
 export function createCmuxAdapter(deps: CmuxAdapterDeps = {}): CmuxAdapter {
   const binary = deps.binary ?? DEFAULT_BINARY;
   const spawn = deps.spawn ?? realSpawn;
-  const probed = probe(binary, spawn);
+  const spawnOptions: CmuxSpawnOptions = {
+    encoding: 'utf8',
+    shell: false,
+    timeout: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  };
+  const probed = probe(binary, spawn, spawnOptions);
 
   const capabilities = (): CmuxCapabilities => probed;
 
   const plan = (spec: CmuxSectionSpec): CmuxPlan => {
+    assertSafePositionals(spec);
     assertPaneCwds(spec);
     if (!isReady(probed)) {
       return {
@@ -128,16 +137,20 @@ export function createCmuxAdapter(deps: CmuxAdapterDeps = {}): CmuxAdapter {
     }
     let sectionCreated = false;
     for (const action of dryRun.actions) {
-      const result = spawn(binary, action.args, { encoding: 'utf8', shell: false });
+      const result = runCmux(binary, action.args, spawn, spawnOptions);
       if (isFailure(result)) {
+        let error = resultDetail(result);
         if (sectionCreated) {
-          spawn(binary, ['close_section', spec.section], { encoding: 'utf8', shell: false });
+          const rollback = runCmux(binary, ['close_section', spec.section], spawn, spawnOptions);
+          if (isFailure(rollback)) {
+            error = `${error}; rollback close_section failed: ${resultDetail(rollback)}`;
+          }
         }
         return {
           ok: false,
           paneIds: [],
           instructions: dryRun.instructions,
-          error: resultDetail(result),
+          error,
         };
       }
       if (action.verb === 'new_section') sectionCreated = true;
@@ -151,7 +164,11 @@ export function createCmuxAdapter(deps: CmuxAdapterDeps = {}): CmuxAdapter {
 
   const notify = (section: string, message: string): CmuxNotifyResult => {
     if (!isReady(probed)) return { ok: false, error: probed.detail };
-    const result = spawn(binary, ['notify', section, message], { encoding: 'utf8', shell: false });
+    const sectionError = unsafePositionalDetail('section', section);
+    if (sectionError !== undefined) return { ok: false, error: sectionError };
+    const messageError = unsafePositionalDetail('message', message);
+    if (messageError !== undefined) return { ok: false, error: messageError };
+    const result = runCmux(binary, ['notify', section, message], spawn, spawnOptions);
     if (isFailure(result)) return { ok: false, error: resultDetail(result) };
     return { ok: true };
   };
@@ -178,8 +195,26 @@ function realSpawn(file: string, args: string[], options: CmuxSpawnOptions): Cmu
   return mapped;
 }
 
-function probe(binary: string, spawn: CmuxSpawn): CmuxCapabilities {
-  const result = spawn(binary, ['capabilities', '--json'], { encoding: 'utf8', shell: false });
+function runCmux(
+  binary: string,
+  args: string[],
+  spawn: CmuxSpawn,
+  options: CmuxSpawnOptions,
+): CmuxSpawnResult {
+  try {
+    return spawn(binary, args, options);
+  } catch (error) {
+    return {
+      status: null,
+      stdout: '',
+      stderr: '',
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+}
+
+function probe(binary: string, spawn: CmuxSpawn, options: CmuxSpawnOptions): CmuxCapabilities {
+  const result = runCmux(binary, ['capabilities', '--json'], spawn, options);
   if (result.error !== undefined) {
     const missingBinary = result.error.code === 'ENOENT';
     return absent(missingBinary ? 'cmux not found on PATH' : `cmux probe failed: ${result.error.message}`);
@@ -238,6 +273,25 @@ function assertPaneCwds(spec: CmuxSectionSpec): void {
       );
     }
   }
+}
+
+function assertSafePositionals(spec: CmuxSectionSpec): void {
+  assertSafePositional('section', spec.section);
+  for (const pane of spec.panes) {
+    assertSafePositional('pane_id', pane.pane_id);
+  }
+}
+
+function assertSafePositional(label: string, value: string): void {
+  const detail = unsafePositionalDetail(label, value);
+  if (detail !== undefined) throw new Error(detail);
+}
+
+function unsafePositionalDetail(label: string, value: string): string | undefined {
+  if (value.length === 0) return `unsafe cmux ${label}: empty value`;
+  if (value.startsWith('-')) return `unsafe cmux ${label}: value must not start with "-"`;
+  if (/[\x00-\x1f\x7f]/.test(value)) return `unsafe cmux ${label}: value contains a control character`;
+  return undefined;
 }
 
 function plannedActions(spec: CmuxSectionSpec): CmuxAction[] {

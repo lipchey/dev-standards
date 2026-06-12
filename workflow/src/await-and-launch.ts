@@ -115,17 +115,7 @@ export function awaitAndLaunch(
     };
   }
 
-  const [file, ...baseArgs] = argv;
-  if (file === undefined) {
-    return {
-      exitCode: EXIT_FAILURE,
-      outcome: result.outcome,
-      phase,
-      launched: false,
-      message: `no configured agent binary for ${phase}`,
-    };
-  }
-
+  const [file, ...baseArgs] = argv as [string, ...string[]];
   const launched = deps.launchAgent({
     file,
     args: [...baseArgs, phasePrompt(phase, deps.planningFile)],
@@ -158,7 +148,12 @@ function phasePrompt(phase: WorkflowPhase, planningFile: string): string {
 }
 
 function notifyIfUseful(result: GateResult, deps: AwaitLaunchDeps): void {
-  if (result.outcome !== 'timeout' && result.outcome !== 'needs-human') return;
+  if (
+    result.outcome !== 'timeout'
+    && result.outcome !== 'needs-human'
+    && result.outcome !== 'divergence'
+    && result.outcome !== 'wrong-state'
+  ) return;
   deps.notify?.({
     phase: result.phase,
     outcome: result.outcome,
@@ -167,5 +162,7 @@ function notifyIfUseful(result: GateResult, deps: AwaitLaunchDeps): void {
 }
 
 function processMessage(result: ProcessResult): string {
-  return result.stderr.trim() || result.stdout.trim() || `process exited ${result.status}`;
+  return result.stderr.trim()
+    || result.stdout.trim()
+    || (result.status === 0 ? 'process exited successfully' : `process exited ${result.status}`);
 }
