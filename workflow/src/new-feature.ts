@@ -49,6 +49,15 @@ export interface FeatureStartResult {
   planningFile?: string;
 }
 
+interface PreparedFeatureStart {
+  slug: string;
+  branch: string;
+  worktree: string;
+  state: ReturnType<typeof readStateDoc>;
+  doc: ReturnType<typeof parseSubset>;
+  records: FeatureRecord[];
+}
+
 function safeBranch(branch: string): void {
   if (!branch.startsWith('feature/') || branch.startsWith('-') || branch.includes(':') || /\s|[\x00-\x1f\x7f]/.test(branch)) {
     throw new Error(`unsafe feature branch ${JSON.stringify(branch)}`);
@@ -120,7 +129,7 @@ function createBranch(deps: NewFeatureDeps, branch: string, worktree: string): v
   }
 }
 
-export function featureStart(opts: FeatureStartOptions, deps: NewFeatureDeps): FeatureStartResult {
+function prepareFeatureStart(opts: FeatureStartOptions, deps: NewFeatureDeps): PreparedFeatureStart {
   const slug = sanitizeFeatureSlug(opts.slug);
   const branch = opts.branch ?? defaultFeatureBranch(slug);
   safeBranch(branch);
@@ -137,20 +146,50 @@ export function featureStart(opts: FeatureStartOptions, deps: NewFeatureDeps): F
   const state = readRecordState(deps);
   const next = addOrReplaceFeatureRecord(state.records, { slug, branch, worktree, pr: 0, review_state: 'building' });
   deps.runGit(['check-ref-format', '--branch', branch], deps.repoRoot);
+  return { slug, branch, worktree, state: state.state, doc: state.doc, records: next };
+}
+
+function rollbackBranchAndWorktree(deps: NewFeatureDeps, branch: string, worktree: string): void {
+  if (worktree !== '') {
+    try {
+      deps.runGit(['worktree', 'remove', '--force', worktree], deps.repoRoot);
+    } catch {
+      // Preserve the original failure.
+    }
+  }
+  try {
+    deps.runGit(['branch', '-D', branch], deps.repoRoot);
+  } catch {
+    // Preserve the original failure.
+  }
+}
+
+export function featureStart(opts: FeatureStartOptions, deps: NewFeatureDeps): FeatureStartResult {
+  const prepared = prepareFeatureStart(opts, deps);
+  const { slug, branch, worktree } = prepared;
   createBranch(deps, branch, worktree);
-  writeRecords(deps, state.state, state.doc, next);
+  writeRecords(deps, prepared.state, prepared.doc, prepared.records);
   return { slug, branch, worktree };
 }
 
 export function newFeature(slugInput: string, deps: NewFeatureDeps): FeatureStartResult {
   const slug = sanitizeFeatureSlug(slugInput);
-  const parent = resolveParent(deps.repoRoot, deps.config);
-  const branch = defaultFeatureBranch(slug);
-  const worktree = defaultFeatureWorktree(parent, slug);
-  const result = featureStart({ slug, branch, worktree: true }, deps);
+  const prepared = prepareFeatureStart({
+    slug,
+    branch: defaultFeatureBranch(slug),
+    worktree: true,
+  }, deps);
+  const { branch, worktree } = prepared;
+  createBranch(deps, branch, worktree);
   const planningFile = path.join(worktree, 'workflow-session-planning.md');
-  deps.writeFile(planningFile, makePlanning(slug, branch, worktree, deps));
-  deps.runGit(['add', '--', 'workflow-session-planning.md'], worktree);
-  deps.runGit(['commit', '-q', '-m', withWorkflowPhaseTrailer(`workflow(new-feature): created ${slug}`, 'created')], worktree);
-  return { ...result, planningFile };
+  try {
+    deps.writeFile(planningFile, makePlanning(slug, branch, worktree, deps));
+    deps.runGit(['add', '--', 'workflow-session-planning.md'], worktree);
+    deps.runGit(['commit', '-q', '-m', withWorkflowPhaseTrailer(`workflow(new-feature): created ${slug}`, 'created')], worktree);
+    writeRecords(deps, prepared.state, prepared.doc, prepared.records);
+    return { slug, branch, worktree, planningFile };
+  } catch (error) {
+    rollbackBranchAndWorktree(deps, branch, worktree);
+    throw error;
+  }
 }

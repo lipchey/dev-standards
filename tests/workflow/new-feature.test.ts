@@ -64,6 +64,14 @@ function stateFrontMatter(root: string): string {
   return `${text.split('\n').slice(0, close + 1).join('\n')}\n`;
 }
 
+function installFailingPreCommitHook(root: string): void {
+  const hooksDir = path.join(root, '.git', 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const hook = path.join(hooksDir, 'pre-commit');
+  fs.writeFileSync(hook, '#!/bin/sh\necho "rejected by fixture pre-commit hook" 1>&2\nexit 1\n');
+  fs.chmodSync(hook, 0o755);
+}
+
 test('feature-start-record-only-no-planning-file', () => {
   const root = initRepo();
   try {
@@ -106,6 +114,26 @@ test('new-feature-creates-worktree-branch-planning-file-record', () => {
         review_state: 'building',
       },
     ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('new-feature-rolls-back-worktree-branch-and-record-when-planning-commit-fails', () => {
+  const root = initRepo();
+  try {
+    installFailingPreCommitHook(root);
+    const worktree = path.join(root, 'worktrees', 'hook-fail');
+
+    assert.throws(() => newFeature('hook-fail', deps(root)), /rejected by fixture pre-commit hook/);
+
+    assert.equal(fs.existsSync(worktree), false, 'the created worktree is removed');
+    assert.throws(
+      () => runGit(['rev-parse', '--verify', 'feature/hook-fail'], root),
+      /rev-parse/,
+      'the created branch is removed',
+    );
+    assert.deepEqual(readFeatureRecords(parseSubset(stateFrontMatter(root))), [], 'no orphan feature record remains');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -172,4 +200,3 @@ test('hostile-slug-never-reaches-git-argv', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-

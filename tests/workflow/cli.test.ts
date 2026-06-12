@@ -118,6 +118,17 @@ test('corrupt-planning-file-exits-needs-human', () => {
   assert.match(cap.err(), /recover/i, 'points to workflow recover');
 });
 
+test('diff-range-corrupt-planning-file-exits-needs-human', () => {
+  const corruptText = '---\nstate: not-a-real-state\n---\n';
+  const cap = makeIO({ readFile: () => corruptText });
+
+  const code = runCli(['diff-range', 'review-implementation'], cap.io);
+
+  assert.equal(code, EXIT_NEEDS_HUMAN);
+  assert.match(cap.err(), /corrupt/i, 'names the corruption');
+  assert.match(cap.err(), /recover/i, 'points to workflow recover');
+});
+
 test('missing-planning-file-exits-failure', () => {
   // A missing/unreadable file is a runtime failure (exit 1), distinct from a
   // usage error (exit 2) and from corrupt state (exit 13): the invocation was
@@ -188,4 +199,22 @@ test('unknown-command-usage', () => {
   assert.match(cap.err(), /unknown command/i, 'names the failure');
   assert.match(cap.err(), /frobnicate/, 'echoes the offending command');
   assert.match(cap.err(), /usage/i, 'prints usage');
+});
+
+test('new-feature-invalid-slug-is-usage-error', () => {
+  const cap = makeIO();
+
+  const code = runCli(['new-feature', '../../etc'], cap.io);
+
+  assert.equal(code, EXIT_USAGE);
+  assert.match(cap.err(), /invalid.*slug/i);
+});
+
+test('feature-start-invalid-slug-is-usage-error', () => {
+  const cap = makeIO();
+
+  const code = runCli(['feature-start', '../../etc'], cap.io);
+
+  assert.equal(code, EXIT_USAGE);
+  assert.match(cap.err(), /invalid.*slug/i);
 });

@@ -1,4 +1,5 @@
 import type { FrontMatter, WorkflowPhase } from './types.ts';
+import { excludePathspecs } from './commit-scope.ts';
 
 export interface DiffRangeOptions {
   planningFile?: string;
@@ -19,9 +20,7 @@ export function diffRangeForPhase(
   const planningFile = options.planningFile ?? 'workflow-session-planning.md';
   const reportsGlob = options.reportsGlob ?? 'reports/**';
   const commitExclude = options.commitExclude ?? [];
-  const range = phase === 'review-implementation'
-    ? `${fm.base_sha}..HEAD`
-    : `${fm.base_sha}..HEAD`;
+  const range = `${fm.base_sha}..HEAD`;
   return {
     range,
     argv: [
@@ -32,8 +31,7 @@ export function diffRangeForPhase(
       '.',
       `:(exclude)${planningFile}`,
       `:(exclude)${reportsGlob}`,
-      ...commitExclude.map((pattern) => `:(exclude)${pattern}`),
+      ...excludePathspecs(commitExclude),
     ],
   };
 }
-

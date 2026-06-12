@@ -80,3 +80,42 @@ test('feature-record-collision-aborts', () => {
     /feature record already exists/,
   );
 });
+
+test('feature-record-review-state-empty-string-roundtrips', () => {
+  const doc = parseSubset([
+    '---',
+    'features:',
+    '  - slug: "queued"',
+    '    branch: "feature/queued"',
+    '    worktree: ""',
+    '    pr: 0',
+    '    review_state: ""',
+    '---',
+    '',
+  ].join('\n'));
+
+  const records = readFeatureRecords(doc);
+
+  assert.deepEqual(records, [
+    { slug: 'queued', branch: 'feature/queued', worktree: '', pr: 0, review_state: '' },
+  ]);
+  writeFeatureRecords(doc, records);
+  assert.deepEqual(readFeatureRecords(doc), records);
+});
+
+test('feature-record-writer-rejects-control-chars', () => {
+  const doc = parseSubset('---\n---\n');
+
+  assert.throws(
+    () => writeFeatureRecords(doc, [
+      {
+        slug: 'bad',
+        branch: 'feature/bad\nbranch',
+        worktree: '',
+        pr: 0,
+        review_state: 'building',
+      },
+    ]),
+    /control character/,
+  );
+});

@@ -39,7 +39,7 @@ import type { DoctorProbes } from './doctor.ts';
 import { resume } from './resume.ts';
 import type { ResumeDeps } from './resume.ts';
 import { diffRangeForPhase } from './diff-range.ts';
-import { featureStart, newFeature } from './new-feature.ts';
+import { featureStart, newFeature, SlugError, sanitizeFeatureSlug } from './new-feature.ts';
 import type { NewFeatureDeps } from './new-feature.ts';
 import type { WorkflowConfig } from './types.ts';
 
@@ -574,6 +574,11 @@ function runDiffRange(argv: string[], io: CliIO): number {
     io.stdout(`${JSON.stringify(result.argv)}\n`);
     return EXIT_OK;
   } catch (error) {
+    if (isCorruptState(error)) {
+      const detail = error instanceof Error ? error.message : String(error);
+      io.stderr(`diff-range: planning file at "${resolved}" is corrupt (${detail}); run \`workflow recover\`\n`);
+      return EXIT_NEEDS_HUMAN;
+    }
     const detail = error instanceof Error ? error.message : String(error);
     io.stderr(`diff-range: failed: ${detail}\n`);
     return EXIT_FAILURE;
@@ -628,6 +633,8 @@ function newFeatureDeps(io: CliIO): NewFeatureDeps {
 function runNewFeature(argv: string[], io: CliIO): number {
   const parsed = parseFeatureStartArgs('new-feature', argv, io, false);
   if (!parsed.ok) return parsed.exitCode;
+  const slugExit = validateSlugArg('new-feature', parsed.slug, io);
+  if (slugExit !== undefined) return slugExit;
   try {
     const result = newFeature(parsed.slug, newFeatureDeps(io));
     io.stdout(`new-feature: ${result.slug} ${result.branch} ${result.worktree}\n`);
@@ -642,6 +649,8 @@ function runNewFeature(argv: string[], io: CliIO): number {
 function runFeatureStart(argv: string[], io: CliIO): number {
   const parsed = parseFeatureStartArgs('feature-start', argv, io, true);
   if (!parsed.ok) return parsed.exitCode;
+  const slugExit = validateSlugArg('feature-start', parsed.slug, io);
+  if (slugExit !== undefined) return slugExit;
   try {
     const opts = parsed.branch === undefined
       ? { slug: parsed.slug, worktree: parsed.worktree }
@@ -653,6 +662,18 @@ function runFeatureStart(argv: string[], io: CliIO): number {
     const detail = error instanceof Error ? error.message : String(error);
     io.stderr(`feature-start: failed: ${detail}\n`);
     return EXIT_FAILURE;
+  }
+}
+
+function validateSlugArg(command: string, slug: string, io: CliIO): number | undefined {
+  try {
+    sanitizeFeatureSlug(slug);
+    return undefined;
+  } catch (error) {
+    if (error instanceof SlugError) {
+      return usageErrorBare(io, `${command}: invalid <slug>: ${error.message}`);
+    }
+    throw error;
   }
 }
 

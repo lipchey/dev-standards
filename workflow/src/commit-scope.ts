@@ -36,31 +36,20 @@ function splitNul(out: string): string[] {
   return out.split('\0').filter((p) => p !== '');
 }
 
-function escapeRegexLiteral(text: string): string {
-  return text.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+export function excludePathspecs(patterns: readonly string[]): string[] {
+  return patterns.map((pattern) => `:(exclude)${pattern}`);
 }
 
-function globToRegExp(pattern: string): RegExp {
-  let out = '^';
-  for (let i = 0; i < pattern.length; i += 1) {
-    const ch = pattern[i];
-    const next = pattern[i + 1];
-    if (ch === '*' && next === '*') {
-      out += '.*';
-      i += 1;
-    } else if (ch === '*') {
-      out += '[^/]*';
-    } else if (ch === '?') {
-      out += '[^/]';
-    } else {
-      out += escapeRegexLiteral(ch ?? '');
-    }
-  }
-  return new RegExp(`${out}$`);
+function scopedPathspecs(excludes: readonly string[]): string[] {
+  return ['--', '.', ...excludePathspecs(excludes)];
 }
 
-function matchesAny(file: string, patterns: readonly string[]): boolean {
-  return patterns.some((pattern) => globToRegExp(pattern).test(file));
+function changedPathsSince(worktree: string, base: string, excludes: readonly string[], run: RunGit): string[] {
+  return splitNul(run(['diff', '--name-only', '-z', base, ...scopedPathspecs(excludes)], worktree));
+}
+
+function untrackedPaths(worktree: string, excludes: readonly string[], run: RunGit): string[] {
+  return splitNul(run(['ls-files', '--others', '--exclude-standard', '-z', ...scopedPathspecs(excludes)], worktree));
 }
 
 // The planning file path relative to the worktree root (spec §3: the planning
@@ -99,16 +88,11 @@ export function worktreeChangesExcept(
   run: RunGit,
   commitExclude: readonly string[] = [],
 ): string[] {
-  const tracked = headExists(worktree, run)
-    ? splitNul(run(['diff', '--name-only', '-z', 'HEAD'], worktree))
-    : [];
-  const untracked = splitNul(run(['ls-files', '--others', '--exclude-standard', '-z'], worktree));
+  const excludes = [excludeRel, LOCK_FILE_NAME, ...commitExclude];
+  const tracked = headExists(worktree, run) ? changedPathsSince(worktree, 'HEAD', excludes, run) : [];
+  const untracked = untrackedPaths(worktree, excludes, run);
   const set = new Set<string>([...tracked, ...untracked]);
-  set.delete(excludeRel);
-  // The workflow's own advisory lockfile is held DURING the transaction (it is an
-  // untracked file at the worktree root); it must never ride a code commit.
-  set.delete(LOCK_FILE_NAME);
-  return [...set].filter((file) => !matchesAny(file, commitExclude)).sort();
+  return [...set].sort();
 }
 
 export function assertCleanAtImplementStart(worktree: string, run: RunGit): void {
@@ -135,14 +119,13 @@ export function commitScopeForImplement(
   run: RunGit,
 ): ImplementCommitScope {
   const base = startSha ?? 'HEAD';
+  const excludes = [planningRel, LOCK_FILE_NAME, ...commitExclude];
   const trackedSinceStart = headExists(worktree, run)
-    ? splitNul(run(['diff', '--name-only', '-z', base], worktree))
+    ? changedPathsSince(worktree, base, excludes, run)
     : [];
-  const untracked = splitNul(run(['ls-files', '--others', '--exclude-standard', '-z'], worktree));
+  const untracked = untrackedPaths(worktree, excludes, run);
   const set = new Set<string>([...trackedSinceStart, ...untracked]);
-  set.delete(planningRel);
-  set.delete(LOCK_FILE_NAME);
-  const paths = [...set].filter((file) => !matchesAny(file, commitExclude)).sort();
+  const paths = [...set].sort();
   return { paths, preStaged: stagedPaths(worktree, run).filter((file) => paths.includes(file)).sort() };
 }
 

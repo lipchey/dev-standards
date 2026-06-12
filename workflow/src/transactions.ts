@@ -225,6 +225,10 @@ function gitTail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function cloneFrontMatter(fm: FrontMatter): FrontMatter {
+  return JSON.parse(JSON.stringify(fm)) as FrontMatter;
+}
+
 function commitFailureState(
   deps: TransactionDeps,
   fm: FrontMatter,
@@ -234,6 +238,8 @@ function commitFailureState(
   cause: unknown,
 ): void {
   fm.state = failedState;
+  delete fm.needs_human_reason;
+  delete fm.needs_human_from;
   fm.updated = nowIso(deps);
   saveFailurePlanning(deps, fm, body);
   const rel = planningRel(deps);
@@ -252,6 +258,26 @@ function commitFailureState(
 
 function saveFailurePlanning(deps: TransactionDeps, fm: FrontMatter, body: string): void {
   deps.writeFile(deps.planningFile, `${serializeFrontMatter(fm)}${body}`);
+}
+
+function assertNoForeignCodeStaged(
+  deps: TransactionDeps,
+  planningRel: string,
+  codePaths: readonly string[],
+): void {
+  const allowed = new Set(codePaths);
+  const staged = stagedPaths(deps.worktree, deps.run);
+  if (staged.includes(planningRel)) {
+    throw new CommitScopeError(
+      `the implement-plan code commit must not include the planning file "${planningRel}"`,
+    );
+  }
+  const foreign = staged.filter((file) => !allowed.has(file));
+  if (foreign.length > 0) {
+    throw new CommitScopeError(
+      `the implement-plan code commit must not include pre-staged paths outside the code scope: ${foreign.join(', ')}`,
+    );
+  }
 }
 
 // ── Phase-record helpers ─────────────────────────────────────────────────────
@@ -388,6 +414,7 @@ function completePlanning(
 ): TransactionResult {
   const loop = fm.loopback_count;
   const autoAdvance = phase === 'review-plan' && opts.approved === true;
+  const failureFm = cloneFrontMatter(fm);
 
   markPhaseSuccess(fm, phase, loop, null); // complete_sha set post-commit (the commit being made)
 
@@ -421,7 +448,7 @@ function completePlanning(
     );
   } catch (error) {
     if (isGitError(error)) {
-      commitFailureState(deps, fm, body, row.failure, `workflow(${phase}): complete hook failed -> ${row.failure}`, error);
+      commitFailureState(deps, failureFm, body, row.failure, `workflow(${phase}): complete hook failed -> ${row.failure}`, error);
     }
     throw error;
   }
@@ -459,6 +486,7 @@ function completeImplement(
   deps: TransactionDeps,
 ): TransactionResult {
   const rel = planningRel(deps);
+  const failureFm = cloneFrontMatter(fm);
 
   // (1) code commit — enumerate + stage code paths one at a time (never add -A).
   const startSha = fm.phases[phase]?.start_sha ?? null;
@@ -470,15 +498,11 @@ function completeImplement(
     deps.run,
   ).paths;
   assertCodeCommitShape(codePaths);
+  assertNoForeignCodeStaged(deps, rel, codePaths);
   for (const p of codePaths) deps.run(['add', '--', p], deps.worktree);
-  // Defense in depth: the planning file must never ride in the code commit.
-  if (stagedPaths(deps.worktree, deps.run).includes(rel)) {
-    throw new CommitScopeError(
-      `the implement-plan code commit must not include the planning file "${rel}"`,
-    );
-  }
+  assertNoForeignCodeStaged(deps, rel, codePaths);
   try {
-    deps.run(['commit', '-q', '-m', `workflow(${phase}): implementation`], deps.worktree); // NO trailer
+    deps.run(['commit', '-q', '-m', `workflow(${phase}): implementation`, '--', ...codePaths], deps.worktree); // NO trailer
   } catch (error) {
     if (isGitError(error)) {
       for (const p of codePaths) {
@@ -488,7 +512,7 @@ function completeImplement(
           // Preserve the original hook/git failure as the surfaced error.
         }
       }
-      commitFailureState(deps, fm, body, row.failure, `workflow(${phase}): implementation hook failed -> ${row.failure}`, error);
+      commitFailureState(deps, failureFm, body, row.failure, `workflow(${phase}): implementation hook failed -> ${row.failure}`, error);
     }
     throw error;
   }
@@ -512,7 +536,7 @@ function completeImplement(
     );
   } catch (error) {
     if (isGitError(error)) {
-      commitFailureState(deps, fm, body, row.failure, `workflow(${phase}): complete hook failed -> ${row.failure}`, error);
+      commitFailureState(deps, failureFm, body, row.failure, `workflow(${phase}): complete hook failed -> ${row.failure}`, error);
     }
     throw error;
   }
@@ -563,6 +587,7 @@ function requestChangesInner(
   }
   // Atomicity: pre-flight the planning-only commit-shape refusal BEFORE mutating.
   assertNoForeignStaged(deps);
+  const failureFm = cloneFrontMatter(fm);
 
   // Budget accumulation + needs-human TRIGGERS (Task 11.5).
   // SEAM: ACCUMULATE first (the rejected pass happened — it counts), THEN evaluate
@@ -602,7 +627,7 @@ function requestChangesInner(
       if (isGitError(error)) {
         commitFailureState(
           deps,
-          fm,
+          failureFm,
           body,
           loopback.reviewRow.failure,
           `workflow(${producer}): request-changes hook failed -> ${loopback.reviewRow.failure}`,
@@ -633,7 +658,7 @@ function requestChangesInner(
     if (isGitError(error)) {
       commitFailureState(
         deps,
-        fm,
+        failureFm,
         body,
         loopback.reviewRow.failure,
         `workflow(${producer}): request-changes hook failed -> ${loopback.reviewRow.failure}`,

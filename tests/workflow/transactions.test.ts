@@ -87,10 +87,12 @@ interface DepOpts {
   claimedBy?: string;
   now?: () => number;
   lockSeams?: LockSeams;
+  commitExclude?: string[];
+  budget?: { totalSeconds: number; perPassSeconds?: number };
 }
 
 function txDeps(dir: string, planningPath: string, opts: DepOpts = {}): TransactionDeps {
-  return {
+  const deps: TransactionDeps = {
     planningFile: planningPath,
     worktree: dir,
     readFile: (p) => fs.readFileSync(p, 'utf8'),
@@ -100,6 +102,9 @@ function txDeps(dir: string, planningPath: string, opts: DepOpts = {}): Transact
     now: opts.now ?? (() => Date.parse(T0)),
     claimedBy: opts.claimedBy ?? PRODUCER,
   };
+  if (opts.commitExclude !== undefined) deps.commitExclude = opts.commitExclude;
+  if (opts.budget !== undefined) deps.budget = opts.budget;
+  return deps;
 }
 
 function resumeDeps(dir: string, planningPath: string, opts: DepOpts = {}): ResumeDeps {
@@ -158,6 +163,7 @@ function porcelain(dir: string): string {
 
 function writeCode(dir: string, name: string, contents: string): string {
   const p = path.join(dir, name);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, contents);
   return p;
 }
@@ -268,6 +274,33 @@ test('implement-two-commit-shape-anchors-on-code-commit', () => {
     assert.equal(fm.state, 'implemented');
     assert.equal(readHeadWorkflowPhase(dir, runGit), 'implemented', 'trailer reachable past the untrailed code commit');
     assert.equal(diverged(dir, planningPath), false);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('implement-refuses-pre-staged-excluded-path-before-code-commit', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    driveReviewPlanInprogress(dir, planningPath);
+    complete('review-plan', { approved: true }, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    start('implement-plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    writeCode(dir, 'feature.ts', 'export const f = 1;\n');
+    writeCode(dir, 'sub/debug.log', 'nested noise\n');
+    runGit(['add', '--', 'sub/debug.log'], dir);
+    const before = commitCount(dir);
+
+    assertCommitScopeRefusal(() =>
+      complete('implement-plan', {}, txDeps(dir, planningPath, {
+        claimedBy: PRODUCER,
+        commitExclude: ['*.log'],
+      })),
+    );
+
+    assert.equal(commitCount(dir), before, 'no code or failure commit was made');
+    assert.equal(readFm(planningPath).state, 'implement-inprogress', 'state is unchanged');
+    assert.deepEqual(commitFiles(dir, 'HEAD'), [PLANNING_FILE], 'HEAD is still the implement start commit');
   } finally {
     cleanup(dir);
   }
@@ -616,6 +649,17 @@ function installFailingPreCommitHook(dir: string): void {
   fs.chmodSync(hook, 0o755);
 }
 
+function installFailingWorkflowPhaseCommitMsgHook(dir: string): void {
+  const hooksDir = path.join(dir, '.git', 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const hook = path.join(hooksDir, 'commit-msg');
+  fs.writeFileSync(
+    hook,
+    '#!/bin/sh\nif grep -q "Workflow-Phase:" "$1"; then\n  echo "rejected workflow trailer commit" 1>&2\n  exit 1\nfi\n',
+  );
+  fs.chmodSync(hook, 0o755);
+}
+
 // ── Fix 4: git failures emit the §2.7 machine-readable error (last stderr line) ─
 
 test('git-commit-failure-emits-machine-readable-error-as-last-stderr-line', () => {
@@ -766,11 +810,77 @@ test('complete-commit-failure-records-failed-state', () => {
     );
 
     assert.equal(commitCount(dir), before + 1, 'one failed-state commit was recorded');
-    assert.equal(readFm(planningPath).state, 'plan-failed', 'the hook rejection records the phase failure state');
+    const fm = readFm(planningPath);
+    assert.equal(fm.state, 'plan-failed', 'the hook rejection records the phase failure state');
+    assert.equal(fm.phases.plan?.last_success_loop, null, 'a failed complete is not recorded as a phase success');
+    assert.equal(fm.phases.plan?.complete_sha, null, 'a failed complete has no completion sha');
     assert.match(commitMessage(dir, 'HEAD'), /Workflow-Phase: plan-failed/, 'the failed-state commit carries a matching trailer');
     assert.match(commitMessage(dir, 'HEAD'), /rejected by fixture pre-commit hook/, 'the hook output is captured');
     assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the hook rejection');
     assert.equal(porcelain(dir), '', 'the tree is fully CLEAN — the advanced state is not left staged in the index');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('implement-planning-commit-failure-does-not-record-phase-success', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    driveReviewPlanInprogress(dir, planningPath);
+    complete('review-plan', { approved: true }, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    start('implement-plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    writeCode(dir, 'feature.ts', 'export const f = 1;\n');
+    const before = commitCount(dir);
+    installFailingWorkflowPhaseCommitMsgHook(dir);
+
+    assert.throws(
+      () => complete('implement-plan', {}, txDeps(dir, planningPath, { claimedBy: PRODUCER })),
+      'the rejected planning commit propagates as a throw',
+    );
+
+    assert.equal(commitCount(dir), before + 2, 'code commit lands, then one failed-state commit is recorded');
+    assert.deepEqual(commitFiles(dir, 'HEAD~1'), ['feature.ts'], 'the untrailed code commit is retained');
+    const fm = readFm(planningPath);
+    assert.equal(fm.state, 'implement-failed');
+    assert.equal(fm.phases['implement-plan']?.last_success_loop, null, 'failed planning commit is not a successful implement');
+    assert.equal(fm.phases['implement-plan']?.complete_sha, null, 'failed planning commit does not record the code sha as complete');
+    assert.match(commitMessage(dir, 'HEAD'), /Workflow-Phase: implement-failed/);
+    assert.equal(diverged(dir, planningPath), false);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('request-changes-commit-failure-does-not-persist-needs-human-or-counter-mutations', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir, { loopback_cap: 0 });
+    const clock = () => Date.parse(T0);
+    driveReviewPlanInprogress(dir, planningPath, { now: clock });
+    const before = commitCount(dir);
+    installFailingPreCommitHook(dir);
+
+    assert.throws(
+      () => requestChanges(
+        'plan',
+        { reason: 'tighten the error handling' },
+        txDeps(dir, planningPath, {
+          claimedBy: REVIEWER,
+          now: () => Date.parse(T0) + 5000,
+        }),
+      ),
+      'the rejected request-changes commit propagates as a throw',
+    );
+
+    assert.equal(commitCount(dir), before + 1, 'one failed-state commit was recorded');
+    const fm = readFm(planningPath);
+    assert.equal(fm.state, 'review-plan-failed');
+    assert.equal(fm.loopback_count, 0, 'failed request-changes does not consume a loopback round');
+    assert.equal(fm.budget_spent.total_seconds, 0, 'failed request-changes does not consume budget');
+    assert.equal(fm.needs_human_reason, undefined, 'failed-state record is not also needs-human');
+    assert.equal(fm.needs_human_from, undefined, 'failed-state record has no needs-human return state');
+    assert.equal(diverged(dir, planningPath), false);
   } finally {
     cleanup(dir);
   }

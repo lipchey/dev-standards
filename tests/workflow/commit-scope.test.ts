@@ -58,6 +58,25 @@ test('implement-stages-changed-since-start-sha-minus-exclusions', () => {
   }
 });
 
+test('commit-exclude-uses-git-pathspec-semantics-for-directories-and-subdirs', () => {
+  const dir = initRepo();
+  try {
+    const startSha = runGit(['rev-parse', 'HEAD'], dir).trim();
+    fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src.txt'), 'v2\n');
+    fs.writeFileSync(path.join(dir, 'dist', 'bundle.js'), 'compiled\n');
+    fs.writeFileSync(path.join(dir, 'sub', 'debug.log'), 'nested noise\n');
+
+    const scope = commitScopeForImplement(dir, 'workflow-session-planning.md', startSha, ['dist', '*.log'], runGit);
+
+    assert.deepEqual(scope.paths, ['src.txt']);
+    assert.deepEqual(worktreeChangesExcept(dir, 'workflow-session-planning.md', runGit, ['dist', '*.log']), ['src.txt']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('staged-only-escape-records-staging-manual', () => {
   const dir = initRepo();
   try {
@@ -88,4 +107,3 @@ test('never-git-add-A', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-

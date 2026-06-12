@@ -3,14 +3,26 @@ import type { FeatureRecord } from './types.ts';
 import type { SubsetMap, SubsetNode, SubsetScalar, SubsetSeq } from './front-matter.ts';
 import { CorruptStateError } from './front-matter.ts';
 
-const REVIEW_STATES = new Set(['building', 'awaiting_human_review', 'processing_review', 'ci_failed', 'done']);
+const REVIEW_STATES = new Set(['', 'building', 'awaiting_human_review', 'processing_review', 'ci_failed', 'done']);
 
 function corrupt(message: string): CorruptStateError {
   return new CorruptStateError('bad-feature-record', message);
 }
 
 function scalarString(value: string): SubsetScalar {
+  const ctrl = controlCharIndex(value);
+  if (ctrl >= 0) {
+    throw corrupt(`string scalar contains a control character (code ${value.charCodeAt(ctrl)}) at index ${ctrl}`);
+  }
   return { kind: 'string', value };
+}
+
+function controlCharIndex(value: string): number {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return i;
+  }
+  return -1;
 }
 
 function scalarInt(value: number): SubsetScalar {
@@ -97,4 +109,3 @@ export function defaultFeatureBranch(slug: string): string {
 export function defaultFeatureWorktree(parent: string, slug: string): string {
   return path.join(parent, slug);
 }
-
