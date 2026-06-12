@@ -162,6 +162,77 @@ test('trailer-written-from-day-one', () => {
   }
 });
 
+test('trailer-read-only-from-the-final-trailer-block', () => {
+  // REGRESSION (P2): the reader scanned the WHOLE body bottom-up and returned ANY
+  // `Workflow-Phase:` line — even ordinary body PROSE followed by more non-trailer
+  // lines. A user code commit whose body mentions `Workflow-Phase: shipped` in
+  // prose was misread as the durable authority -> false divergence / wrong recover.
+  // The reader must take the trailer ONLY from the FINAL trailer block (the last
+  // paragraph that is entirely git-trailer-shaped), mirroring the writer.
+
+  // (a) `Workflow-Phase: shipped` as body prose, FOLLOWED by a non-trailer line:
+  // the last paragraph is NOT a pure trailer block -> NO trailer (skipped).
+  const prose =
+    'feat: unrelated user commit\n\n' +
+    'Discussing the Workflow-Phase: shipped milestone in prose here.\n' +
+    'and then more narrative follows on the next line.\n';
+  assert.equal(
+    lastWorkflowPhaseTrailer([prose]),
+    null,
+    'a Workflow-Phase line in non-final-block prose is NOT read as a trailer',
+  );
+
+  // (b) A real final-block trailer is read (the writer's own output).
+  const real = withWorkflowPhaseTrailer('feat: ship it', 'shipped');
+  assert.equal(lastWorkflowPhaseTrailer([real]), 'shipped', 'a real final-block trailer is read');
+
+  // (c) A multi-trailer final block (e.g. a future Co-Authored-By alongside the
+  // phase trailer) still parses the Workflow-Phase trailer correctly.
+  const multi =
+    'fix: something\n\nCo-Authored-By: Someone <s@example.com>\nWorkflow-Phase: implemented';
+  assert.equal(lastWorkflowPhaseTrailer([multi]), 'implemented', 'multi-trailer final block parses');
+
+  // (d) The request-changes body shape (subject + reason paragraph + final trailer)
+  // reads the trailer correctly — the helper writes exactly this shape.
+  const requestChangesBody = withWorkflowPhaseTrailer(
+    'workflow(plan): changes requested -> plan-changes-requested\n\ntighten the error handling',
+    'plan-changes-requested',
+  );
+  assert.equal(
+    lastWorkflowPhaseTrailer([requestChangesBody]),
+    'plan-changes-requested',
+    'the request-changes body (subject + reason + final trailer) reads the trailer',
+  );
+
+  // (e) End-to-end: a non-helper code commit whose body MENTIONS the trailer in
+  // prose on top of a real trailered commit does NOT shadow the durable authority.
+  const dir = initRepo();
+  try {
+    const planningPath = writePlanning(dir, makeFrontMatter({ state: 'plan-ready' }));
+    commit(dir, [planningPath], 'feat(workflow): plan ready', 'plan-ready');
+    // A user code commit on top mentioning the trailer in prose (not a trailer).
+    const codeFile = path.join(dir, 'note.txt');
+    fs.writeFileSync(codeFile, 'x\n');
+    runGit(['add', '--', 'note.txt'], dir);
+    runGit(
+      [
+        'commit',
+        '-q',
+        '-m',
+        'chore: notes\n\nWorkflow-Phase: shipped was discussed here.\nmore prose after it.',
+      ],
+      dir,
+    );
+    assert.equal(
+      readHeadWorkflowPhase(dir, runGit),
+      'plan-ready',
+      'the prose mention is skipped; the real trailer below remains the authority',
+    );
+  } finally {
+    cleanup(dir);
+  }
+});
+
 // ── Divergence at gate entry ─────────────────────────────────────────────────
 
 test('entry-divergence-refuses-and-points-to-recover', () => {

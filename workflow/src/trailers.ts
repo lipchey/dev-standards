@@ -73,13 +73,27 @@ export function withWorkflowPhaseTrailer(message: string, state: WorkflowState):
 
 // ── Pure reader ──────────────────────────────────────────────────────────────
 
-// The Workflow-Phase trailer value in a single commit body, or null. Scans from
-// the END (trailers live at the end), so a subject line that happens to contain
-// the key is not mistaken for the trailer.
+// The Workflow-Phase trailer value in a single commit body, or null. Reads the
+// trailer ONLY from the FINAL trailer block — the last paragraph (after the final
+// blank line) that consists ENTIRELY of git-trailer-shaped lines. This mirrors the
+// WRITER (`withWorkflowPhaseTrailer`, which places the trailer in the final block)
+// and git's own trailer semantics: a `Workflow-Phase:` line that is ordinary body
+// text (e.g. followed by more prose, so the last paragraph is NOT a pure trailer
+// block) is NOT a trailer and must not be mistaken for the durable authority.
 function trailerInBody(body: string): string | null {
-  const lines = body.split('\n');
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
+  // Drop trailing blank lines so the "final paragraph" is the real last block.
+  const lines = body.replace(/\s+$/, '').split('\n');
+  if (lines.every((line) => line.trim() === '')) return null;
+  // The final paragraph: the lines after the last blank line.
+  const lastBlank = lines.lastIndexOf('');
+  const lastParagraph = lines.slice(lastBlank + 1);
+  // It is a trailer block only when non-empty AND every line is trailer-shaped.
+  const isTrailerBlock =
+    lastParagraph.length > 0 && lastParagraph.every((line) => TRAILER_LINE_RE.test(line));
+  if (!isTrailerBlock) return null;
+  // Scan the final trailer block bottom-up for the Workflow-Phase trailer.
+  for (let i = lastParagraph.length - 1; i >= 0; i -= 1) {
+    const line = lastParagraph[i];
     if (line === undefined) continue;
     const match = WORKFLOW_PHASE_LINE_RE.exec(line);
     if (match !== null && match[1] !== undefined) return match[1];
