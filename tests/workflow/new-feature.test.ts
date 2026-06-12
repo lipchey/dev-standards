@@ -9,6 +9,7 @@ import { readFeatureRecords } from '../../workflow/src/feature-record.ts';
 import { parseSubset } from '../../workflow/src/front-matter.ts';
 import { runGit } from '../../workflow/src/trailers.ts';
 import type { WorkflowConfig } from '../../workflow/src/types.ts';
+import type { CmuxAdapter, CmuxSectionSpec } from '../../workflow/src/cmux-adapter.ts';
 
 function config(root: string, guides: string[] = ['docs/review.md']): WorkflowConfig {
   return {
@@ -196,6 +197,83 @@ test('hostile-slug-never-reaches-git-argv', () => {
       /invalid feature slug/,
     );
     assert.deepEqual(calls, [], 'rejected hostile values stay data only');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('arms-full-pane-pipeline-per-plan-2-3', () => {
+  const root = initRepo();
+  try {
+    const launched: CmuxSectionSpec[] = [];
+    const cmux: CmuxAdapter = {
+      capabilities: () => ({ present: true, version: '1.2.3', verbs: [], missing: [], detail: 'ok' }),
+      plan: () => assert.fail('new-feature should arm through launch(), not dry-run only'),
+      launch: (spec) => {
+        launched.push(spec);
+        return { ok: true, paneIds: spec.panes.map((pane) => pane.pane_id), instructions: '' };
+      },
+      notify: () => ({ ok: true }),
+    };
+
+    const result = newFeature('pipeline-demo', deps(root, { cmux }));
+
+    assert.equal(result.cmux?.armed, true);
+    assert.equal(launched.length, 1);
+    assert.deepEqual(
+      launched[0]?.panes.map((pane) => pane.pane_id),
+      ['plan', 'review-plan', 'consolidate-plan', 'implement-plan', 'review-implementation', 'ship-feature'],
+    );
+    assert.deepEqual(
+      launched[0]?.panes.map((pane) => pane.agent),
+      ['claude', 'codex', 'claude', 'claude', 'codex', 'helper'],
+    );
+    for (const pane of launched[0]?.panes ?? []) {
+      assert.equal(pane.cwd, result.worktree);
+      assert.deepEqual(pane.command.slice(0, 2), ['workflow', 'await-and-launch']);
+      assert.ok(pane.command.includes(result.planningFile ?? ''), 'pane command points at the planning file');
+    }
+    assert.equal(launched[0]?.panes.at(-1)?.pane_id, 'ship-feature');
+    assert.notEqual(launched[0]?.panes.at(-1)?.pane_id, 'merge-feature');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('degrades-to-copy-paste-when-cmux-absent', () => {
+  const root = initRepo();
+  try {
+    const cmux: CmuxAdapter = {
+      capabilities: () => ({
+        present: false,
+        version: '',
+        verbs: [],
+        missing: ['new_section', 'split_run', 'notify', 'close_section'],
+        detail: 'cmux not found on PATH',
+      }),
+      plan: () => assert.fail('new-feature should use launch() so the adapter owns degradation'),
+      launch: () => ({
+        ok: false,
+        paneIds: [],
+        instructions: 'copy-paste these commands into panes\n',
+      }),
+      notify: () => ({ ok: false, error: 'cmux not found on PATH' }),
+    };
+
+    const result = newFeature('manual-demo', deps(root, { cmux }));
+
+    assert.equal(result.cmux?.armed, false);
+    assert.match(result.cmux?.instructions ?? '', /copy-paste/i);
+    assert.ok(result.planningFile !== undefined && fs.existsSync(result.planningFile));
+    assert.deepEqual(readFeatureRecords(parseSubset(stateFrontMatter(root))), [
+      {
+        slug: 'manual-demo',
+        branch: 'feature/manual-demo',
+        worktree: path.join(root, 'worktrees', 'manual-demo'),
+        pr: 0,
+        review_state: 'building',
+      },
+    ]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

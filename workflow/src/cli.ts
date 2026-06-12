@@ -39,9 +39,13 @@ import type { DoctorProbes } from './doctor.ts';
 import { resume } from './resume.ts';
 import type { ResumeDeps } from './resume.ts';
 import { diffRangeForPhase } from './diff-range.ts';
-import { featureStart, newFeature, SlugError, sanitizeFeatureSlug } from './new-feature.ts';
+import { buildPipelineSpec, featureStart, newFeature, SlugError, sanitizeFeatureSlug } from './new-feature.ts';
 import type { NewFeatureDeps } from './new-feature.ts';
 import type { WorkflowConfig } from './types.ts';
+import { awaitAndLaunch } from './await-and-launch.ts';
+import type { AgentLaunch, ProcessResult } from './await-and-launch.ts';
+import { createCmuxAdapter } from './cmux-adapter.ts';
+import type { CmuxAdapter } from './cmux-adapter.ts';
 
 // The gate's --wait deadline when the caller does not configure one (the §2.8
 // config default lands with the manifest wiring; the CLI uses a fixed fallback).
@@ -72,6 +76,8 @@ const USAGE = [
   '  resume [--file <path>]                      exit needs-human back to the prior state (by reason)',
   '  doctor [--arm] [--file ...] [--manifest ..] non-mutating setup/health diagnosis',
   '  diff-range <phase> [--file <path>]          print an argv-safe git diff command',
+  '  cmux plan --dry-run [--file <path>]         print planned cmux arming commands',
+  '  await-and-launch <phase> [--file <path>]    wait for a phase gate, then launch its seat',
   '  new-feature <slug>                          create worktree, planning file, and feature record',
   '  feature-start <slug> [--worktree] [--branch <name>] create branch and feature record',
   '',
@@ -99,6 +105,11 @@ export interface CliIO {
   // cmux/wrapper/gh probes). Optional so non-doctor callers need not provide it;
   // the runner edge passes `realDoctorProbes()`.
   doctorProbes?: DoctorProbes;
+  // await-and-launch process edges. Optional so non-launching callers need not
+  // provide them; the command reports an internal-wiring error when absent.
+  launchProcess?: (launch: AgentLaunch) => ProcessResult;
+  runShip?: () => ProcessResult; // S14 wires the real ship routine here.
+  cmuxAdapter?: CmuxAdapter;
 }
 
 function usageError(io: CliIO, message: string): number {
@@ -164,6 +175,10 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
       return runDoctorCommand(rest, io);
     case 'diff-range':
       return runDiffRange(rest, io);
+    case 'cmux':
+      return runCmuxCommand(rest, io);
+    case 'await-and-launch':
+      return runAwaitAndLaunch(rest, io);
     case 'new-feature':
       return runNewFeature(rest, io);
     case 'feature-start':
@@ -585,6 +600,57 @@ function runDiffRange(argv: string[], io: CliIO): number {
   }
 }
 
+// ── cmux dry-run ────────────────────────────────────────────────────────────
+
+function runCmuxCommand(argv: string[], io: CliIO): number {
+  const [subcommand, ...rest] = argv;
+  if (subcommand !== 'plan') {
+    return usageError(io, 'cmux: expected subcommand "plan"');
+  }
+
+  let dryRun = false;
+  let filePath: string | undefined;
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === '--dry-run') {
+      dryRun = true;
+      continue;
+    }
+    if (arg === '--file') {
+      const value = rest[i + 1];
+      if (value === undefined) return usageError(io, 'cmux plan: missing value for --file <path>');
+      if (filePath !== undefined) return usageError(io, 'cmux plan: --file may be given only once');
+      filePath = value;
+      i += 1;
+      continue;
+    }
+    return usageError(io, `cmux plan: unexpected argument "${arg ?? ''}"`);
+  }
+  if (!dryRun) return usageError(io, 'cmux plan: --dry-run is required');
+
+  const resolved = filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+  try {
+    const fm = parseFrontMatter(extractFrontMatter(io.readFile(resolved)));
+    const adapter = io.cmuxAdapter ?? createCmuxAdapter();
+    const plan = adapter.plan(buildPipelineSpec(fm.feature, fm.worktree, resolved));
+    if (!plan.ready) {
+      io.stdout(plan.instructions);
+      return EXIT_OK;
+    }
+    io.stdout(`${JSON.stringify(plan.actions.map((action) => action.args))}\n`);
+    return EXIT_OK;
+  } catch (error) {
+    if (isCorruptState(error)) {
+      const detail = error instanceof Error ? error.message : String(error);
+      io.stderr(`cmux plan: planning file at "${resolved}" is corrupt (${detail}); run \`workflow recover\`\n`);
+      return EXIT_NEEDS_HUMAN;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    io.stderr(`cmux plan: failed: ${detail}\n`);
+    return EXIT_FAILURE;
+  }
+}
+
 // ── new-feature / feature-start ─────────────────────────────────────────────
 
 type FeatureStartArgs =
@@ -616,10 +682,10 @@ function parseFeatureStartArgs(command: string, argv: string[], io: CliIO, allow
   return { ok: true, slug, branch, worktree };
 }
 
-function newFeatureDeps(io: CliIO): NewFeatureDeps {
+function newFeatureDeps(io: CliIO, opts: { cmux?: boolean } = {}): NewFeatureDeps {
   if (io.mkdir === undefined) throw new Error('mkdir seam was not provided');
   const repoRoot = io.cwd();
-  return {
+  const deps: NewFeatureDeps = {
     repoRoot,
     statePath: path.join(repoRoot, STATE_FILE_REL),
     config: loadWorkflowConfigStrict(io, repoRoot),
@@ -628,6 +694,8 @@ function newFeatureDeps(io: CliIO): NewFeatureDeps {
     writeFile: io.writeFile,
     mkdir: io.mkdir,
   };
+  if (opts.cmux === true) deps.cmux = io.cmuxAdapter ?? createCmuxAdapter();
+  return deps;
 }
 
 function runNewFeature(argv: string[], io: CliIO): number {
@@ -636,8 +704,15 @@ function runNewFeature(argv: string[], io: CliIO): number {
   const slugExit = validateSlugArg('new-feature', parsed.slug, io);
   if (slugExit !== undefined) return slugExit;
   try {
-    const result = newFeature(parsed.slug, newFeatureDeps(io));
+    const result = newFeature(parsed.slug, newFeatureDeps(io, { cmux: true }));
     io.stdout(`new-feature: ${result.slug} ${result.branch} ${result.worktree}\n`);
+    if (result.cmux !== undefined) {
+      if (result.cmux.armed) {
+        io.stdout(`cmux: armed panes ${result.cmux.paneIds.join(', ')}\n`);
+      } else {
+        io.stdout(result.cmux.instructions);
+      }
+    }
     return EXIT_OK;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -674,6 +749,68 @@ function validateSlugArg(command: string, slug: string, io: CliIO): number | und
       return usageErrorBare(io, `${command}: invalid <slug>: ${error.message}`);
     }
     throw error;
+  }
+}
+
+// ── await-and-launch ────────────────────────────────────────────────────────
+
+function runAwaitAndLaunch(argv: string[], io: CliIO): number {
+  const parsed = parseCommandArgs('await-and-launch', argv, io, {});
+  if (!parsed.ok) return parsed.exitCode;
+  if (io.now === undefined || io.sleep === undefined || io.launchProcess === undefined) {
+    io.stderr('await-and-launch: internal error: launch edge seams were not provided\n');
+    return EXIT_FAILURE;
+  }
+  const resolved = parsed.args.filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+  const worktree = worktreeOf(resolved);
+  let cmuxAdapter: CmuxAdapter | undefined;
+  const notifyCmux = (message: string): void => {
+    try {
+      const fm = parseFrontMatter(extractFrontMatter(io.readFile(resolved)));
+      cmuxAdapter ??= io.cmuxAdapter ?? createCmuxAdapter();
+      const result = cmuxAdapter.notify(fm.cmux_section, message);
+      if (!result.ok) io.stderr(`await-and-launch: cmux notify skipped: ${result.error ?? 'unavailable'}\n`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      io.stderr(`await-and-launch: cmux notify skipped: ${detail}\n`);
+    }
+  };
+  try {
+    const result = awaitAndLaunch(
+      parsed.args.phase,
+      { wait: true },
+      {
+        planningFile: resolved,
+        config: loadWorkflowConfigStrict(io, worktree),
+        readState: () => parseFrontMatter(extractFrontMatter(io.readFile(resolved))),
+        checkDivergence: () =>
+          computeDivergence({ planningFile: resolved, worktree, readFile: io.readFile, run: io.runGit }),
+        now: io.now,
+        sleep: io.sleep,
+        recordForcedAction: () => {},
+        launchAgent: io.launchProcess,
+        runShip: io.runShip ?? (() => ({
+          status: EXIT_FAILURE,
+          stdout: '',
+          stderr: 'ship is not implemented until S14',
+        })),
+        notify: (notice) => notifyCmux(notice.message),
+      },
+    );
+    const line = `await-and-launch: ${result.phase} ${result.outcome} - ${result.message}\n`;
+    (result.exitCode === EXIT_OK ? io.stdout : io.stderr)(line);
+    return result.exitCode;
+  } catch (error) {
+    if (isCorruptState(error)) {
+      const detail = error instanceof Error ? error.message : String(error);
+      io.stderr(`await-and-launch: planning file at "${resolved}" is corrupt (${detail}); run \`workflow recover\`\n`);
+      return EXIT_NEEDS_HUMAN;
+    }
+    const git = asGitError(error);
+    if (git !== null) return emitGitFailure(io, 'await-and-launch', git);
+    const detail = error instanceof Error ? error.message : String(error);
+    io.stderr(`await-and-launch: failed: ${detail}\n`);
+    return EXIT_FAILURE;
   }
 }
 

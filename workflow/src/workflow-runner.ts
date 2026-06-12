@@ -6,6 +6,7 @@
 // touching the filesystem or the process. Mirrors runner/src/verify-runner.ts.
 
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { runCli } from './cli.ts';
 import type { CliIO } from './cli.ts';
@@ -58,6 +59,19 @@ const realIO: CliIO = {
   sleep: sleepSync,
   claimedBy: process.env.WORKFLOW_CLAIMED_BY ?? '',
   doctorProbes: realDoctorProbes(),
+  launchProcess: (launch) => {
+    const result = spawnSync(launch.file, launch.args, {
+      cwd: launch.cwd,
+      env: { ...process.env, ...launch.env },
+      stdio: 'inherit',
+      shell: false,
+    });
+    return {
+      status: result.status ?? 1,
+      stdout: '',
+      stderr: result.error?.message ?? '',
+    };
+  },
 };
 
 export function main(argv: string[]): number {

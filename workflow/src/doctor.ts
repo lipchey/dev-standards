@@ -31,6 +31,7 @@ import { computeDivergence, splitPlanningFile } from './recover.ts';
 import { SEAT_MAP, TRANSITION_TABLE } from './transitions.ts';
 import type { RunGit } from './trailers.ts';
 import { validate } from '../../runner/src/validate.ts';
+import { probeCmux } from './cmux-adapter.ts';
 
 // ── Result + probe seams ─────────────────────────────────────────────────────
 
@@ -348,10 +349,10 @@ function resolveUnder(root: string, rel: string): string {
 
 // ── Real edge (the runner wires these; tests inject stubs) ────────────────────
 
-// Real probes for the runner edge. The cmux + wrapper adapters do not exist yet
-// (S13 / skill-wrapper generator), so they report "absent" — which BLOCKS the
-// arming checks until those adapters land (the intended pre-arming guard). `gh` is
-// a real CLI, so its probe really runs `gh auth status` with a fixed argv.
+// Real probes for the runner edge. The cmux adapter probes its fixed required
+// verbs; wrappers do not exist until the skill-wrapper generator lands, so they
+// still report "absent" and block arming. `gh` is a real CLI, so its probe runs
+// `gh auth status` with a fixed argv.
 export function realDoctorProbes(): DoctorProbes {
   return {
     fileExists: (filePath) => fs.existsSync(filePath),
@@ -364,7 +365,7 @@ export function realDoctorProbes(): DoctorProbes {
       }
     },
     getEnv: (name) => process.env[name],
-    probeCmux: () => ({ ok: false, detail: 'cmux adapter not yet available (S13); cannot probe sessions' }),
+    probeCmux,
     probeWrapper: (runtime) => ({
       ok: false,
       detail: `${runtime} wrapper adapter not yet available (skill-wrapper generator); cannot verify presence`,

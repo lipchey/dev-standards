@@ -5,6 +5,7 @@ import { parseSubset, serializeFrontMatter, serializeSubset } from './front-matt
 import type { FeatureRecord, FrontMatter, WorkflowConfig } from './types.ts';
 import type { RunGit } from './trailers.ts';
 import { withWorkflowPhaseTrailer } from './trailers.ts';
+import type { CmuxAdapter, CmuxSectionSpec, PaneAgent } from './cmux-adapter.ts';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
 
@@ -40,6 +41,8 @@ export interface NewFeatureDeps {
   readFile: (filePath: string) => string;
   writeFile: (filePath: string, content: string) => void;
   mkdir: (dirPath: string) => void;
+  cmux?: CmuxAdapter;
+  workflowCommand?: string;
 }
 
 export interface FeatureStartResult {
@@ -47,6 +50,12 @@ export interface FeatureStartResult {
   branch: string;
   worktree: string;
   planningFile?: string;
+  cmux?: {
+    armed: boolean;
+    paneIds: string[];
+    instructions: string;
+    error?: string;
+  };
 }
 
 interface PreparedFeatureStart {
@@ -164,6 +173,54 @@ function rollbackBranchAndWorktree(deps: NewFeatureDeps, branch: string, worktre
   }
 }
 
+export function buildPipelineSpec(
+  slug: string,
+  worktree: string,
+  planningFile: string,
+  workflowCommand = 'workflow',
+): CmuxSectionSpec {
+  const phasePanes: Array<{ phase: string; agent: PaneAgent }> = [
+    { phase: 'plan', agent: 'claude' },
+    { phase: 'review-plan', agent: 'codex' },
+    { phase: 'consolidate-plan', agent: 'claude' },
+    { phase: 'implement-plan', agent: 'claude' },
+    { phase: 'review-implementation', agent: 'codex' },
+    { phase: 'ship-feature', agent: 'helper' },
+  ];
+  return {
+    section: slug,
+    worktree,
+    panes: phasePanes.map(({ phase, agent }) => ({
+      pane_id: phase,
+      cwd: worktree,
+      agent,
+      command: [workflowCommand, 'await-and-launch', phase, '--file', planningFile],
+    })),
+  };
+}
+
+function armPipeline(slug: string, worktree: string, planningFile: string, deps: NewFeatureDeps): FeatureStartResult['cmux'] {
+  if (deps.cmux === undefined) return undefined;
+  try {
+    const result = deps.cmux.launch(buildPipelineSpec(slug, worktree, planningFile, deps.workflowCommand));
+    const cmux: NonNullable<FeatureStartResult['cmux']> = {
+      armed: result.ok,
+      paneIds: result.paneIds,
+      instructions: result.instructions,
+    };
+    if (result.error !== undefined) cmux.error = result.error;
+    return cmux;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      armed: false,
+      paneIds: [],
+      instructions: `copy-paste required: cmux arming failed (${detail})\n`,
+      error: detail,
+    };
+  }
+}
+
 export function featureStart(opts: FeatureStartOptions, deps: NewFeatureDeps): FeatureStartResult {
   const prepared = prepareFeatureStart(opts, deps);
   const { slug, branch, worktree } = prepared;
@@ -187,7 +244,10 @@ export function newFeature(slugInput: string, deps: NewFeatureDeps): FeatureStar
     deps.runGit(['add', '--', 'workflow-session-planning.md'], worktree);
     deps.runGit(['commit', '-q', '-m', withWorkflowPhaseTrailer(`workflow(new-feature): created ${slug}`, 'created')], worktree);
     writeRecords(deps, prepared.state, prepared.doc, prepared.records);
-    return { slug, branch, worktree, planningFile };
+    const result: FeatureStartResult = { slug, branch, worktree, planningFile };
+    const cmux = armPipeline(slug, worktree, planningFile, deps);
+    if (cmux !== undefined) result.cmux = cmux;
+    return result;
   } catch (error) {
     rollbackBranchAndWorktree(deps, branch, worktree);
     throw error;

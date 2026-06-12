@@ -10,6 +10,7 @@ import type { FrontMatter } from '../../workflow/src/types.ts';
 import { serializeFrontMatter } from '../../workflow/src/front-matter.ts';
 import { runCli } from '../../workflow/src/cli.ts';
 import type { CliIO } from '../../workflow/src/cli.ts';
+import type { CmuxAdapter, CmuxSectionSpec } from '../../workflow/src/cmux-adapter.ts';
 
 // A complete, schema-valid FrontMatter; tests override only what the case is
 // about. Serialized through the real serializer so the fixture is, by
@@ -217,4 +218,104 @@ test('feature-start-invalid-slug-is-usage-error', () => {
 
   assert.equal(code, EXIT_USAGE);
   assert.match(cap.err(), /invalid.*slug/i);
+});
+
+test('await-and-launch-dispatches-agent-from-config', () => {
+  const workflow = {
+    schema: 1,
+    enabled: true,
+    base_branch: 'main',
+    worktree_parent: '/tmp/worktrees',
+    cmux_mode: 'manual',
+    loopback_mode: 'manual',
+    reviewer_independence: 'different-runtime',
+    required_review_guides: [],
+    commit_exclude: [],
+    archive: true,
+    timeouts: { default_wait_seconds: 60, default_work_seconds: 1800 },
+    budget: { workflow_total_seconds: 5400 },
+    agents: { claude: ['claude', '--model', 'opus'], codex: ['codex', 'exec'] },
+    ship: { ci_wait_seconds: 1800, notify: true },
+    notify: { webhook_env: 'WORKFLOW_NOTIFY_WEBHOOK' },
+  };
+  const launches: Array<{ file: string; args: string[]; cwd: string }> = [];
+  const notifications: Array<{ section: string; message: string }> = [];
+  const cmuxAdapter: CmuxAdapter = {
+    capabilities: () => ({ present: true, version: '1.2.3', verbs: [], missing: [], detail: 'ok' }),
+    plan: () => assert.fail('await-and-launch should not plan panes'),
+    launch: () => assert.fail('await-and-launch should not arm panes'),
+    notify: (section, message) => {
+      notifications.push({ section, message });
+      return { ok: true };
+    },
+  };
+  const planningFile = `${serializeFrontMatter(makeFrontMatter({
+    cmux_section: 'dark-mode-toggle',
+    state: 'created',
+    worktree: '/tmp/worktree',
+  }))}\n# Plan\n`;
+  const cap = makeIO({
+    readFile: (filePath) => filePath.endsWith('quality.json')
+      ? JSON.stringify({ workflow })
+      : planningFile,
+    now: () => 0,
+    sleep: () => {},
+    launchProcess: (launch) => {
+      launches.push(launch);
+      return { status: 0, stdout: '', stderr: '' };
+    },
+    cmuxAdapter,
+  });
+
+  const code = runCli(['await-and-launch', 'plan'], cap.io);
+
+  assert.equal(code, EXIT_OK);
+  assert.equal(launches.length, 1);
+  assert.equal(launches[0]?.file, 'claude');
+  assert.deepEqual(launches[0]?.args.slice(0, 2), ['--model', 'opus']);
+  assert.match(launches[0]?.args.at(-1) ?? '', /workflow phase "plan"/);
+  assert.equal(launches[0]?.cwd, '/tmp/worktree');
+  assert.deepEqual(notifications, [{ section: 'dark-mode-toggle', message: 'launching plan' }]);
+});
+
+test('cmux-plan-dry-run-prints-planned-actions-without-launching', () => {
+  const planned: CmuxSectionSpec[] = [];
+  let launched = false;
+  const cmuxAdapter: CmuxAdapter = {
+    capabilities: () => ({ present: true, version: '1.2.3', verbs: [], missing: [], detail: 'ok' }),
+    plan: (spec) => {
+      planned.push(spec);
+      return {
+        ready: true,
+        capabilities: { present: true, version: '1.2.3', verbs: [], missing: [], detail: 'ok' },
+        actions: [{ verb: 'new_section', args: ['new_section', spec.section, '--cwd', spec.worktree] }],
+        instructions: '',
+      };
+    },
+    launch: () => {
+      launched = true;
+      return { ok: true, paneIds: [], instructions: '' };
+    },
+    notify: () => ({ ok: true }),
+  };
+  const planningFile = `${serializeFrontMatter(makeFrontMatter({
+    feature: 'dry-run-demo',
+    state: 'created',
+    worktree: '/tmp/worktree',
+  }))}\n# Plan\n`;
+  const cap = makeIO({
+    readFile: () => planningFile,
+    cmuxAdapter,
+  });
+
+  const code = runCli(['cmux', 'plan', '--dry-run'], cap.io);
+
+  assert.equal(code, EXIT_OK);
+  assert.equal(launched, false);
+  assert.equal(planned.length, 1);
+  assert.deepEqual(
+    planned[0]?.panes.map((pane) => pane.pane_id),
+    ['plan', 'review-plan', 'consolidate-plan', 'implement-plan', 'review-implementation', 'ship-feature'],
+  );
+  assert.match(cap.out(), /new_section/);
 });
