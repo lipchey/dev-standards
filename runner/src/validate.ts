@@ -14,6 +14,7 @@ type RuleName =
   | 'additional-property'
   | 'min-length'
   | 'min-items'
+  | 'pattern'
   // Semantic rules.
   | 'tier-budget'
   | 'files-token-count'
@@ -25,7 +26,7 @@ type RuleName =
   | 'workspace-name-unique'
   | 'glob-dialect'
   | 'diff-filter-scope'
-  | 'workflow-enabled';
+  | 'workflow-reviewer-independence';
 
 type UniquenessRule = 'fileset-name-unique' | 'check-name-unique' | 'workspace-name-unique';
 
@@ -70,7 +71,35 @@ const CHECK_REQUIRED = ['name', 'argv', 'timeout_seconds'] as const;
 const CHECK_ALLOWED = [...CHECK_REQUIRED, 'skip_if_empty', 'mode', 'baseline', 'bypassable'] as const;
 const REQUIRED_TIERS = ['staged', 'fast', 'full'] as const;
 const TIER_NAMES = ['staged', 'fast', 'full', 'audit'] as const;
-const WORKFLOW_KEYS = ['enabled'] as const;
+
+// workflow §2.8 (ADR-012). `enabled` is always required when the object is
+// present; every other key becomes required only when `enabled` is true.
+const WORKFLOW_BASE_REQUIRED = ['enabled'] as const;
+const WORKFLOW_KEYS = [
+  'schema',
+  'enabled',
+  'base_branch',
+  'worktree_parent',
+  'cmux_mode',
+  'loopback_mode',
+  'reviewer_independence',
+  'required_review_guides',
+  'commit_exclude',
+  'archive',
+  'timeouts',
+  'budget',
+  'agents',
+  'ship',
+  'notify',
+] as const;
+const WORKFLOW_TIMEOUTS_KEYS = ['default_wait_seconds', 'default_work_seconds'] as const;
+const WORKFLOW_BUDGET_KEYS = ['workflow_total_seconds'] as const;
+const WORKFLOW_AGENTS_KEYS = ['claude', 'codex'] as const;
+const WORKFLOW_SHIP_KEYS = ['ci_wait_seconds', 'notify'] as const;
+const WORKFLOW_NOTIFY_KEYS = ['webhook_env'] as const;
+const WORKFLOW_MODES = ['manual', 'auto'] as const;
+const REVIEWER_INDEPENDENCE = ['different-runtime', 'same-runtime'] as const;
+const WEBHOOK_ENV_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
 const FILES_TOKEN = /^\{files:([A-Za-z0-9_-]+)\}$/;
 // The schema dialect allows only `*`, `**`, and literals.
@@ -382,16 +411,161 @@ function validateCheck(value: unknown, path: string, errors: ValidationError[]):
   if (Object.hasOwn(check, 'bypassable')) validateBoolean(check['bypassable'], `${path}.bypassable`, errors);
 }
 
+// workflow §2.8: present-but-disabled (or absent) is valid; enabled:true demands
+// the full shape. Optional fields are still type-checked when present, mirroring
+// the schema. The cross-field seat rule is hand-only (schema cannot express it).
 function validateWorkflow(value: unknown, errors: ValidationError[]): void {
   const workflow = requireRecord(value, 'workflow', errors);
   if (workflow === undefined) return;
-  requireKeys(workflow, 'workflow', WORKFLOW_KEYS, errors);
+  requireKeys(workflow, 'workflow', WORKFLOW_BASE_REQUIRED, errors);
   rejectUnknownKeys(workflow, 'workflow', WORKFLOW_KEYS, errors);
-  if (!Object.hasOwn(workflow, 'enabled')) return;
-  const enabled = workflow['enabled'];
-  // true gets the semantic workflow-enabled error; other values fail const:false here.
-  if (enabled !== false && enabled !== true) {
-    addError(errors, 'workflow.enabled', 'enum', `must be false, got ${describeValue(enabled)}`, enabled);
+  if (Object.hasOwn(workflow, 'enabled')) {
+    validateBoolean(workflow['enabled'], 'workflow.enabled', errors);
+  }
+  validateWorkflowFields(workflow, errors);
+  if (workflow['enabled'] === true) {
+    requireKeys(workflow, 'workflow', WORKFLOW_KEYS, errors);
+    validateReviewerIndependence(workflow, errors);
+  }
+}
+
+function validateWorkflowFields(workflow: Record<string, unknown>, errors: ValidationError[]): void {
+  if (Object.hasOwn(workflow, 'schema')) validateWorkflowSchemaVersion(workflow['schema'], errors);
+  if (Object.hasOwn(workflow, 'base_branch')) {
+    validateNonEmptyString(workflow['base_branch'], 'workflow.base_branch', errors);
+  }
+  if (Object.hasOwn(workflow, 'worktree_parent')) {
+    validateNonEmptyString(workflow['worktree_parent'], 'workflow.worktree_parent', errors);
+  }
+  if (Object.hasOwn(workflow, 'cmux_mode')) {
+    validateEnum(workflow['cmux_mode'], 'workflow.cmux_mode', WORKFLOW_MODES, errors);
+  }
+  if (Object.hasOwn(workflow, 'loopback_mode')) {
+    validateEnum(workflow['loopback_mode'], 'workflow.loopback_mode', WORKFLOW_MODES, errors);
+  }
+  if (Object.hasOwn(workflow, 'reviewer_independence')) {
+    validateEnum(workflow['reviewer_independence'], 'workflow.reviewer_independence', REVIEWER_INDEPENDENCE, errors);
+  }
+  if (Object.hasOwn(workflow, 'required_review_guides')) {
+    validateStringArray(workflow['required_review_guides'], 'workflow.required_review_guides', 0, errors);
+  }
+  if (Object.hasOwn(workflow, 'commit_exclude')) {
+    validateStringArray(workflow['commit_exclude'], 'workflow.commit_exclude', 0, errors);
+  }
+  if (Object.hasOwn(workflow, 'archive')) validateBoolean(workflow['archive'], 'workflow.archive', errors);
+  if (Object.hasOwn(workflow, 'timeouts')) validateWorkflowTimeouts(workflow['timeouts'], errors);
+  if (Object.hasOwn(workflow, 'budget')) validateWorkflowBudget(workflow['budget'], errors);
+  if (Object.hasOwn(workflow, 'agents')) validateWorkflowAgents(workflow['agents'], errors);
+  if (Object.hasOwn(workflow, 'ship')) validateWorkflowShip(workflow['ship'], errors);
+  if (Object.hasOwn(workflow, 'notify')) validateWorkflowNotify(workflow['notify'], errors);
+}
+
+function validateWorkflowSchemaVersion(value: unknown, errors: ValidationError[]): void {
+  if (value !== 1) {
+    addError(
+      errors,
+      'workflow.schema',
+      'enum',
+      `must be 1 (the supported workflow schema version), got ${describeValue(value)}`,
+      value,
+    );
+  }
+}
+
+function validateWorkflowTimeouts(value: unknown, errors: ValidationError[]): void {
+  const timeouts = requireRecord(value, 'workflow.timeouts', errors);
+  if (timeouts === undefined) return;
+  requireKeys(timeouts, 'workflow.timeouts', WORKFLOW_TIMEOUTS_KEYS, errors);
+  rejectUnknownKeys(timeouts, 'workflow.timeouts', WORKFLOW_TIMEOUTS_KEYS, errors);
+  for (const key of WORKFLOW_TIMEOUTS_KEYS) {
+    if (Object.hasOwn(timeouts, key)) {
+      validatePositiveInteger(timeouts[key], `workflow.timeouts.${key}`, errors);
+    }
+  }
+}
+
+function validateWorkflowBudget(value: unknown, errors: ValidationError[]): void {
+  const budget = requireRecord(value, 'workflow.budget', errors);
+  if (budget === undefined) return;
+  requireKeys(budget, 'workflow.budget', WORKFLOW_BUDGET_KEYS, errors);
+  rejectUnknownKeys(budget, 'workflow.budget', WORKFLOW_BUDGET_KEYS, errors);
+  if (Object.hasOwn(budget, 'workflow_total_seconds')) {
+    validatePositiveInteger(budget['workflow_total_seconds'], 'workflow.budget.workflow_total_seconds', errors);
+  }
+}
+
+function validateWorkflowAgents(value: unknown, errors: ValidationError[]): void {
+  const agents = requireRecord(value, 'workflow.agents', errors);
+  if (agents === undefined) return;
+  requireKeys(agents, 'workflow.agents', WORKFLOW_AGENTS_KEYS, errors);
+  rejectUnknownKeys(agents, 'workflow.agents', WORKFLOW_AGENTS_KEYS, errors);
+  for (const key of WORKFLOW_AGENTS_KEYS) {
+    if (Object.hasOwn(agents, key)) validateStringArray(agents[key], `workflow.agents.${key}`, 1, errors);
+  }
+}
+
+function validateWorkflowShip(value: unknown, errors: ValidationError[]): void {
+  const ship = requireRecord(value, 'workflow.ship', errors);
+  if (ship === undefined) return;
+  requireKeys(ship, 'workflow.ship', WORKFLOW_SHIP_KEYS, errors);
+  rejectUnknownKeys(ship, 'workflow.ship', WORKFLOW_SHIP_KEYS, errors);
+  if (Object.hasOwn(ship, 'ci_wait_seconds')) {
+    validatePositiveInteger(ship['ci_wait_seconds'], 'workflow.ship.ci_wait_seconds', errors);
+  }
+  if (Object.hasOwn(ship, 'notify')) validateBoolean(ship['notify'], 'workflow.ship.notify', errors);
+}
+
+function validateWorkflowNotify(value: unknown, errors: ValidationError[]): void {
+  const notify = requireRecord(value, 'workflow.notify', errors);
+  if (notify === undefined) return;
+  requireKeys(notify, 'workflow.notify', WORKFLOW_NOTIFY_KEYS, errors);
+  rejectUnknownKeys(notify, 'workflow.notify', WORKFLOW_NOTIFY_KEYS, errors);
+  if (Object.hasOwn(notify, 'webhook_env')) {
+    validateWebhookEnv(notify['webhook_env'], 'workflow.notify.webhook_env', errors);
+  }
+}
+
+function validateWebhookEnv(value: unknown, path: string, errors: ValidationError[]): void {
+  if (typeof value !== 'string') {
+    addError(errors, path, 'type', `must be a string, got ${describeValue(value)}`, value);
+    return;
+  }
+  if (value.length === 0) {
+    addError(errors, path, 'min-length', 'must be a non-empty string', value);
+    return;
+  }
+  if (!WEBHOOK_ENV_PATTERN.test(value)) {
+    addError(
+      errors,
+      path,
+      'pattern',
+      'must be an environment variable name matching ^[A-Z][A-Z0-9_]*$',
+      value,
+    );
+  }
+}
+
+// Cross-field seat rule (ADR-008), hand-only: a different-runtime split must not
+// put the same executable in both reviewer seats. Skipped when the agents block
+// is structurally broken (those errors are reported separately).
+function validateReviewerIndependence(workflow: Record<string, unknown>, errors: ValidationError[]): void {
+  if (workflow['reviewer_independence'] !== 'different-runtime') return;
+  const agents = workflow['agents'];
+  if (!isRecord(agents)) return;
+  const claudeArgv = agents['claude'];
+  const codexArgv = agents['codex'];
+  if (!isUnknownArray(claudeArgv) || !isUnknownArray(codexArgv)) return;
+  const claudeExe = claudeArgv[0];
+  const codexExe = codexArgv[0];
+  if (typeof claudeExe !== 'string' || typeof codexExe !== 'string') return;
+  if (claudeExe === codexExe) {
+    addError(
+      errors,
+      'workflow.agents',
+      'workflow-reviewer-independence',
+      `reviewer_independence is "different-runtime" but agents.claude[0] and agents.codex[0] are both ${JSON.stringify(claudeExe)}; the two reviewer seats must use different runtimes (ADR-008)`,
+      claudeExe,
+    );
   }
 }
 
@@ -401,7 +575,6 @@ function validateSemantics(root: Record<string, unknown>, errors: ValidationErro
   validateTierCheckSemantics(root, filesetNames, errors);
   validateFilesetSemantics(root, errors);
   validateWorkspaceUniqueness(root, errors);
-  validateWorkflowGate(root, errors);
 }
 
 function collectDeclaredFilesetNames(
@@ -600,21 +773,6 @@ function reportDuplicateNames(
     }
     seen.add(name);
   });
-}
-
-// Phase 1a gate on the semi-automatic workflow layer.
-function validateWorkflowGate(root: Record<string, unknown>, errors: ValidationError[]): void {
-  const workflow = root['workflow'];
-  if (!isRecord(workflow)) return;
-  if (workflow['enabled'] === true) {
-    addError(
-      errors,
-      'workflow.enabled',
-      'workflow-enabled',
-      'workflow.enabled is true, but full workflow validation is not implemented yet; omit workflow or set enabled to false',
-      true,
-    );
-  }
 }
 
 export function validate(value: unknown): ValidationResult {

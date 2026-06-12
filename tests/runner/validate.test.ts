@@ -111,8 +111,8 @@ test('unknown {files:name} token fails with rule files-token-reference', () => {
   expectError(validate(manifest), { rule: 'files-token-reference' });
 });
 
-test('workflow.enabled true fails in Phase 1a with rule workflow-enabled', () => {
+test('workflow.enabled true without the full shape fails with rule required', () => {
   const manifest = makeManifest();
   (manifest as unknown as { workflow: { enabled: boolean } }).workflow = { enabled: true };
-  expectError(validate(manifest), { rule: 'workflow-enabled' });
+  expectError(validate(manifest), { rule: 'required' });
 });

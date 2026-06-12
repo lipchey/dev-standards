@@ -60,6 +60,33 @@ function firstFileset(manifest: Manifest): Fileset {
   return fileset;
 }
 
+// Full §2.8 workflow object; enabled:true demands every key.
+function enabledWorkflow(): Record<string, unknown> {
+  return {
+    schema: 1,
+    enabled: true,
+    base_branch: 'main',
+    worktree_parent: '../worktrees',
+    cmux_mode: 'manual',
+    loopback_mode: 'manual',
+    reviewer_independence: 'different-runtime',
+    required_review_guides: [],
+    commit_exclude: ['reports/**'],
+    archive: true,
+    timeouts: { default_wait_seconds: 1800, default_work_seconds: 1800 },
+    budget: { workflow_total_seconds: 5400 },
+    agents: { claude: ['claude'], codex: ['codex'] },
+    ship: { ci_wait_seconds: 1800, notify: true },
+    notify: { webhook_env: 'WORKFLOW_NOTIFY_WEBHOOK' },
+  };
+}
+
+function withWorkflow(workflow: unknown): Manifest {
+  const manifest = makeManifest();
+  (manifest as unknown as Record<string, unknown>)['workflow'] = workflow;
+  return manifest;
+}
+
 function findError(
   result: ValidationResult,
   match: { path?: string; rule?: string },
@@ -166,10 +193,90 @@ test('duplicate workspace names fail with rule workspace-name-unique', () => {
   expectError(validate(manifest), { path: 'workspaces[1].name', rule: 'workspace-name-unique' });
 });
 
-test('workflow.enabled true pins its error to workflow.enabled', () => {
-  const manifest = makeManifest();
-  (manifest as unknown as { workflow: { enabled: boolean } }).workflow = { enabled: true };
-  expectError(validate(manifest), { path: 'workflow.enabled', rule: 'workflow-enabled' });
+// workflow §2.8: enabled:true requires the full shape; absent/disabled stays valid.
+
+test('enabled-requires-full-shape: enabled:true with no other keys fails with rule required', () => {
+  const result = validate(withWorkflow({ enabled: true }));
+  expectError(result, { path: 'workflow.agents', rule: 'required' });
+  expectError(result, { path: 'workflow.base_branch', rule: 'required' });
+  expectError(result, { path: 'workflow.notify', rule: 'required' });
+});
+
+test('agents-nonempty-argv: an empty agents argv fails with rule min-items', () => {
+  const workflow = enabledWorkflow();
+  workflow['agents'] = { claude: [], codex: ['codex'] };
+  expectError(validate(withWorkflow(workflow)), {
+    path: 'workflow.agents.claude',
+    rule: 'min-items',
+  });
+});
+
+test('same-argv0-different-runtime-error: shared argv[0] fails with rule workflow-reviewer-independence', () => {
+  const workflow = enabledWorkflow();
+  workflow['reviewer_independence'] = 'different-runtime';
+  workflow['agents'] = { claude: ['runtime'], codex: ['runtime'] };
+  expectError(validate(withWorkflow(workflow)), {
+    path: 'workflow.agents',
+    rule: 'workflow-reviewer-independence',
+  });
+});
+
+test('same-runtime tolerates a shared argv[0]', () => {
+  const workflow = enabledWorkflow();
+  workflow['reviewer_independence'] = 'same-runtime';
+  workflow['agents'] = { claude: ['runtime'], codex: ['runtime'] };
+  const result = validate(withWorkflow(workflow));
+  assert.equal(
+    result.ok,
+    true,
+    `expected same-runtime to accept a shared argv[0]; received errors:\n${JSON.stringify(result.errors, null, 2)}`,
+  );
+});
+
+test('positive-integer-budgets-timeouts: non-positive seconds fail with rule type', () => {
+  const workflow = enabledWorkflow();
+  workflow['budget'] = { workflow_total_seconds: 0 };
+  workflow['timeouts'] = { default_wait_seconds: 0, default_work_seconds: 1800 };
+  workflow['ship'] = { ci_wait_seconds: -1, notify: true };
+  const result = validate(withWorkflow(workflow));
+  expectError(result, { path: 'workflow.budget.workflow_total_seconds', rule: 'type' });
+  expectError(result, { path: 'workflow.timeouts.default_wait_seconds', rule: 'type' });
+  expectError(result, { path: 'workflow.ship.ci_wait_seconds', rule: 'type' });
+});
+
+test('webhook-env-pattern: a non-env-var name fails with rule pattern', () => {
+  const workflow = enabledWorkflow();
+  workflow['notify'] = { webhook_env: 'not-an-env-var' };
+  expectError(validate(withWorkflow(workflow)), {
+    path: 'workflow.notify.webhook_env',
+    rule: 'pattern',
+  });
+});
+
+test('disabled-or-absent-passes: minimal and absent workflow both validate', () => {
+  const disabled = validate(withWorkflow({ enabled: false }));
+  assert.equal(
+    disabled.ok,
+    true,
+    `expected {enabled:false} to pass; received errors:\n${JSON.stringify(disabled.errors, null, 2)}`,
+  );
+  const absent = makeManifest();
+  delete (absent as unknown as { workflow?: unknown }).workflow;
+  const absentResult = validate(absent);
+  assert.equal(
+    absentResult.ok,
+    true,
+    `expected an absent workflow to pass; received errors:\n${JSON.stringify(absentResult.errors, null, 2)}`,
+  );
+});
+
+test('a fully specified enabled workflow validates', () => {
+  const result = validate(withWorkflow(enabledWorkflow()));
+  assert.equal(
+    result.ok,
+    true,
+    `expected a full enabled workflow to pass; received errors:\n${JSON.stringify(result.errors, null, 2)}`,
+  );
 });
 
 test('independent violations are all collected in one validate() result', () => {
