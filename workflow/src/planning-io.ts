@@ -118,7 +118,18 @@ export function commitMutation(
   try {
     commitPlanningFile(deps, message);
   } catch (error) {
-    deps.writeFile(deps.planningFile, originalText); // restore the pre-transaction file
+    // Restore the FULL pre-transaction tree, not just the working file: the
+    // in-commit `git add` already staged the advanced planning file, so unstage it
+    // (index -> HEAD) AND write back the original bytes. Otherwise a failed commit
+    // leaves a stale advanced state STAGED in the index that a later raw
+    // `git commit` could land WITHOUT the matching Workflow-Phase trailer.
+    const rel = planningRelPath(deps.worktree, deps.planningFile);
+    try {
+      deps.run(['reset', '-q', '--', rel], deps.worktree); // unstage -> HEAD (best effort)
+    } catch {
+      // never let index cleanup mask the original commit failure
+    }
+    deps.writeFile(deps.planningFile, originalText); // restore the working-tree file
     throw error;
   }
 }

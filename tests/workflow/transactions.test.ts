@@ -745,6 +745,7 @@ test('start-commit-failure-restores-planning-file', () => {
     assert.equal(commitCount(dir), before, 'the rejected commit did not land');
     assert.equal(readFm(planningPath).state, stateBefore, 'the planning file was restored (state UNCHANGED)');
     assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the hook rejection');
+    assert.equal(porcelain(dir), '', 'the tree is fully CLEAN — the advanced state is not left staged in the index');
   } finally {
     cleanup(dir);
   }
@@ -767,6 +768,7 @@ test('complete-commit-failure-restores-planning-file', () => {
     assert.equal(commitCount(dir), before, 'the rejected complete commit did not land');
     assert.equal(readFm(planningPath).state, stateBefore, 'the planning file was restored (not advanced to plan-ready)');
     assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the hook rejection');
+    assert.equal(porcelain(dir), '', 'the tree is fully CLEAN — the advanced state is not left staged in the index');
   } finally {
     cleanup(dir);
   }
