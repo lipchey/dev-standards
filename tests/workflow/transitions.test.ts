@@ -82,6 +82,40 @@ test('changes-requested-is-producer-precondition', () => {
   );
 });
 
+test('changes-requested-misrouted-to-non-producer-throws', () => {
+  // Pin the tightened guard: a loopback state must be a precondition of its
+  // SPECIFIC producer (the phase whose success state is the review row's input
+  // precondition), not merely a precondition of SOME phase. Here we move
+  // plan-changes-requested off its producer (plan) and onto a non-producer
+  // (ship-feature) that nonetheless lists it as a precondition. The old loose
+  // check ("precondition of some phase") would PASS because ship-feature still
+  // lists it; the tightened check must FAIL because plan no longer does.
+  const misrouted = cloneTable();
+  const planRow = misrouted.find((row) => row.phase === 'plan');
+  const shipRow = misrouted.find((row) => row.phase === 'ship-feature');
+  assert.ok(planRow && shipRow, 'clone has plan and ship-feature rows');
+  planRow.preconditions = planRow.preconditions.filter(
+    (state) => state !== 'plan-changes-requested',
+  );
+  shipRow.preconditions = [...shipRow.preconditions, 'plan-changes-requested'];
+
+  // Sanity: the old loose invariant still holds for this mutated copy — the
+  // loopback state IS a precondition of some phase (ship-feature).
+  const allPreconditions = new Set<string>(
+    misrouted.flatMap((row) => [...row.preconditions]),
+  );
+  assert.ok(
+    allPreconditions.has('plan-changes-requested'),
+    'misrouted copy still has plan-changes-requested as a precondition of some phase (would pass the old loose check)',
+  );
+
+  // The tightened guard must reject it: the loopback no longer lands on plan.
+  assert.throws(
+    () => assertTransitionTable(misrouted, SEAT_MAP),
+    /producer/i,
+  );
+});
+
 test('seat-map-covers-all-phases', () => {
   const tablePhases = new Set(TRANSITION_TABLE.map((row) => row.phase));
   const seatPhases = new Set(Object.keys(SEAT_MAP));

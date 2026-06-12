@@ -143,22 +143,87 @@ function assertMainlineOrderContiguous(table: readonly TransitionRow[]): void {
   });
 }
 
-// Each emitted `changes_requested` (loopback) state must be consumable as a
-// precondition of some phase — i.e. it loops back to its producer phase
-// (plan-changes-requested -> plan; impl-changes-requested -> implement-plan).
+// Each emitted `changes_requested` (loopback) state must be a precondition of
+// its SPECIFIC producer phase — the phase that produced the artifact under
+// review and re-runs on changes — not merely a precondition of some phase. The
+// producer is derived structurally (never by phase name): a review row's
+// non-loopback input precondition is its producer's success state (e.g.
+// `review-plan` requires `plan-ready`, and `plan.success === 'plan-ready'`, so
+// the producer is `plan`). We then require the loopback state to be one of that
+// producer's preconditions (e.g. `plan-changes-requested` ∈ `plan`.preconditions),
+// so changes route back to the phase that emitted the reviewed artifact.
 function assertChangesRequestedAreProducerPreconditions(
   table: readonly TransitionRow[],
 ): void {
-  const allPreconditions = new Set<string>(
-    table.flatMap((row) => [...row.preconditions]),
-  );
+  const loopbackStates = collectLoopbackStates(table);
+  const producerBySuccessState = indexProducersBySuccessState(table);
+  for (const reviewRow of table) {
+    const loopbackState = reviewRow.changes_requested;
+    if (loopbackState === null) continue;
+    const producer = deriveProducerPhase(
+      reviewRow,
+      loopbackStates,
+      producerBySuccessState,
+    );
+    assertLoopbackIsProducerPrecondition(reviewRow, producer, loopbackState);
+  }
+}
+
+// The states emitted as `changes_requested` loopbacks by any row.
+function collectLoopbackStates(
+  table: readonly TransitionRow[],
+): ReadonlySet<WorkflowState> {
+  const states = new Set<WorkflowState>();
   for (const row of table) {
-    if (row.changes_requested === null) continue;
-    if (!allPreconditions.has(row.changes_requested)) {
-      throw new Error(
-        `changes_requested state "${row.changes_requested}" (emitted by phase "${row.phase}") is not a precondition of any phase; it has no producer to loop back to`,
-      );
-    }
+    if (row.changes_requested !== null) states.add(row.changes_requested);
+  }
+  return states;
+}
+
+// Indexes each phase by the success state it produces. Success states are
+// unique per phase, so this is a 1:1 map from success-state to producer row.
+function indexProducersBySuccessState(
+  table: readonly TransitionRow[],
+): ReadonlyMap<WorkflowState, TransitionRow> {
+  const index = new Map<WorkflowState, TransitionRow>();
+  for (const row of table) {
+    index.set(row.success, row);
+  }
+  return index;
+}
+
+// Derives a review row's producer structurally: among the row's non-loopback
+// input preconditions, exactly one must be a phase's success state, and that
+// phase is the producer. Throws if a single producer cannot be derived.
+function deriveProducerPhase(
+  reviewRow: TransitionRow,
+  loopbackStates: ReadonlySet<WorkflowState>,
+  producerBySuccessState: ReadonlyMap<WorkflowState, TransitionRow>,
+): TransitionRow {
+  const producers = reviewRow.preconditions
+    .filter((state) => !loopbackStates.has(state))
+    .map((state) => producerBySuccessState.get(state))
+    .filter((row): row is TransitionRow => row !== undefined);
+  const [producer, ...rest] = producers;
+  if (producer === undefined || rest.length > 0) {
+    throw new Error(
+      `cannot derive a single producer for review phase "${reviewRow.phase}" (emits changes_requested "${reviewRow.changes_requested}"): expected exactly one non-loopback precondition that is a phase's success state, found ${producers.length}`,
+    );
+  }
+  return producer;
+}
+
+// The loopback state must be one of its producer's preconditions, so requested
+// changes route back to the phase that produced the reviewed artifact.
+function assertLoopbackIsProducerPrecondition(
+  reviewRow: TransitionRow,
+  producer: TransitionRow,
+  loopbackState: WorkflowState,
+): void {
+  if (!producer.preconditions.includes(loopbackState)) {
+    throw new Error(
+      `changes_requested state "${loopbackState}" (emitted by review phase "${reviewRow.phase}") is not a precondition of its producer phase "${producer.phase}"; the loopback must return to the phase that produced the reviewed artifact`,
+    );
   }
 }
 

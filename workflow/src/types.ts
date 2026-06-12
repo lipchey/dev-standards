@@ -86,7 +86,8 @@ export interface FeatureRecord {
     | 'done';
 }
 
-// §2.8 workflow config, enabled-true shape. The Phase-1 runner declares its own
+// §2.8 workflow config shape; the `{ enabled: false }` minimal form is also
+// valid config (hence `enabled: boolean`). The Phase-1 runner declares its own
 // independent copy of this shape on Manifest.workflow (serialization boundary);
 // this is the workflow module's authoritative version.
 export interface WorkflowConfig {
