@@ -11,6 +11,7 @@ import { runCli } from './cli.ts';
 import type { CliIO } from './cli.ts';
 import { realLockSeams } from './lock.ts';
 import { runGit } from './trailers.ts';
+import { realDoctorProbes } from './doctor.ts';
 
 // Node realpaths import.meta.url under symlinks; realpath both sides for the
 // entrypoint check (the idiom from runner/src/manifest-cli.ts; inlined to keep
@@ -53,6 +54,7 @@ const realIO: CliIO = {
   now: () => Date.now(),
   sleep: sleepSync,
   claimedBy: process.env.WORKFLOW_CLAIMED_BY ?? '',
+  doctorProbes: realDoctorProbes(),
 };
 
 export function main(argv: string[]): number {

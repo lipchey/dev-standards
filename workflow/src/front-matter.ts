@@ -491,6 +491,7 @@ const FM_KEY_SET = new Set<string>([
   'phases',
   'budget_spent',
   'needs_human_reason',
+  'needs_human_from',
   'forced_actions',
 ]);
 const STATE_SET = new Set<string>(WORKFLOW_STATES);
@@ -546,6 +547,18 @@ export function validateFrontMatter(doc: SubsetMap): FrontMatter {
       throw corrupt('bad-needs-human-reason', `needs_human_reason "${nhr.value}" is not in the §2.1 vocabulary`);
     }
     fm.needs_human_reason = nhr.value as NeedsHumanReason;
+  }
+  // The `resume` return state (present only at needs-human). Validated as a real
+  // WorkflowState so a corrupt value is rejected (mirrors needs_human_reason).
+  const nhf = m.get('needs_human_from');
+  if (nhf !== undefined) {
+    if (nhf.kind !== 'string') {
+      throw corrupt('bad-type', 'needs_human_from must be a quoted string');
+    }
+    if (!STATE_SET.has(nhf.value)) {
+      throw corrupt('bad-needs-human-from', `needs_human_from "${nhf.value}" is not a valid WorkflowState`);
+    }
+    fm.needs_human_from = nhf.value as WorkflowState;
   }
   const fa = m.get('forced_actions');
   if (fa !== undefined) {
@@ -756,6 +769,9 @@ function frontMatterToSubset(fm: FrontMatter): SubsetMap {
   ]);
   if (fm.needs_human_reason !== undefined) {
     entries.push(['needs_human_reason', sStr(fm.needs_human_reason)]);
+  }
+  if (fm.needs_human_from !== undefined) {
+    entries.push(['needs_human_from', sStr(fm.needs_human_from)]);
   }
   if (fm.forced_actions !== undefined && fm.forced_actions.length > 0) {
     entries.push(['forced_actions', forcedActionsToSubset(fm.forced_actions)]);

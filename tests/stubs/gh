@@ -1,0 +1,15 @@
+#!/bin/sh
+# Test stub for the `gh` CLI on PATH. `gh auth status` exits with $GH_STUB_EXIT
+# (default 0 = authenticated). doctor's real `gh auth status` probe (shell:false,
+# fixed argv) resolves `gh` via PATH, so prepending this stub's dir exercises the
+# real probe seam deterministically without a real GitHub login.
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  if [ "${GH_STUB_EXIT:-0}" = "0" ]; then
+    echo "github.com: Logged in to github.com account stub-user (oauth_token)"
+    exit 0
+  fi
+  echo "You are not logged into any GitHub hosts." 1>&2
+  exit "${GH_STUB_EXIT}"
+fi
+echo "gh stub: unsupported argv: $*" 1>&2
+exit 2

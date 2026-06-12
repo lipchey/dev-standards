@@ -160,5 +160,11 @@ export interface FrontMatter {
   phases: Partial<Record<WorkflowPhase, PhaseRecord>>;
   budget_spent: { total_seconds: number };
   needs_human_reason?: NeedsHumanReason; // present only at needs-human
+  // The state the workflow was in immediately BEFORE it was set to `needs-human`
+  // — the "return state" `workflow resume` restores. Present only at needs-human;
+  // the producer that sets `needs-human` (Task 11.5) writes it, and `resume`
+  // reads it to return `state` to the prior state. A workflow-internal validator
+  // field (NOT a committed-schema/runner-vocabulary change).
+  needs_human_from?: WorkflowState; // present only at needs-human
   forced_actions?: ForcedAction[]; // present only when a forced action occurred
 }

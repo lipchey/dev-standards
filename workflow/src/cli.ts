@@ -32,6 +32,10 @@ import type { GateOptions, GateResult } from './gate.ts';
 import { complete, requestChanges, start } from './transactions.ts';
 import type { TransactionDeps, TransactionResult } from './transactions.ts';
 import { CommitScopeError } from './commit-scope.ts';
+import { runDoctor } from './doctor.ts';
+import type { DoctorProbes } from './doctor.ts';
+import { resume } from './resume.ts';
+import type { ResumeDeps } from './resume.ts';
 
 // The gate's --wait deadline when the caller does not configure one (the §2.8
 // config default lands with the manifest wiring; the CLI uses a fixed fallback).
@@ -41,6 +45,12 @@ const DEFAULT_GATE_WAIT_SECONDS = 300;
 // the current working directory by default; `--file <path>` overrides for tests
 // and non-conventional layouts.
 const PLANNING_FILE_NAME = 'workflow-session-planning.md';
+
+// The quality manifest (§2.8 workflow config) and the project-facts doc, both at
+// the repo root by convention. `doctor` reads the manifest for the workflow config
+// and checks the project-facts doc exists alongside the required review guides.
+const MANIFEST_FILE_NAME = 'quality.json';
+const PROJECT_FACTS_REL = '.agents/project-facts.md';
 
 const USAGE = [
   'usage: workflow <command> [options]',
@@ -52,6 +62,8 @@ const USAGE = [
   '  complete <phase> [--approved] [--file ...]  finish a phase (review-plan --approved auto-advances)',
   '  request-changes <producer> --reason <text>  loop a reviewed artifact back to its producer',
   '  gate <phase> [--wait] [--force --reason t]  evaluate the three-step gate for a phase',
+  '  resume [--file <path>]                      exit needs-human back to the prior state (by reason)',
+  '  doctor [--arm] [--file ...] [--manifest ..] non-mutating setup/health diagnosis',
   '',
 ].join('\n');
 
@@ -72,6 +84,10 @@ export interface CliIO {
   now?: () => number; // wall clock (ms) for `updated`/budget and the gate --wait
   sleep?: (ms: number) => void; // blocking poll step for the gate --wait
   claimedBy?: string; // caller identity for the owner check / forced actions
+  // doctor's injected effect edge (fs existence/writability, env reads, the
+  // cmux/wrapper/gh probes). Optional so non-doctor callers need not provide it;
+  // the runner edge passes `realDoctorProbes()`.
+  doctorProbes?: DoctorProbes;
 }
 
 function usageError(io: CliIO, message: string): number {
@@ -110,6 +126,10 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
       );
     case 'gate':
       return runGate(rest, io, lockSeams);
+    case 'resume':
+      return runResume(rest, io, lockSeams);
+    case 'doctor':
+      return runDoctorCommand(rest, io);
     default:
       return usageError(io, `unknown command "${command}"`);
   }
@@ -479,6 +499,101 @@ function runGate(argv: string[], io: CliIO, lockSeams: LockSeams | undefined): n
   } catch (error) {
     return mapMutationError(io, 'gate', resolved, error);
   }
+}
+
+// ── resume (exit needs-human) ────────────────────────────────────────────────
+
+// `resume`: the only normal exit from needs-human. State-mutating, so it runs
+// inside the §2.10 mutex and needs the clock + caller identity. It applies the
+// per-reason resolution, records the waiver, and returns to the prior state;
+// corrupt-state refuses with NEEDS_HUMAN pointing at `workflow recover`.
+function runResume(args: string[], io: CliIO, lockSeams: LockSeams | undefined): number {
+  const flag = parseFileFlag('resume', args, io);
+  if (!flag.ok) return flag.exitCode;
+  const edge = requireMutationEdge(io, lockSeams, 'resume');
+  if (typeof edge === 'number') return edge;
+
+  const resolved = flag.filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+  const deps: ResumeDeps = {
+    planningFile: resolved,
+    worktree: worktreeOf(resolved),
+    readFile: io.readFile,
+    writeFile: io.writeFile,
+    run: io.runGit,
+    lockSeams: edge.lockSeams,
+    now: edge.now,
+    claimedBy: edge.claimedBy,
+  };
+
+  try {
+    const result = resume(deps);
+    if (result.exitCode === EXIT_OK) {
+      io.stdout(`resume: ${result.reason} ${result.fromState} -> ${result.toState}\n`);
+    } else {
+      io.stderr(`resume: ${result.message ?? result.outcome}\n`);
+    }
+    return result.exitCode;
+  } catch (error) {
+    return mapMutationError(io, 'resume', resolved, error);
+  }
+}
+
+// ── doctor (non-mutating setup/health diagnosis) ─────────────────────────────
+
+// `doctor`: a list of independent named checks (NON-mutating, no lock), then the
+// transition table. `--arm` runs the "when arming" cmux + wrapper checks; the gh
+// check runs only when the workflow is enabled; notify-env is warn-only. Exit 0
+// when all BLOCKING checks pass, non-zero otherwise. The probe seams (fs/env/cmux/
+// wrapper/gh) are injected via io.doctorProbes (the runner passes realDoctorProbes).
+function runDoctorCommand(args: string[], io: CliIO): number {
+  let filePath: string | undefined;
+  let manifestPath: string | undefined;
+  let arming = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--arm') {
+      arming = true;
+      continue;
+    }
+    if (arg === '--file' || arg === '--manifest') {
+      const value = args[i + 1];
+      if (value === undefined) return usageError(io, `doctor: missing value for ${arg} <path>`);
+      if (arg === '--file') filePath = value;
+      else manifestPath = value;
+      i += 1;
+      continue;
+    }
+    return usageError(io, `doctor: unexpected argument "${arg}"`);
+  }
+
+  if (io.doctorProbes === undefined) {
+    // The runner edge always supplies the probes; their absence is an internal
+    // wiring error, never reachable from a well-formed invocation.
+    io.stderr('doctor: internal error: probe seams were not provided\n');
+    return EXIT_FAILURE;
+  }
+
+  const resolved = filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+  const worktree = worktreeOf(resolved);
+  const result = runDoctor({
+    planningFile: resolved,
+    worktree,
+    manifestPath: manifestPath ?? path.join(worktree, MANIFEST_FILE_NAME),
+    repoRoot: worktree,
+    projectFactsPath: path.join(worktree, PROJECT_FACTS_REL),
+    arming,
+    readFile: io.readFile,
+    run: io.runGit,
+    probes: io.doctorProbes,
+  });
+
+  for (const check of result.checks) {
+    const mark = check.ok ? 'ok' : check.blocking ? 'FAIL' : 'warn';
+    io.stdout(`doctor: [${mark}] ${check.name}: ${check.detail}\n`);
+  }
+  io.stdout(`${result.transitionTable}\n`);
+  io.stdout(`doctor: ${result.ok ? 'all blocking checks passed' : 'one or more blocking checks failed'}\n`);
+  return result.exitCode;
 }
 
 // Maps a thrown error from a mutating verb (or the gate force path) to the §2.7
