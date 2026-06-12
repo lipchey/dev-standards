@@ -1,0 +1,530 @@
+// §6 locked transactions — the state-mutating verbs of the workflow state machine
+// (`start`, `complete`, `request-changes`). Each runs inside the §2.10 worktree
+// mutex (withLock) and each commits the planning file with a matching
+// `Workflow-Phase: <resulting-state>` trailer, so the durable record (HEAD's last
+// reachable trailer) NEVER diverges from the runtime front-matter `state` — the
+// invariant recover.ts/trailers.ts depend on. ADR-009 §2.9 conditional
+// consolidate auto-advance folds `plan-reviewed -> plan-consolidated` into the
+// SAME `complete review-plan --approved` lock-held transaction.
+//
+// The pure decision logic (transition lookup, owner/precondition checks, the
+// auto-advance rule, budget accumulation) is kept separate from the git/fs EDGE
+// (commits, sha capture, file writes), reached only through injected seams
+// (TransactionDeps). Behaviour is unit-tested against real ephemeral git repos
+// with a deterministic injected clock.
+//
+// SHAPES (frozen contract §6):
+//   - `start <phase>`  — claims the phase, advances `state` to the phase's
+//     in-progress state, records start_sha + bumps attempts, ONE trailered commit.
+//   - `complete <planning-phase>` — folds the front-matter mutation into the SAME
+//     commit as the `Workflow-Phase` trailer (single commit).
+//   - `complete implement-plan` — TWO commits in one held lock: (1) the code
+//     commit (code only, NO trailer; complete_sha anchors here), (2) the planning
+//     commit (planning only, WITH trailer).
+//   - `request-changes <producer-phase>` — sets the producer's changes_requested
+//     state, increments loopback_count, accumulates the rejected pass's budget,
+//     ONE trailered commit.
+//
+// complete_sha lag: for the planning-phase `complete`, complete_sha is the sha of
+// the very commit being made (knowable only post-commit), so it is written as a
+// POST-COMMIT record into the working-tree front matter and left UNCOMMITTED.
+// recover deliberately ignores complete_sha; `state` is NEVER advanced outside a
+// trailered commit.
+
+import {
+  EXIT_NEEDS_HUMAN,
+  EXIT_OK,
+  EXIT_WRONG_STATE,
+} from './types.ts';
+import type {
+  FrontMatter,
+  PhaseRecord,
+  WorkflowPhase,
+  WorkflowState,
+} from './types.ts';
+import {
+  parseFrontMatter,
+  serializeFrontMatter,
+  validateReason,
+} from './front-matter.ts';
+import { computeDivergence, splitPlanningFile } from './recover.ts';
+import { withWorkflowPhaseTrailer } from './trailers.ts';
+import type { RunGit } from './trailers.ts';
+import { withLock } from './lock.ts';
+import type { LockSeams } from './lock.ts';
+import { TRANSITION_TABLE } from './transitions.ts';
+import type { TransitionRow } from './transitions.ts';
+import {
+  assertCodeCommitShape,
+  assertOnlyPlanningStaged,
+  CommitScopeError,
+  planningRelPath,
+  stagedPaths,
+  worktreeChangesExcept,
+} from './commit-scope.ts';
+
+// ── Table lookups (derived from the frozen TRANSITION_TABLE; never name-derived) ─
+
+const ROW_BY_PHASE = new Map<WorkflowPhase, TransitionRow>(
+  TRANSITION_TABLE.map((row) => [row.phase, row]),
+);
+
+// Producer phase -> the loopback it owns: the changes_requested state that routes
+// changes back to it, plus the review row that emits it (its `start` state is the
+// `request-changes` precondition). Derived structurally from the table: a review
+// row's non-loopback input precondition is its producer's success state.
+interface Loopback {
+  state: WorkflowState;
+  reviewRow: TransitionRow;
+}
+
+const LOOPBACK_BY_PRODUCER = buildLoopbackByProducer();
+
+function buildLoopbackByProducer(): Map<WorkflowPhase, Loopback> {
+  const successToPhase = new Map<WorkflowState, WorkflowPhase>();
+  const loopbackStates = new Set<WorkflowState>();
+  for (const row of TRANSITION_TABLE) {
+    successToPhase.set(row.success, row.phase);
+    if (row.changes_requested !== null) loopbackStates.add(row.changes_requested);
+  }
+  const map = new Map<WorkflowPhase, Loopback>();
+  for (const reviewRow of TRANSITION_TABLE) {
+    if (reviewRow.changes_requested === null) continue;
+    const producerSuccess = reviewRow.preconditions.find((s) => !loopbackStates.has(s));
+    const producer = producerSuccess === undefined ? undefined : successToPhase.get(producerSuccess);
+    if (producer === undefined) continue;
+    map.set(producer, { state: reviewRow.changes_requested, reviewRow });
+  }
+  return map;
+}
+
+function rowFor(phase: WorkflowPhase): TransitionRow {
+  const row = ROW_BY_PHASE.get(phase);
+  if (row === undefined) {
+    throw new Error(`no transition-table row for phase "${phase}"`);
+  }
+  return row;
+}
+
+// ── Injected edge + result ───────────────────────────────────────────────────
+
+export interface TransactionDeps {
+  planningFile: string;
+  worktree: string;
+  readFile: (filePath: string) => string;
+  writeFile: (filePath: string, content: string) => void;
+  run: RunGit;
+  lockSeams: LockSeams;
+  now: () => number; // ms since epoch; drives `updated` and the budget clock
+  claimedBy: string; // caller identity for the owner check / the phase claim
+}
+
+export type TransactionOutcome =
+  | 'started'
+  | 'completed'
+  | 'changes-requested'
+  | 'wrong-state'
+  | 'wrong-owner'
+  | 'divergence';
+
+export interface TransactionResult {
+  exitCode: number;
+  outcome: TransactionOutcome;
+  phase: WorkflowPhase;
+  fromState: WorkflowState;
+  toState: WorkflowState;
+  autoAdvanced?: boolean; // true only on the §2.9 review-plan --approved auto-advance
+  message?: string;
+}
+
+// ── Shared edge helpers ──────────────────────────────────────────────────────
+
+interface Loaded {
+  fm: FrontMatter;
+  body: string;
+}
+
+// Reads + parses the planning file (markdown front matter + body), reusing the
+// recover.ts split so `serialize(fm) + body` round-trips the markdown.
+function load(deps: TransactionDeps): Loaded {
+  const text = deps.readFile(deps.planningFile);
+  const { frontMatterText, body } = splitPlanningFile(text);
+  return { fm: parseFrontMatter(frontMatterText), body };
+}
+
+function save(deps: TransactionDeps, fm: FrontMatter, body: string): void {
+  deps.writeFile(deps.planningFile, serializeFrontMatter(fm) + body);
+}
+
+// The front-matter subset accepts ONLY bare-second ISO-8601 UTC (`...:SSZ`, no
+// milliseconds), so the millisecond field that toISOString always emits is
+// stripped before it reaches the serializer.
+function nowIso(deps: TransactionDeps): string {
+  return new Date(deps.now()).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function planningRel(deps: TransactionDeps): string {
+  return planningRelPath(deps.worktree, deps.planningFile);
+}
+
+function headSha(deps: TransactionDeps): string {
+  return deps.run(['rev-parse', 'HEAD'], deps.worktree).trim();
+}
+
+function headShaOrNull(deps: TransactionDeps): string | null {
+  try {
+    return headSha(deps);
+  } catch {
+    return null; // unborn HEAD (pre-first-commit) — no base sha to record
+  }
+}
+
+// The entry divergence check (frozen contract): every transaction, after the
+// lock, refuses when the runtime front matter diverges from HEAD's durable
+// trailer, pointing the caller at `workflow recover`.
+function divergence(deps: TransactionDeps): boolean {
+  return computeDivergence({
+    planningFile: deps.planningFile,
+    worktree: deps.worktree,
+    readFile: deps.readFile,
+    run: deps.run,
+  });
+}
+
+// Stages exactly the planning file and commits it (asserting the planning-only
+// commit shape first). The message already carries its Workflow-Phase trailer.
+function commitPlanningFile(deps: TransactionDeps, message: string): void {
+  const rel = planningRel(deps);
+  deps.run(['add', '--', rel], deps.worktree);
+  assertOnlyPlanningStaged(deps.worktree, rel, deps.run);
+  deps.run(['commit', '-q', '-m', message], deps.worktree);
+}
+
+// ── Refusal builders ─────────────────────────────────────────────────────────
+
+function divergenceResult(phase: WorkflowPhase, state: WorkflowState): TransactionResult {
+  return {
+    exitCode: EXIT_NEEDS_HUMAN,
+    outcome: 'divergence',
+    phase,
+    fromState: state,
+    toState: state,
+    message:
+      'front matter diverges from the HEAD Workflow-Phase trailer; run `workflow recover` before proceeding',
+  };
+}
+
+// Wrong-`claimed_by` is an ownership/precondition refusal -> EXIT_WRONG_STATE
+// (§2.7): the caller does not own the phase, so the transition's precondition is
+// unmet. It is not an infra failure (1), nor needs-human (13).
+function wrongOwnerResult(
+  phase: WorkflowPhase,
+  state: WorkflowState,
+  fm: FrontMatter,
+  deps: TransactionDeps,
+): TransactionResult {
+  return {
+    exitCode: EXIT_WRONG_STATE,
+    outcome: 'wrong-owner',
+    phase,
+    fromState: state,
+    toState: state,
+    message: `phase "${phase}" is claimed by "${fm.claimed_by}", not "${deps.claimedBy}"`,
+  };
+}
+
+function wrongStateResult(
+  phase: WorkflowPhase,
+  state: WorkflowState,
+  expected: string,
+): TransactionResult {
+  return {
+    exitCode: EXIT_WRONG_STATE,
+    outcome: 'wrong-state',
+    phase,
+    fromState: state,
+    toState: state,
+    message: `current state "${state}" does not permit ${phase} here (expected ${expected})`,
+  };
+}
+
+// ── Phase-record helpers ─────────────────────────────────────────────────────
+
+// Marks a phase as succeeded in the CURRENT round: last_success_loop = the round
+// (loopback_count). attempts/start_sha are preserved from the matching `start`;
+// complete_sha is set inline when known (implement: the code commit) or null and
+// recorded post-commit (planning-phase complete). A prior auto_advanced flag is
+// preserved.
+function markPhaseSuccess(
+  fm: FrontMatter,
+  phase: WorkflowPhase,
+  loop: number,
+  completeSha: string | null,
+): void {
+  const prev = fm.phases[phase];
+  const record: PhaseRecord = {
+    last_success_loop: loop,
+    attempts: prev?.attempts ?? 0,
+    start_sha: prev?.start_sha ?? null,
+    complete_sha: completeSha,
+  };
+  if (prev?.auto_advanced !== undefined) {
+    record.auto_advanced = prev.auto_advanced;
+  }
+  fm.phases[phase] = record;
+}
+
+function recordCompleteSha(fm: FrontMatter, phase: WorkflowPhase, sha: string): void {
+  const rec = fm.phases[phase];
+  if (rec !== undefined) {
+    rec.complete_sha = sha;
+  }
+}
+
+// ── start ────────────────────────────────────────────────────────────────────
+
+// `start <phase>`: claims the phase for the caller and advances `state` to the
+// phase's in-progress state, in ONE trailered commit (so the durable trailer
+// matches the advanced state — no false-positive divergence on the next entry).
+export function start(phase: WorkflowPhase, deps: TransactionDeps): TransactionResult {
+  return withLock(deps.worktree, deps.lockSeams, () => startInner(phase, deps));
+}
+
+function startInner(phase: WorkflowPhase, deps: TransactionDeps): TransactionResult {
+  const row = rowFor(phase);
+  const { fm, body } = load(deps);
+  const fromState = fm.state;
+  if (divergence(deps)) return divergenceResult(phase, fromState);
+  if (row.start === null) {
+    return wrongStateResult(phase, fromState, 'a phase with an in-progress state');
+  }
+  if (!row.preconditions.includes(fromState)) {
+    return wrongStateResult(phase, fromState, `one of: ${row.preconditions.join(', ')}`);
+  }
+
+  const startSha = headShaOrNull(deps); // base of this attempt (the prior resting commit)
+  const prev = fm.phases[phase];
+  const toState = row.start;
+  fm.state = toState;
+  fm.claimed_by = deps.claimedBy;
+  fm.updated = nowIso(deps);
+  fm.phases[phase] = {
+    last_success_loop: prev?.last_success_loop ?? null,
+    attempts: (prev?.attempts ?? 0) + 1,
+    start_sha: startSha,
+    complete_sha: null,
+  };
+  save(deps, fm, body);
+  commitPlanningFile(deps, withWorkflowPhaseTrailer(`workflow(${phase}): start -> ${toState}`, toState));
+  return { exitCode: EXIT_OK, outcome: 'started', phase, fromState, toState };
+}
+
+// ── complete ─────────────────────────────────────────────────────────────────
+
+export interface CompleteOptions {
+  approved?: boolean;
+}
+
+// `complete <phase>`: the producer/reviewer finishes the phase. Refuses on
+// divergence, wrong owner, or a state that is not the phase's in-progress state.
+// implement-plan uses the two-commit shape; every other phase folds the mutation
+// into a single trailered commit. review-plan --approved auto-advances (§2.9).
+export function complete(
+  phase: WorkflowPhase,
+  opts: CompleteOptions,
+  deps: TransactionDeps,
+): TransactionResult {
+  return withLock(deps.worktree, deps.lockSeams, () => completeInner(phase, opts, deps));
+}
+
+function completeInner(
+  phase: WorkflowPhase,
+  opts: CompleteOptions,
+  deps: TransactionDeps,
+): TransactionResult {
+  const row = rowFor(phase);
+  const { fm, body } = load(deps);
+  const fromState = fm.state;
+  if (divergence(deps)) return divergenceResult(phase, fromState);
+  if (fm.claimed_by !== deps.claimedBy) return wrongOwnerResult(phase, fromState, fm, deps);
+  if (row.start === null || fromState !== row.start) {
+    return wrongStateResult(phase, fromState, `${row.start ?? '(no in-progress state)'}`);
+  }
+  if (phase === 'implement-plan') {
+    return completeImplement(phase, row, fromState, fm, body, deps);
+  }
+  return completePlanning(phase, row, opts, fromState, fm, body, deps);
+}
+
+// Single-commit completion: the front-matter mutation rides in the SAME commit as
+// the Workflow-Phase trailer. review-plan --approved additionally auto-advances to
+// plan-consolidated within this one commit (§2.9), writing the consolidate phase's
+// auto-advance record so its gate observes ALREADY_DONE.
+function completePlanning(
+  phase: WorkflowPhase,
+  row: TransitionRow,
+  opts: CompleteOptions,
+  fromState: WorkflowState,
+  fm: FrontMatter,
+  body: string,
+  deps: TransactionDeps,
+): TransactionResult {
+  const loop = fm.loopback_count;
+  const autoAdvance = phase === 'review-plan' && opts.approved === true;
+
+  markPhaseSuccess(fm, phase, loop, null); // complete_sha set post-commit (the commit being made)
+
+  let toState: WorkflowState = row.success;
+  if (autoAdvance) {
+    toState = 'plan-consolidated';
+    // §2.9 pinned auto-advance write: consolidate is marked done in this round so
+    // the consolidate pane's gate returns ALREADY_DONE without launching an agent.
+    const prevConsolidate = fm.phases['consolidate-plan'];
+    fm.phases['consolidate-plan'] = {
+      last_success_loop: loop,
+      attempts: (prevConsolidate?.attempts ?? 0) + 1,
+      start_sha: null,
+      complete_sha: null, // set post-commit (same commit as the review-plan trailer)
+      auto_advanced: true,
+    };
+  }
+
+  fm.state = toState;
+  fm.updated = nowIso(deps);
+  save(deps, fm, body);
+  // withWorkflowPhaseTrailer normalizes to ONE value = the final resting state.
+  commitPlanningFile(
+    deps,
+    withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${toState}`, toState),
+  );
+
+  // Post-commit record: complete_sha is the sha of the commit just made. Written
+  // into the working-tree front matter and left UNCOMMITTED (recover ignores it).
+  const sha = headSha(deps);
+  recordCompleteSha(fm, phase, sha);
+  if (autoAdvance) recordCompleteSha(fm, 'consolidate-plan', sha);
+  save(deps, fm, body);
+
+  const result: TransactionResult = {
+    exitCode: EXIT_OK,
+    outcome: 'completed',
+    phase,
+    fromState,
+    toState,
+  };
+  if (autoAdvance) result.autoAdvanced = true;
+  return result;
+}
+
+// Two-commit completion for implement-plan, inside the one held lock:
+//   (1) the CODE commit — every worktree change except the planning file, NO
+//       trailer. complete_sha anchors HERE (the durable implementation work).
+//   (2) the planning commit — the planning file only, WITH the `implemented`
+//       trailer and the front-matter mutation (incl. complete_sha = commit 1).
+function completeImplement(
+  phase: WorkflowPhase,
+  row: TransitionRow,
+  fromState: WorkflowState,
+  fm: FrontMatter,
+  body: string,
+  deps: TransactionDeps,
+): TransactionResult {
+  const rel = planningRel(deps);
+
+  // (1) code commit — enumerate + stage code paths one at a time (never add -A).
+  const codePaths = worktreeChangesExcept(deps.worktree, rel, deps.run);
+  assertCodeCommitShape(codePaths);
+  for (const p of codePaths) deps.run(['add', '--', p], deps.worktree);
+  // Defense in depth: the planning file must never ride in the code commit.
+  if (stagedPaths(deps.worktree, deps.run).includes(rel)) {
+    throw new CommitScopeError(
+      `the implement-plan code commit must not include the planning file "${rel}"`,
+    );
+  }
+  deps.run(['commit', '-q', '-m', `workflow(${phase}): implementation`], deps.worktree); // NO trailer
+  const codeSha = headSha(deps);
+
+  // (2) planning commit — complete_sha = the code commit, durably recorded here.
+  markPhaseSuccess(fm, phase, fm.loopback_count, codeSha);
+  fm.state = row.success; // 'implemented'
+  fm.updated = nowIso(deps);
+  save(deps, fm, body);
+  commitPlanningFile(
+    deps,
+    withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${row.success}`, row.success),
+  );
+  return { exitCode: EXIT_OK, outcome: 'completed', phase, fromState, toState: row.success };
+}
+
+// ── request-changes ──────────────────────────────────────────────────────────
+
+export interface RequestChangesOptions {
+  reason: string;
+}
+
+// `request-changes <producer-phase> --reason <text>`: the reviewer bounces the
+// reviewed artifact back to its producer. Sets the producer's changes_requested
+// state, increments loopback_count, accumulates the rejected pass's budget, and
+// commits the planning file (reason in the commit body) with the loopback-state
+// trailer. The gate's self-completion check keys on
+// phases[P].last_success_loop == loopback_count, so the bumped loopback_count
+// re-opens every phase's gate for the new round (re-review is never skipped).
+export function requestChanges(
+  producer: WorkflowPhase,
+  opts: RequestChangesOptions,
+  deps: TransactionDeps,
+): TransactionResult {
+  return withLock(deps.worktree, deps.lockSeams, () => requestChangesInner(producer, opts, deps));
+}
+
+function requestChangesInner(
+  producer: WorkflowPhase,
+  opts: RequestChangesOptions,
+  deps: TransactionDeps,
+): TransactionResult {
+  const loopback = LOOPBACK_BY_PRODUCER.get(producer);
+  if (loopback === undefined) {
+    // Not a producer that owns a changes_requested loopback (e.g. a review phase).
+    const { fm } = load(deps);
+    return wrongStateResult(producer, fm.state, 'a producer phase with a changes-requested loopback');
+  }
+  validateReason(opts.reason); // ASCII, <=200, no control chars (front-matter.ts)
+
+  const { fm, body } = load(deps);
+  const fromState = fm.state;
+  if (divergence(deps)) return divergenceResult(producer, fromState);
+  if (fm.claimed_by !== deps.claimedBy) return wrongOwnerResult(producer, fromState, fm, deps);
+  // Precondition: the review that produced the rejection is in progress.
+  if (fromState !== loopback.reviewRow.start) {
+    return wrongStateResult(producer, fromState, `${loopback.reviewRow.start}`);
+  }
+
+  // Budget accumulation (this task): add the rejected review pass's duration,
+  // measured from the last state change via the injected clock.
+  // SEAM (Task 11.5): the budget-exhausted / loopback-cap needs-human TRIGGERS
+  // are added HERE — checking fm.budget_spent.total_seconds against the configured
+  // budget and fm.loopback_count against fm.loopback_cap, routing to needs-human
+  // instead of committing the loopback. This task only ACCUMULATES; no trigger.
+  const elapsed = passDurationSeconds(fm.updated, deps.now());
+  fm.budget_spent = { total_seconds: fm.budget_spent.total_seconds + elapsed };
+  fm.loopback_count += 1;
+
+  fm.state = loopback.state;
+  fm.updated = nowIso(deps);
+  save(deps, fm, body);
+  const message = withWorkflowPhaseTrailer(
+    `workflow(${producer}): changes requested -> ${loopback.state}\n\n${opts.reason}`,
+    loopback.state,
+  );
+  commitPlanningFile(deps, message);
+  return { exitCode: EXIT_OK, outcome: 'changes-requested', phase: producer, fromState, toState: loopback.state };
+}
+
+// Whole-second duration between the previous `updated` timestamp and now, clamped
+// to >= 0 (an unparseable timestamp or a non-monotonic clock contributes 0).
+function passDurationSeconds(prevUpdatedIso: string, nowMs: number): number {
+  const prev = Date.parse(prevUpdatedIso);
+  if (!Number.isFinite(prev)) return 0;
+  const delta = Math.floor((nowMs - prev) / 1000);
+  return delta > 0 ? delta : 0;
+}

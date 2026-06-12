@@ -1,0 +1,581 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  EXIT_ALREADY_DONE,
+  EXIT_OK,
+  EXIT_WRONG_STATE,
+} from '../../workflow/src/types.ts';
+import type { FrontMatter, WorkflowState } from '../../workflow/src/types.ts';
+import { parseFrontMatter, serializeFrontMatter } from '../../workflow/src/front-matter.ts';
+import {
+  readHeadWorkflowPhase,
+  runGit,
+  withWorkflowPhaseTrailer,
+} from '../../workflow/src/trailers.ts';
+import { computeDivergence, splitPlanningFile } from '../../workflow/src/recover.ts';
+import { lockPathFor, realLockSeams } from '../../workflow/src/lock.ts';
+import type { LockSeams } from '../../workflow/src/lock.ts';
+import { gate } from '../../workflow/src/gate.ts';
+import type { GateDeps } from '../../workflow/src/gate.ts';
+import { complete, requestChanges, start } from '../../workflow/src/transactions.ts';
+import type { TransactionDeps } from '../../workflow/src/transactions.ts';
+import { runCli } from '../../workflow/src/cli.ts';
+import type { CliIO } from '../../workflow/src/cli.ts';
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
+
+const PLANNING_FILE = 'workflow-session-planning.md';
+const BODY = '\n# Plan\n\nthe plan body lives here\n';
+const T0 = '2026-06-10T12:00:00Z';
+
+// Distinct seat identities (claimed_by is just an opaque string). The producer
+// owner claims plan/consolidate/implement; the reviewer owner claims the reviews.
+const PRODUCER = 'pane-1:claude';
+const REVIEWER = 'pane-2:codex';
+
+function makeFrontMatter(overrides: Partial<FrontMatter> = {}): FrontMatter {
+  return {
+    feature: 'dark-mode-toggle',
+    branch: 'feature/dark-mode-toggle',
+    worktree: '../app-dark-mode-toggle',
+    base: 'main',
+    base_sha: '9c1f2a',
+    cmux_section: 'dark-mode-toggle',
+    state: 'created',
+    loopback_count: 0,
+    loopback_cap: 2,
+    claimed_by: '',
+    updated: T0,
+    phases: {},
+    budget_spent: { total_seconds: 0 },
+    ...overrides,
+  };
+}
+
+function initRepo(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-tx-'));
+  runGit(['init', '-q'], dir);
+  runGit(['config', 'user.email', 'test@example.com'], dir);
+  runGit(['config', 'user.name', 'Workflow Test'], dir);
+  runGit(['config', 'commit.gpgsign', 'false'], dir);
+  return dir;
+}
+
+function cleanup(dir: string): void {
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// Writes + commits a starting planning file whose Workflow-Phase trailer matches
+// its `state`, so the durable record and runtime state agree (no divergence) at
+// the start of a scenario. Returns the planning-file path.
+function seed(dir: string, overrides: Partial<FrontMatter> = {}): string {
+  const fm = makeFrontMatter(overrides);
+  const planningPath = path.join(dir, PLANNING_FILE);
+  fs.writeFileSync(planningPath, serializeFrontMatter(fm) + BODY);
+  runGit(['add', '--', PLANNING_FILE], dir);
+  runGit(['commit', '-q', '-m', withWorkflowPhaseTrailer('seed', fm.state)], dir);
+  return planningPath;
+}
+
+interface DepOpts {
+  claimedBy?: string;
+  now?: () => number;
+  lockSeams?: LockSeams;
+}
+
+function txDeps(dir: string, planningPath: string, opts: DepOpts = {}): TransactionDeps {
+  return {
+    planningFile: planningPath,
+    worktree: dir,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    writeFile: (p, c) => fs.writeFileSync(p, c),
+    run: runGit,
+    lockSeams: opts.lockSeams ?? realLockSeams(),
+    now: opts.now ?? (() => Date.parse(T0)),
+    claimedBy: opts.claimedBy ?? PRODUCER,
+  };
+}
+
+function readFm(planningPath: string): FrontMatter {
+  const { frontMatterText } = splitPlanningFile(fs.readFileSync(planningPath, 'utf8'));
+  return parseFrontMatter(frontMatterText);
+}
+
+function diverged(dir: string, planningPath: string): boolean {
+  return computeDivergence({
+    planningFile: planningPath,
+    worktree: dir,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    run: runGit,
+  });
+}
+
+function gateDeps(dir: string, planningPath: string): GateDeps {
+  return {
+    readState: () => readFm(planningPath),
+    checkDivergence: () => diverged(dir, planningPath),
+    now: () => 0,
+    sleep: () => {},
+    recordForcedAction: () => {},
+  };
+}
+
+function commitCount(dir: string): number {
+  const out = runGit(['rev-list', '--count', 'HEAD'], dir).trim();
+  return out === '' ? 0 : Number(out);
+}
+
+function revParse(dir: string, rev: string): string {
+  return runGit(['rev-parse', rev], dir).trim();
+}
+
+function commitMessage(dir: string, rev: string): string {
+  return runGit(['log', '-1', '--format=%B', rev], dir);
+}
+
+function commitFiles(dir: string, rev: string): string[] {
+  return runGit(['show', '--name-only', '--format=', rev], dir)
+    .split('\n')
+    .filter((l) => l !== '');
+}
+
+function writeCode(dir: string, name: string, contents: string): string {
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, contents);
+  return p;
+}
+
+// Drives plan -> plan-ready (start + complete) under the producer owner.
+function drivePlanReady(dir: string, planningPath: string, opts: DepOpts = {}): void {
+  start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER, ...opts }));
+  complete('plan', {}, txDeps(dir, planningPath, { claimedBy: PRODUCER, ...opts }));
+}
+
+// Drives plan-ready -> review-plan-inprogress (start review-plan) under reviewer.
+function driveReviewPlanInprogress(dir: string, planningPath: string, opts: DepOpts = {}): void {
+  drivePlanReady(dir, planningPath, opts);
+  start('review-plan', txDeps(dir, planningPath, { claimedBy: REVIEWER, ...opts }));
+}
+
+// ── 1. start ─────────────────────────────────────────────────────────────────
+
+test('start-sets-claimed-start-sha-attempts', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    const seedSha = revParse(dir, 'HEAD');
+
+    const res = start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+
+    assert.equal(res.exitCode, EXIT_OK);
+    assert.equal(res.outcome, 'started');
+    assert.equal(res.toState, 'plan-inprogress');
+
+    const fm = readFm(planningPath);
+    assert.equal(fm.state, 'plan-inprogress');
+    assert.equal(fm.claimed_by, PRODUCER, 'start claims the phase for the caller');
+    const record = fm.phases.plan;
+    assert.ok(record, 'a plan phase record is created');
+    assert.equal(record.start_sha, seedSha, 'start_sha anchors on the prior resting commit');
+    assert.equal(record.attempts, 1, 'attempts is incremented from 0');
+    assert.equal(diverged(dir, planningPath), false, 'start carries its own trailer');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── 2. complete (single-commit fold) ─────────────────────────────────────────
+
+test('complete-folds-mutation-into-trailer-commit', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    const before = commitCount(dir);
+
+    const res = complete('plan', {}, txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+
+    assert.equal(res.exitCode, EXIT_OK);
+    assert.equal(res.toState, 'plan-ready');
+    assert.equal(commitCount(dir), before + 1, 'the mutation folds into ONE commit');
+    assert.match(commitMessage(dir, 'HEAD'), /Workflow-Phase: plan-ready/, 'trailer rides the same commit');
+    assert.deepEqual(commitFiles(dir, 'HEAD'), [PLANNING_FILE], 'only the planning file is committed');
+
+    const fm = readFm(planningPath);
+    assert.equal(fm.state, 'plan-ready', 'front-matter mutation is folded in');
+    assert.equal(fm.phases.plan?.last_success_loop, 0, 'phase marked succeeded in this round');
+    assert.equal(fm.phases.plan?.complete_sha, revParse(dir, 'HEAD'), 'complete_sha recorded post-commit (= the commit just made)');
+    assert.equal(diverged(dir, planningPath), false);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── 3. implement-plan two-commit shape ───────────────────────────────────────
+
+test('implement-two-commit-shape-anchors-on-code-commit', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    drivePlanReady(dir, planningPath);
+    start('review-plan', txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    complete('review-plan', { approved: true }, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    // plan-consolidated reached via auto-advance; now implement.
+    start('implement-plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    writeCode(dir, 'feature.ts', 'export const f = 1;\n');
+    writeCode(dir, 'helper.ts', 'export const g = 2;\n');
+    const before = commitCount(dir);
+
+    const res = complete('implement-plan', {}, txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+
+    assert.equal(res.exitCode, EXIT_OK);
+    assert.equal(res.toState, 'implemented');
+    assert.equal(commitCount(dir), before + 2, 'two commits: code, then planning');
+
+    // HEAD = the planning commit: planning file only, WITH the trailer.
+    assert.deepEqual(commitFiles(dir, 'HEAD'), [PLANNING_FILE]);
+    assert.match(commitMessage(dir, 'HEAD'), /Workflow-Phase: implemented/);
+
+    // HEAD~1 = the CODE commit: the code files, NO trailer. complete_sha anchors here.
+    const codeSha = revParse(dir, 'HEAD~1');
+    assert.deepEqual(commitFiles(dir, 'HEAD~1').sort(), ['feature.ts', 'helper.ts']);
+    assert.doesNotMatch(commitMessage(dir, 'HEAD~1'), /Workflow-Phase:/, 'the code commit carries no trailer');
+
+    const fm = readFm(planningPath);
+    assert.equal(fm.phases['implement-plan']?.complete_sha, codeSha, 'complete_sha anchors on the CODE commit');
+    assert.equal(fm.state, 'implemented');
+    assert.equal(readHeadWorkflowPhase(dir, runGit), 'implemented', 'trailer reachable past the untrailed code commit');
+    assert.equal(diverged(dir, planningPath), false);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── 4. ownership refusal ─────────────────────────────────────────────────────
+
+test('complete-refuses-wrong-claimed-by', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    start('plan', txDeps(dir, planningPath, { claimedBy: 'owner-A' }));
+    const before = commitCount(dir);
+
+    const res = complete('plan', {}, txDeps(dir, planningPath, { claimedBy: 'intruder-B' }));
+
+    assert.equal(res.outcome, 'wrong-owner');
+    assert.equal(res.exitCode, EXIT_WRONG_STATE, 'a wrong-claimed_by refusal maps to WRONG_STATE (ownership precondition)');
+    assert.equal(commitCount(dir), before, 'a refused complete makes no commit');
+    assert.equal(readFm(planningPath).state, 'plan-inprogress', 'state is untouched');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── 5. request-changes accumulation ──────────────────────────────────────────
+
+test('request-changes-increments-loopback-and-budget', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    const clock = () => Date.parse(T0);
+    driveReviewPlanInprogress(dir, planningPath, { now: clock });
+    // The review pass runs for 5s before changes are requested.
+    const later = () => Date.parse(T0) + 5000;
+
+    const res = requestChanges(
+      'plan',
+      { reason: 'tighten the error handling' },
+      txDeps(dir, planningPath, { claimedBy: REVIEWER, now: later }),
+    );
+
+    assert.equal(res.exitCode, EXIT_OK);
+    assert.equal(res.outcome, 'changes-requested');
+    assert.equal(res.toState, 'plan-changes-requested');
+
+    const fm = readFm(planningPath);
+    assert.equal(fm.loopback_count, 1, 'loopback_count is incremented');
+    assert.equal(fm.budget_spent.total_seconds, 5, 'the rejected pass duration is accumulated');
+    assert.equal(fm.state, 'plan-changes-requested');
+    assert.match(commitMessage(dir, 'HEAD'), /tighten the error handling/, 'the reason rides the commit body');
+    assert.equal(diverged(dir, planningPath), false);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── 6. ADR-009 auto-advance ──────────────────────────────────────────────────
+
+test('approved-review-plan-auto-advances-same-transaction', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    driveReviewPlanInprogress(dir, planningPath);
+    const before = commitCount(dir);
+
+    const res = complete('review-plan', { approved: true }, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+
+    assert.equal(res.autoAdvanced, true, 'the approved review auto-advances');
+    assert.equal(res.toState, 'plan-consolidated');
+    assert.equal(commitCount(dir), before + 1, 'the auto-advance is the SAME transaction (one commit)');
+
+    const fm = readFm(planningPath);
+    assert.equal(fm.state, 'plan-consolidated');
+    assert.equal(fm.phases['review-plan']?.last_success_loop, 0);
+    // §2.9 pinned write shape.
+    const consolidate = fm.phases['consolidate-plan'];
+    assert.ok(consolidate, 'a consolidate-plan record is written');
+    assert.equal(consolidate.auto_advanced, true, 'auto_advanced: true is written');
+    assert.equal(consolidate.last_success_loop, 0, 'keyed on the current loopback_count');
+    assert.equal(readHeadWorkflowPhase(dir, runGit), 'plan-consolidated', 'the single trailer is the final resting state');
+
+    // §2.9: the consolidate gate now observes ALREADY_DONE (no agent launched).
+    const g = gate('consolidate-plan', { waitSeconds: 60 }, gateDeps(dir, planningPath));
+    assert.equal(g.outcome, 'already-done');
+    assert.equal(g.exitCode, EXIT_ALREADY_DONE);
+    assert.equal(diverged(dir, planningPath), false);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── 7. no auto-advance without --approved ────────────────────────────────────
+
+test('non-approved-review-plan-does-not-auto-advance', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    driveReviewPlanInprogress(dir, planningPath);
+
+    const res = complete('review-plan', {}, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+
+    assert.notEqual(res.autoAdvanced, true);
+    assert.equal(res.toState, 'plan-reviewed', 'state rests at plan-reviewed');
+
+    const fm = readFm(planningPath);
+    assert.equal(fm.state, 'plan-reviewed');
+    assert.equal(fm.phases['consolidate-plan'], undefined, 'consolidate is NOT auto-advanced');
+
+    // The consolidate gate still PROCEEDs (its precondition is met), not already-done.
+    const g = gate('consolidate-plan', { waitSeconds: 60 }, gateDeps(dir, planningPath));
+    assert.equal(g.outcome, 'proceed');
+    assert.equal(diverged(dir, planningPath), false);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── 8. last_success_loop keying ──────────────────────────────────────────────
+
+test('re-review-not-skipped-after-loopback', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    // Round 0: plan -> review-plan --approved (review-plan.last_success_loop = 0).
+    driveReviewPlanInprogress(dir, planningPath);
+    complete('review-plan', { approved: true }, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+
+    // In round 0 the review-plan gate self-completes (skips re-running).
+    const round0 = gate('review-plan', { waitSeconds: 60 }, gateDeps(dir, planningPath));
+    assert.equal(round0.outcome, 'already-done', 'round 0: keyed on last_success_loop == loopback_count');
+
+    // Advance to a review-implementation that loops back to implement-plan,
+    // bumping the global loopback_count to 1.
+    start('implement-plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    writeCode(dir, 'impl.ts', 'export const x = 1;\n');
+    complete('implement-plan', {}, txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    start('review-implementation', txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    const rc = requestChanges('implement-plan', { reason: 'rework the edge case' }, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    assert.equal(rc.toState, 'impl-changes-requested');
+    assert.equal(readFm(planningPath).loopback_count, 1, 'the loopback bumped the global counter');
+
+    // After the loopback, review-plan's prior-round success no longer keys to the
+    // current round, so its gate is NOT skipped (re-review is never lost).
+    const round1 = gate('review-plan', { waitSeconds: 60 }, gateDeps(dir, planningPath));
+    assert.notEqual(round1.outcome, 'already-done', 'after the loopback the prior success does not skip re-review');
+    assert.notEqual(round1.exitCode, EXIT_ALREADY_DONE);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── 9. lock serialization ────────────────────────────────────────────────────
+
+test('concurrent-complete-vs-request-changes-serialized', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    driveReviewPlanInprogress(dir, planningPath);
+    const before = commitCount(dir);
+
+    // Simulate another holder of the worktree mutex: a live-PID lockfile.
+    fs.writeFileSync(
+      lockPathFor(dir),
+      JSON.stringify({ pid: process.pid, hostname: os.hostname(), acquired_at: T0 }),
+    );
+
+    // Fast-failing seams: the clock jumps past the retry budget, the holder PID is
+    // alive (never stolen), sleep is a no-op -> deterministic LOCK_BUSY in zero time.
+    const busySeams = (): LockSeams => {
+      let t = Date.parse(T0);
+      return {
+        now: () => {
+          const v = t;
+          t += 10_000;
+          return v;
+        },
+        sleep: () => {},
+        isPidAlive: () => true,
+        pid: process.pid,
+        hostname: os.hostname(),
+        warn: () => {},
+      };
+    };
+
+    // Both mutating verbs are serialized behind the held lock -> LOCK_BUSY.
+    assert.throws(
+      () => complete('review-plan', { approved: true }, txDeps(dir, planningPath, { claimedBy: REVIEWER, lockSeams: busySeams() })),
+      /LOCK_BUSY|could not acquire/,
+      'complete is blocked while the lock is held',
+    );
+    assert.throws(
+      () => requestChanges('plan', { reason: 'x' }, txDeps(dir, planningPath, { claimedBy: REVIEWER, lockSeams: busySeams() })),
+      /LOCK_BUSY|could not acquire/,
+      'request-changes is blocked while the lock is held',
+    );
+    assert.equal(commitCount(dir), before, 'no blocked verb mutated anything');
+    assert.equal(readFm(planningPath).state, 'review-plan-inprogress', 'state untouched while serialized out');
+
+    // Release the lock: exactly one verb now proceeds (serialized, one at a time).
+    fs.unlinkSync(lockPathFor(dir));
+    const res = requestChanges('plan', { reason: 'rework it' }, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    assert.equal(res.exitCode, EXIT_OK);
+    assert.equal(readFm(planningPath).state, 'plan-changes-requested');
+    assert.equal(readFm(planningPath).loopback_count, 1);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── 10. the divergence invariant (robustness, beyond the pinned set) ─────────
+
+test('happy-path-never-diverges', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    assert.equal(diverged(dir, planningPath), false, 'rest: created');
+
+    start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    assert.equal(diverged(dir, planningPath), false, 'rest: plan-inprogress');
+    complete('plan', {}, txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    assert.equal(diverged(dir, planningPath), false, 'rest: plan-ready');
+
+    start('review-plan', txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    assert.equal(diverged(dir, planningPath), false, 'rest: review-plan-inprogress');
+    complete('review-plan', { approved: true }, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    assert.equal(diverged(dir, planningPath), false, 'rest: plan-consolidated (auto-advanced)');
+
+    start('implement-plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    assert.equal(diverged(dir, planningPath), false, 'rest: implement-inprogress');
+    writeCode(dir, 'src.ts', 'export const v = 42;\n');
+    complete('implement-plan', {}, txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    assert.equal(diverged(dir, planningPath), false, 'rest: implemented (past the untrailed code commit)');
+
+    start('review-implementation', txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    assert.equal(diverged(dir, planningPath), false, 'rest: review-impl-inprogress');
+    complete('review-implementation', { approved: true }, txDeps(dir, planningPath, { claimedBy: REVIEWER }));
+    assert.equal(diverged(dir, planningPath), false, 'rest: implementation-reviewed');
+
+    assert.equal(readFm(planningPath).state, 'implementation-reviewed', 'reached the end of the reviewed main line');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ── CLI wiring (file-reading callers through runCli) ─────────────────────────
+
+interface CliCapture {
+  io: CliIO;
+  out: () => string;
+  err: () => string;
+}
+
+function makeCliIO(dir: string, claimedBy: string): CliCapture {
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: CliIO = {
+    cwd: () => dir,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    writeFile: (p, c) => fs.writeFileSync(p, c),
+    runGit,
+    stdout: (t) => out.push(t),
+    stderr: (t) => err.push(t),
+    now: () => Date.parse(T0),
+    sleep: () => {},
+    claimedBy,
+  };
+  return { io, out: () => out.join(''), err: () => err.join('') };
+}
+
+test('cli-wires-start-complete-and-gate', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    const cap = makeCliIO(dir, PRODUCER);
+
+    assert.equal(runCli(['start', 'plan', '--file', planningPath], cap.io, realLockSeams()), EXIT_OK);
+    assert.equal(readFm(planningPath).state, 'plan-inprogress');
+
+    assert.equal(runCli(['complete', 'plan', '--file', planningPath], cap.io, realLockSeams()), EXIT_OK);
+    assert.equal(readFm(planningPath).state, 'plan-ready');
+
+    // The review-plan gate now PROCEEDs (its precondition plan-ready is met).
+    const code = runCli(['gate', 'review-plan', '--file', planningPath], cap.io, realLockSeams());
+    assert.equal(code, EXIT_OK);
+    assert.match(cap.out(), /review-plan proceed/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('cli-complete-wrong-owner-maps-to-wrong-state-exit', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    runCli(['start', 'plan', '--file', planningPath], makeCliIO(dir, 'owner-A').io, realLockSeams());
+
+    const code = runCli(['complete', 'plan', '--file', planningPath], makeCliIO(dir, 'intruder-B').io, realLockSeams());
+    assert.equal(code, EXIT_WRONG_STATE);
+    assert.equal(readFm(planningPath).state, 'plan-inprogress', 'the refused complete did not advance state');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('cli-gate-force-records-forced-action-under-lock', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir); // state: created
+    const cap = makeCliIO(dir, 'pane-9:human');
+
+    // implement-plan's precondition is unmet at `created` -> wrong-state, which
+    // --force overrides, recording a forced action persisted under the lock.
+    const code = runCli(
+      ['gate', 'implement-plan', '--force', '--reason', 'manual recovery', '--file', planningPath],
+      cap.io,
+      realLockSeams(),
+    );
+    assert.equal(code, EXIT_OK);
+    assert.match(cap.out(), /implement-plan forced-proceed/);
+
+    const fm = readFm(planningPath);
+    assert.equal(fm.forced_actions?.length, 1);
+    assert.equal(fm.forced_actions?.[0]?.reason, 'manual recovery');
+    assert.equal(fm.forced_actions?.[0]?.from_state, 'created');
+    assert.equal(fm.forced_actions?.[0]?.claimed_by, 'pane-9:human');
+  } finally {
+    cleanup(dir);
+  }
+});

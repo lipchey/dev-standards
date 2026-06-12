@@ -26,7 +26,17 @@ export function isMainModule(metaUrl: string): boolean {
   }
 }
 
-// The real IO edge: fs reads/writes, git, and the process streams.
+// Synchronous blocking sleep for the gate --wait poll loop at the edge (the same
+// idiom as lock.ts's backoff sleep: Atomics.wait on a private buffer needs no
+// busy-spin and is permitted on the Node main thread).
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// The real IO edge: fs reads/writes, git, the process streams, the wall clock,
+// the blocking sleep, and the caller identity (the cmux pane, via the
+// WORKFLOW_CLAIMED_BY env the launcher sets; empty when unset).
 const realIO: CliIO = {
   cwd: () => process.cwd(),
   readFile: (filePath) => readFileSync(filePath, 'utf8'),
@@ -40,6 +50,9 @@ const realIO: CliIO = {
   stderr: (text) => {
     process.stderr.write(text);
   },
+  now: () => Date.now(),
+  sleep: sleepSync,
+  claimedBy: process.env.WORKFLOW_CLAIMED_BY ?? '',
 };
 
 export function main(argv: string[]): number {

@@ -17,12 +17,25 @@ import {
   EXIT_USAGE,
   WORKFLOW_PHASES,
 } from './types.ts';
-import type { FrontMatter } from './types.ts';
-import { CorruptStateError, parseFrontMatter } from './front-matter.ts';
-import { LockBusyError } from './lock.ts';
+import type { ForcedAction, FrontMatter, WorkflowPhase } from './types.ts';
+import {
+  CorruptStateError,
+  parseFrontMatter,
+  serializeFrontMatter,
+} from './front-matter.ts';
+import { LockBusyError, withLock } from './lock.ts';
 import type { LockSeams } from './lock.ts';
-import { recover, worktreeOf } from './recover.ts';
+import { computeDivergence, recover, splitPlanningFile, worktreeOf } from './recover.ts';
 import type { RunGit } from './trailers.ts';
+import { gate } from './gate.ts';
+import type { GateOptions, GateResult } from './gate.ts';
+import { complete, requestChanges, start } from './transactions.ts';
+import type { TransactionDeps, TransactionResult } from './transactions.ts';
+import { CommitScopeError } from './commit-scope.ts';
+
+// The gate's --wait deadline when the caller does not configure one (the §2.8
+// config default lands with the manifest wiring; the CLI uses a fixed fallback).
+const DEFAULT_GATE_WAIT_SECONDS = 300;
 
 // The planning file lives at the worktree root (spec §3). `status` reads it from
 // the current working directory by default; `--file <path>` overrides for tests
@@ -33,8 +46,12 @@ const USAGE = [
   'usage: workflow <command> [options]',
   '',
   'commands:',
-  '  status [--file <path>]    print the planning file state and per-phase summary',
-  '  recover [--file <path>]   reconcile front-matter state to HEAD\'s durable trailer',
+  '  status [--file <path>]                      print the planning file state and per-phase summary',
+  '  recover [--file <path>]                     reconcile front-matter state to HEAD\'s durable trailer',
+  '  start <phase> [--file <path>]               claim a phase and advance to its in-progress state',
+  '  complete <phase> [--approved] [--file ...]  finish a phase (review-plan --approved auto-advances)',
+  '  request-changes <producer> --reason <text>  loop a reviewed artifact back to its producer',
+  '  gate <phase> [--wait] [--force --reason t]  evaluate the three-step gate for a phase',
   '',
 ].join('\n');
 
@@ -49,6 +66,12 @@ export interface CliIO {
   runGit: RunGit; // recover/divergence read HEAD's Workflow-Phase trailer
   stdout: (text: string) => void;
   stderr: (text: string) => void;
+  // The transaction/gate edge seams (the runner supplies real implementations).
+  // Optional so read-only callers (status) need not provide them; the mutating
+  // verbs require them and surface an internal-wiring error otherwise.
+  now?: () => number; // wall clock (ms) for `updated`/budget and the gate --wait
+  sleep?: (ms: number) => void; // blocking poll step for the gate --wait
+  claimedBy?: string; // caller identity for the owner check / forced actions
 }
 
 function usageError(io: CliIO, message: string): number {
@@ -70,6 +93,23 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
       return runStatus(rest, io);
     case 'recover':
       return runRecover(rest, io, lockSeams);
+    case 'start':
+      return runTransactionCommand('start', rest, io, lockSeams, {}, (phase, deps) => start(phase, deps));
+    case 'complete':
+      return runTransactionCommand('complete', rest, io, lockSeams, { approved: true }, (phase, deps, args) =>
+        complete(phase, { approved: args.approved }, deps),
+      );
+    case 'request-changes':
+      return runTransactionCommand(
+        'request-changes',
+        rest,
+        io,
+        lockSeams,
+        { reason: true, reasonRequired: true },
+        (phase, deps, args) => requestChanges(phase, { reason: args.reason ?? '' }, deps),
+      );
+    case 'gate':
+      return runGate(rest, io, lockSeams);
     default:
       return usageError(io, `unknown command "${command}"`);
   }
@@ -200,6 +240,267 @@ function runRecover(args: string[], io: CliIO, lockSeams: LockSeams | undefined)
     io.stderr(`recover: failed: ${detail}\n`);
     return EXIT_FAILURE;
   }
+}
+
+// ── start / complete / request-changes (the state-mutating verbs) ────────────
+
+// Flags a given command accepts beyond the shared `--file <path>`.
+interface AllowedFlags {
+  approved?: boolean; // complete
+  reason?: boolean; // request-changes / gate --force
+  reasonRequired?: boolean; // request-changes
+  wait?: boolean; // gate
+  force?: boolean; // gate
+}
+
+interface ParsedArgs {
+  phase: WorkflowPhase;
+  filePath: string | undefined;
+  approved: boolean;
+  reason: string | undefined;
+  wait: boolean;
+  force: boolean;
+}
+
+type ParseResult = { ok: true; args: ParsedArgs } | { ok: false; exitCode: number };
+
+function isWorkflowPhase(token: string): token is WorkflowPhase {
+  return (WORKFLOW_PHASES as readonly string[]).includes(token);
+}
+
+// Shared parser for the phase-taking commands: one positional <phase> plus the
+// command's allowed flags. A malformed invocation (missing/extra positional,
+// unknown flag, missing flag value, invalid phase) is a usage error (exit 2),
+// distinct from a runtime refusal.
+function parseCommandArgs(
+  command: string,
+  argv: string[],
+  io: CliIO,
+  allowed: AllowedFlags,
+): ParseResult {
+  let phase: WorkflowPhase | undefined;
+  let filePath: string | undefined;
+  let reason: string | undefined;
+  let approved = false;
+  let wait = false;
+  let force = false;
+
+  const needValue = (i: number, flag: string): string | undefined => {
+    const value = argv[i + 1];
+    if (value === undefined) {
+      usageError(io, `${command}: missing value for ${flag}`);
+    }
+    return value;
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === undefined) continue;
+    if (arg === '--file') {
+      const value = needValue(i, '--file <path>');
+      if (value === undefined) return { ok: false, exitCode: EXIT_USAGE };
+      if (filePath !== undefined) return { ok: false, exitCode: usageError(io, `${command}: --file may be given only once`) };
+      filePath = value;
+      i += 1;
+      continue;
+    }
+    if (arg === '--reason' && allowed.reason === true) {
+      const value = needValue(i, '--reason <text>');
+      if (value === undefined) return { ok: false, exitCode: EXIT_USAGE };
+      reason = value;
+      i += 1;
+      continue;
+    }
+    if (arg === '--approved' && allowed.approved === true) {
+      approved = true;
+      continue;
+    }
+    if (arg === '--wait' && allowed.wait === true) {
+      wait = true;
+      continue;
+    }
+    if (arg === '--force' && allowed.force === true) {
+      force = true;
+      continue;
+    }
+    if (arg.startsWith('--')) {
+      return { ok: false, exitCode: usageError(io, `${command}: unexpected flag "${arg}"`) };
+    }
+    if (phase !== undefined) {
+      return { ok: false, exitCode: usageError(io, `${command}: unexpected argument "${arg}"`) };
+    }
+    if (!isWorkflowPhase(arg)) {
+      return { ok: false, exitCode: usageError(io, `${command}: "${arg}" is not a workflow phase`) };
+    }
+    phase = arg;
+  }
+
+  if (phase === undefined) {
+    return { ok: false, exitCode: usageError(io, `${command}: missing <phase> argument`) };
+  }
+  if (allowed.reasonRequired === true && reason === undefined) {
+    return { ok: false, exitCode: usageError(io, `${command}: --reason <text> is required`) };
+  }
+  return { ok: true, args: { phase, filePath, approved, reason, wait, force } };
+}
+
+// The mutating verbs need the lock seams plus the clock + caller identity. The
+// runner edge always supplies them; their absence is an internal wiring error
+// (never reachable from a well-formed invocation), surfaced like recover's.
+interface MutationEdge {
+  lockSeams: LockSeams;
+  now: () => number;
+  claimedBy: string;
+}
+
+function requireMutationEdge(
+  io: CliIO,
+  lockSeams: LockSeams | undefined,
+  command: string,
+): MutationEdge | number {
+  if (lockSeams === undefined || io.now === undefined || io.claimedBy === undefined) {
+    io.stderr(`${command}: internal error: edge seams (lock/clock/identity) were not provided\n`);
+    return EXIT_FAILURE;
+  }
+  return { lockSeams, now: io.now, claimedBy: io.claimedBy };
+}
+
+// Shared body for start / complete / request-changes: parse, build the injected
+// TransactionDeps, invoke the transaction, and map the result/throws to the §2.7
+// exit code. The transaction itself owns the lock, divergence, owner, and
+// precondition checks; the CLI only translates the outcome.
+function runTransactionCommand(
+  command: string,
+  argv: string[],
+  io: CliIO,
+  lockSeams: LockSeams | undefined,
+  allowed: AllowedFlags,
+  invoke: (phase: WorkflowPhase, deps: TransactionDeps, args: ParsedArgs) => TransactionResult,
+): number {
+  const parsed = parseCommandArgs(command, argv, io, allowed);
+  if (!parsed.ok) return parsed.exitCode;
+  const edge = requireMutationEdge(io, lockSeams, command);
+  if (typeof edge === 'number') return edge;
+
+  const resolved = parsed.args.filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+  const deps: TransactionDeps = {
+    planningFile: resolved,
+    worktree: worktreeOf(resolved),
+    readFile: io.readFile,
+    writeFile: io.writeFile,
+    run: io.runGit,
+    lockSeams: edge.lockSeams,
+    now: edge.now,
+    claimedBy: edge.claimedBy,
+  };
+
+  try {
+    const result = invoke(parsed.args.phase, deps, parsed.args);
+    if (result.exitCode === EXIT_OK) {
+      const advance = result.autoAdvanced === true ? ' (auto-advanced)' : '';
+      io.stdout(`${command}: ${result.phase} ${result.fromState} -> ${result.toState}${advance}\n`);
+    } else {
+      io.stderr(`${command}: ${result.message ?? result.outcome}\n`);
+    }
+    return result.exitCode;
+  } catch (error) {
+    return mapMutationError(io, command, resolved, error);
+  }
+}
+
+// ── gate ─────────────────────────────────────────────────────────────────────
+
+// `gate <phase>`: evaluate the three-step gate, wiring the REAL divergence check
+// (recover.computeDivergence) into the gate's seam, the real clock/sleep for
+// --wait, and a forced-action sink that appends to forced_actions[] UNDER the
+// lock for --force. The gate is observe-only except the force path, which is the
+// only mutation (hence the lock).
+function runGate(argv: string[], io: CliIO, lockSeams: LockSeams | undefined): number {
+  const parsed = parseCommandArgs('gate', argv, io, { wait: true, force: true, reason: true });
+  if (!parsed.ok) return parsed.exitCode;
+  const a = parsed.args;
+  if (io.now === undefined || io.sleep === undefined) {
+    io.stderr('gate: internal error: clock seams were not provided\n');
+    return EXIT_FAILURE;
+  }
+  const now = io.now;
+  const sleep = io.sleep;
+  const resolved = a.filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+  const worktree = worktreeOf(resolved);
+
+  const recordForcedAction = (action: ForcedAction): void => {
+    const { frontMatterText, body } = splitPlanningFile(io.readFile(resolved));
+    const fm = parseFrontMatter(frontMatterText);
+    // The gate builds `at` via toISOString (millisecond precision); the subset
+    // accepts only bare seconds, so it is normalized before persisting.
+    const at = action.at.replace(/\.\d{3}Z$/, 'Z');
+    fm.forced_actions = [...(fm.forced_actions ?? []), { ...action, at }];
+    fm.updated = at;
+    io.writeFile(resolved, serializeFrontMatter(fm) + body);
+  };
+
+  const opts: GateOptions = {
+    wait: a.wait,
+    waitSeconds: DEFAULT_GATE_WAIT_SECONDS,
+    force: a.force,
+    claimedBy: io.claimedBy ?? '',
+  };
+  if (a.reason !== undefined) opts.reason = a.reason;
+  const runGateOnce = (): GateResult =>
+    gate(a.phase, opts, {
+      readState: () => parseFrontMatter(extractFrontMatter(io.readFile(resolved))),
+      checkDivergence: () =>
+        computeDivergence({ planningFile: resolved, worktree, readFile: io.readFile, run: io.runGit }),
+      now,
+      sleep,
+      recordForcedAction,
+    });
+
+  try {
+    let result: GateResult;
+    if (a.force) {
+      // The force path persists a forced action: run under the §2.10 mutex.
+      if (lockSeams === undefined) {
+        io.stderr('gate: internal error: lock seams were not provided\n');
+        return EXIT_FAILURE;
+      }
+      result = withLock(worktree, lockSeams, runGateOnce);
+    } else {
+      result = runGateOnce();
+    }
+    const need =
+      result.requiredPreconditions !== undefined
+        ? ` (need: ${result.requiredPreconditions.join(', ')})`
+        : '';
+    const detail = result.message !== undefined ? ` - ${result.message}` : '';
+    const line = `gate: ${result.phase} ${result.outcome} [${result.state}]${need}${detail}\n`;
+    (result.exitCode === EXIT_OK ? io.stdout : io.stderr)(line);
+    return result.exitCode;
+  } catch (error) {
+    return mapMutationError(io, 'gate', resolved, error);
+  }
+}
+
+// Maps a thrown error from a mutating verb (or the gate force path) to the §2.7
+// exit code: LOCK_BUSY (14), a commit-scope refusal -> WRONG_STATE (11), corrupt
+// planning file -> NEEDS_HUMAN (13), anything else -> FAILURE (1).
+function mapMutationError(io: CliIO, command: string, resolved: string, error: unknown): number {
+  if (error instanceof LockBusyError) {
+    io.stderr(`${command}: ${error.message}\n`);
+    return error.exitCode;
+  }
+  if (error instanceof CommitScopeError) {
+    io.stderr(`${command}: ${error.message}\n`);
+    return error.exitCode;
+  }
+  if (isCorruptState(error)) {
+    const detail = error instanceof Error ? error.message : String(error);
+    io.stderr(`${command}: planning file at "${resolved}" is corrupt (${detail}); run \`workflow recover\`\n`);
+    return EXIT_NEEDS_HUMAN;
+  }
+  const detail = error instanceof Error ? error.message : String(error);
+  io.stderr(`${command}: failed: ${detail}\n`);
+  return EXIT_FAILURE;
 }
 
 // True for the typed corrupt-state error. Uses both `instanceof` and the

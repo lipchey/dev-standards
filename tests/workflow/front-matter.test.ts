@@ -353,3 +353,68 @@ test('rejects-unknown-and-missing-keys', () => {
   );
   expectCorrupt(() => parseFrontMatter(missing), 'missing-key');
 });
+
+// ── S11 hardenings: write/read symmetry + non-negative counters ──────────────
+
+test('serializer-rejects-control-chars-write-symmetry', () => {
+  // The reader rejects control chars in string scalars; the writer must too, so a
+  // self-corrupt file (e.g. an embedded newline in `branch`) can never be emitted.
+  const fm = makeFrontMatter();
+  fm.branch = 'feat/x\ny'; // an embedded newline (U+000A) is a control char
+  expectCorrupt(() => serializeFrontMatter(fm), 'control-char-in-string');
+
+  // A NUL / DEL anywhere in any string scalar is rejected identically on write.
+  const withNul = makeFrontMatter();
+  withNul.feature = String.fromCharCode(0x7f); // DEL control char
+  expectCorrupt(() => serializeFrontMatter(withNul), 'control-char-in-string');
+
+  // Clean strings still serialize and round-trip (the guard is not over-broad).
+  const clean = makeFrontMatter();
+  assert.equal(
+    serializeFrontMatter(parseFrontMatter(serializeFrontMatter(clean))),
+    serializeFrontMatter(clean),
+  );
+});
+
+test('validator-rejects-negative-counters', () => {
+  // A negative loopback_count could match a negative last_success_loop and flip
+  // the gate's self-completion check to ALREADY_DONE, so it is corrupt state.
+  const negLoopback = serializeFrontMatter(makeFrontMatter()).replace(
+    /\nloopback_count: 0/,
+    '\nloopback_count: -1',
+  );
+  expectCorrupt(() => parseFrontMatter(negLoopback), 'negative-counter');
+
+  // loopback_cap, phase attempts, and budget_spent.total_seconds are guarded too.
+  const negCap = serializeFrontMatter(makeFrontMatter()).replace(
+    /\nloopback_cap: 2/,
+    '\nloopback_cap: -2',
+  );
+  expectCorrupt(() => parseFrontMatter(negCap), 'negative-counter');
+
+  const negAttempts = serializeFrontMatter(makeFrontMatter()).replace(
+    /\n {4}attempts: 1/,
+    '\n    attempts: -1',
+  );
+  expectCorrupt(() => parseFrontMatter(negAttempts), 'negative-counter');
+
+  const negBudget = serializeFrontMatter(makeFrontMatter()).replace(
+    /\n {2}total_seconds: 0/,
+    '\n  total_seconds: -5',
+  );
+  expectCorrupt(() => parseFrontMatter(negBudget), 'negative-counter');
+
+  // A negative numeric last_success_loop is rejected...
+  const negLsl = makeFrontMatter();
+  negLsl.phases = { plan: { last_success_loop: 0, attempts: 1, start_sha: '9c1f2a', complete_sha: null } };
+  const negLslText = serializeFrontMatter(negLsl).replace(
+    /\n {4}last_success_loop: 0/,
+    '\n    last_success_loop: -1',
+  );
+  expectCorrupt(() => parseFrontMatter(negLslText), 'negative-counter');
+
+  // ...but `last_success_loop: null` (never run in any round) stays allowed.
+  const nullLsl = makeFrontMatter();
+  nullLsl.phases = { plan: { last_success_loop: null, attempts: 1, start_sha: '9c1f2a', complete_sha: null } };
+  assert.equal(parseFrontMatter(serializeFrontMatter(nullLsl)).phases.plan?.last_success_loop, null);
+});

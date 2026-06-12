@@ -530,8 +530,8 @@ export function validateFrontMatter(doc: SubsetMap): FrontMatter {
     base_sha: getString(m, 'base_sha'),
     cmux_section: getString(m, 'cmux_section'),
     state: state as WorkflowState,
-    loopback_count: getInt(m, 'loopback_count'),
-    loopback_cap: getInt(m, 'loopback_cap'),
+    loopback_count: getNonNegativeInt(m, 'loopback_count'),
+    loopback_cap: getNonNegativeInt(m, 'loopback_cap'),
     claimed_by: getString(m, 'claimed_by'),
     updated: getTimestamp(m, 'updated'),
     phases: parsePhases(m.get('phases')),
@@ -590,6 +590,30 @@ function getIntOrNull(m: Map<string, SubsetNode>, key: string): number | null {
   throw corrupt('bad-type', `key "${key}" must be an integer or null`);
 }
 
+// Counter guard (S11 hardening): the persisted progress counters
+// (loopback_count, loopback_cap, phase attempts, last_success_loop,
+// budget_spent.total_seconds) are non-negative by construction. A negative
+// persisted value is corrupt state — e.g. a negative `loopback_count` that equals
+// a negative `last_success_loop` would falsely flip the gate's self-completion
+// check to ALREADY_DONE — so it is rejected rather than trusted.
+function getNonNegativeInt(m: Map<string, SubsetNode>, key: string): number {
+  const value = getInt(m, key);
+  if (value < 0) {
+    throw corrupt('negative-counter', `counter "${key}" must be non-negative, got ${value}`);
+  }
+  return value;
+}
+
+// As getNonNegativeInt, but `last_success_loop` may also be null (never run in
+// any round); the null is preserved and only a negative numeric value is rejected.
+function getNonNegativeIntOrNull(m: Map<string, SubsetNode>, key: string): number | null {
+  const value = getIntOrNull(m, key);
+  if (value !== null && value < 0) {
+    throw corrupt('negative-counter', `counter "${key}" must be non-negative or null, got ${value}`);
+  }
+  return value;
+}
+
 function getStringOrNull(m: Map<string, SubsetNode>, key: string): string | null {
   const node = required(m, key);
   if (node.kind === 'null') return null;
@@ -634,8 +658,8 @@ function parsePhases(node: SubsetNode | undefined): Partial<Record<WorkflowPhase
     }
     const pm = lookup(phaseVal);
     const record: PhaseRecord = {
-      last_success_loop: getIntOrNull(pm, 'last_success_loop'),
-      attempts: getInt(pm, 'attempts'),
+      last_success_loop: getNonNegativeIntOrNull(pm, 'last_success_loop'),
+      attempts: getNonNegativeInt(pm, 'attempts'),
       start_sha: getStringOrNull(pm, 'start_sha'),
       complete_sha: getStringOrNull(pm, 'complete_sha'),
     };
@@ -662,7 +686,7 @@ function parseBudget(node: SubsetNode | undefined): { total_seconds: number } {
       throw corrupt('unknown-budget-field', `unknown budget_spent field "${field}"`);
     }
   }
-  return { total_seconds: getInt(lookup(node), 'total_seconds') };
+  return { total_seconds: getNonNegativeInt(lookup(node), 'total_seconds') };
 }
 
 function parseForcedActions(node: SubsetNode): ForcedAction[] {
@@ -783,6 +807,17 @@ function forcedActionsToSubset(actions: ForcedAction[]): SubsetSeq {
 }
 
 function sStr(value: string): SubsetScalar {
+  // Write/read symmetry (S11 hardening): the reader rejects control chars in
+  // string scalars, so the serializer must too — otherwise a writer could emit a
+  // self-corrupt file (e.g. `branch: "feat/x\ny"`) the reader would then reject.
+  // Mirrors the parseScalar guard, throwing on the WRITE path.
+  const ctrl = controlCharIndex(value);
+  if (ctrl >= 0) {
+    throw corrupt(
+      'control-char-in-string',
+      `string scalar contains a control character (code ${value.charCodeAt(ctrl)}) at index ${ctrl} (on write)`,
+    );
+  }
   return { kind: 'string', value };
 }
 
