@@ -1,5 +1,6 @@
 node_modules/
 runner/dist/
+workflow/dist/
 reports/quality/
 *.tsbuildinfo
 .DS_Store
