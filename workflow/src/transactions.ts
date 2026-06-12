@@ -46,17 +46,19 @@ import type {
   WorkflowPhase,
   WorkflowState,
 } from './types.ts';
-import { validateReason } from './front-matter.ts';
-import { withWorkflowPhaseTrailer } from './trailers.ts';
+import { serializeFrontMatter, validateReason } from './front-matter.ts';
+import { GitError, withWorkflowPhaseTrailer } from './trailers.ts';
 import { withLock } from './lock.ts';
 import { TRANSITION_TABLE } from './transitions.ts';
 import type { TransitionRow } from './transitions.ts';
 import {
+  assertCleanAtImplementStart,
   assertCodeCommitShape,
+  assertOnlyPlanningStaged,
+  commitScopeForImplement,
   CommitScopeError,
   planningRelPath,
   stagedPaths,
-  worktreeChangesExcept,
 } from './commit-scope.ts';
 import {
   assertNoForeignStaged,
@@ -123,6 +125,7 @@ export interface TransactionDeps extends MutatingDeps {
   // §8 `budget.workflow_total_seconds` total; `perPassSeconds` is the OPTIONAL,
   // sparse per-pass ceiling (§2.8) checked ONLY when configured.
   budget?: { totalSeconds: number; perPassSeconds?: number };
+  commitExclude?: string[];
 }
 
 export type TransactionOutcome =
@@ -213,6 +216,44 @@ function wrongStateResult(
   };
 }
 
+function isGitError(error: unknown): error is GitError {
+  return error instanceof GitError || (typeof error === 'object' && error !== null && (error as { kind?: unknown }).kind === 'git-error');
+}
+
+function gitTail(error: unknown): string {
+  if (isGitError(error)) return error.stderr_tail;
+  return error instanceof Error ? error.message : String(error);
+}
+
+function commitFailureState(
+  deps: TransactionDeps,
+  fm: FrontMatter,
+  body: string,
+  failedState: WorkflowState,
+  messagePrefix: string,
+  cause: unknown,
+): void {
+  fm.state = failedState;
+  fm.updated = nowIso(deps);
+  saveFailurePlanning(deps, fm, body);
+  const rel = planningRel(deps);
+  deps.run(['add', '--', rel], deps.worktree);
+  assertOnlyPlanningStaged(deps.worktree, rel, deps.run);
+  const tail = gitTail(cause);
+  const detail = tail === '' ? '' : `\n\n${tail}`;
+  deps.run([
+    'commit',
+    '-q',
+    '--no-verify',
+    '-m',
+    withWorkflowPhaseTrailer(`${messagePrefix}${detail}`, failedState),
+  ], deps.worktree);
+}
+
+function saveFailurePlanning(deps: TransactionDeps, fm: FrontMatter, body: string): void {
+  deps.writeFile(deps.planningFile, `${serializeFrontMatter(fm)}${body}`);
+}
+
 // ── Phase-record helpers ─────────────────────────────────────────────────────
 
 // Marks a phase as succeeded in the CURRENT round: last_success_loop = the round
@@ -259,6 +300,9 @@ function startInner(phase: WorkflowPhase, deps: TransactionDeps): TransactionRes
   if (!row.preconditions.includes(fromState)) {
     return wrongStateResult(phase, fromState, `one of: ${row.preconditions.join(', ')}`);
   }
+  if (phase === 'implement-plan') {
+    assertCleanAtImplementStart(deps.worktree, deps.run);
+  }
   // Atomicity: pre-flight the commit-shape refusal BEFORE mutating/saving, so a
   // foreign staged file refuses with the tree untouched (never advances `state`).
   assertNoForeignStaged(deps);
@@ -275,7 +319,14 @@ function startInner(phase: WorkflowPhase, deps: TransactionDeps): TransactionRes
     start_sha: startSha,
     complete_sha: null,
   };
-  commitMutation(deps, text, fm, body, withWorkflowPhaseTrailer(`workflow(${phase}): start -> ${toState}`, toState));
+  try {
+    commitMutation(deps, text, fm, body, withWorkflowPhaseTrailer(`workflow(${phase}): start -> ${toState}`, toState));
+  } catch (error) {
+    if (isGitError(error)) {
+      commitFailureState(deps, fm, body, row.failure, `workflow(${phase}): start hook failed -> ${row.failure}`, error);
+    }
+    throw error;
+  }
   return { exitCode: EXIT_OK, outcome: 'started', phase, fromState, toState };
 }
 
@@ -360,13 +411,20 @@ function completePlanning(
   // withWorkflowPhaseTrailer normalizes to ONE value = the final resting state.
   // commitMutation restores `text` (the pre-transaction file) on ANY throw, so a
   // refused/failed planning commit leaves `state` unchanged and the tree clean.
-  commitMutation(
-    deps,
-    text,
-    fm,
-    body,
-    withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${toState}`, toState),
-  );
+  try {
+    commitMutation(
+      deps,
+      text,
+      fm,
+      body,
+      withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${toState}`, toState),
+    );
+  } catch (error) {
+    if (isGitError(error)) {
+      commitFailureState(deps, fm, body, row.failure, `workflow(${phase}): complete hook failed -> ${row.failure}`, error);
+    }
+    throw error;
+  }
 
   // Fix 3 (P2): no post-commit complete_sha rewrite for planning/review phases.
   // complete_sha for these phases is the trailer commit itself (knowable only
@@ -403,7 +461,14 @@ function completeImplement(
   const rel = planningRel(deps);
 
   // (1) code commit — enumerate + stage code paths one at a time (never add -A).
-  const codePaths = worktreeChangesExcept(deps.worktree, rel, deps.run);
+  const startSha = fm.phases[phase]?.start_sha ?? null;
+  const codePaths = commitScopeForImplement(
+    deps.worktree,
+    rel,
+    startSha,
+    deps.commitExclude ?? [],
+    deps.run,
+  ).paths;
   assertCodeCommitShape(codePaths);
   for (const p of codePaths) deps.run(['add', '--', p], deps.worktree);
   // Defense in depth: the planning file must never ride in the code commit.
@@ -412,7 +477,21 @@ function completeImplement(
       `the implement-plan code commit must not include the planning file "${rel}"`,
     );
   }
-  deps.run(['commit', '-q', '-m', `workflow(${phase}): implementation`], deps.worktree); // NO trailer
+  try {
+    deps.run(['commit', '-q', '-m', `workflow(${phase}): implementation`], deps.worktree); // NO trailer
+  } catch (error) {
+    if (isGitError(error)) {
+      for (const p of codePaths) {
+        try {
+          deps.run(['reset', '-q', '--', p], deps.worktree);
+        } catch {
+          // Preserve the original hook/git failure as the surfaced error.
+        }
+      }
+      commitFailureState(deps, fm, body, row.failure, `workflow(${phase}): implementation hook failed -> ${row.failure}`, error);
+    }
+    throw error;
+  }
   const codeSha = headSha(deps);
 
   // (2) planning commit — complete_sha = the code commit, durably recorded here.
@@ -423,13 +502,20 @@ function completeImplement(
   markPhaseSuccess(fm, phase, fm.loopback_count, codeSha);
   fm.state = row.success; // 'implemented'
   fm.updated = nowIso(deps);
-  commitMutation(
-    deps,
-    text,
-    fm,
-    body,
-    withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${row.success}`, row.success),
-  );
+  try {
+    commitMutation(
+      deps,
+      text,
+      fm,
+      body,
+      withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${row.success}`, row.success),
+    );
+  } catch (error) {
+    if (isGitError(error)) {
+      commitFailureState(deps, fm, body, row.failure, `workflow(${phase}): complete hook failed -> ${row.failure}`, error);
+    }
+    throw error;
+  }
   return { exitCode: EXIT_OK, outcome: 'completed', phase, fromState, toState: row.success };
 }
 
@@ -501,16 +587,30 @@ function requestChangesInner(
     // commit carries a `Workflow-Phase: needs-human` trailer. The reason rides the
     // commit body (same shape as the loopback commit) for the durable record.
     // commitMutation restores the pre-transaction file on any throw.
-    commitMutation(
-      deps,
-      text,
-      fm,
-      body,
-      withWorkflowPhaseTrailer(
-        `workflow(${producer}): ${trigger} -> needs-human\n\n${opts.reason}`,
-        'needs-human',
-      ),
-    );
+    try {
+      commitMutation(
+        deps,
+        text,
+        fm,
+        body,
+        withWorkflowPhaseTrailer(
+          `workflow(${producer}): ${trigger} -> needs-human\n\n${opts.reason}`,
+          'needs-human',
+        ),
+      );
+    } catch (error) {
+      if (isGitError(error)) {
+        commitFailureState(
+          deps,
+          fm,
+          body,
+          loopback.reviewRow.failure,
+          `workflow(${producer}): request-changes hook failed -> ${loopback.reviewRow.failure}`,
+          error,
+        );
+      }
+      throw error;
+    }
     return {
       exitCode: EXIT_NEEDS_HUMAN,
       outcome: 'needs-human',
@@ -527,7 +627,21 @@ function requestChangesInner(
     `workflow(${producer}): changes requested -> ${loopback.state}\n\n${opts.reason}`,
     loopback.state,
   );
-  commitMutation(deps, text, fm, body, message);
+  try {
+    commitMutation(deps, text, fm, body, message);
+  } catch (error) {
+    if (isGitError(error)) {
+      commitFailureState(
+        deps,
+        fm,
+        body,
+        loopback.reviewRow.failure,
+        `workflow(${producer}): request-changes hook failed -> ${loopback.reviewRow.failure}`,
+        error,
+      );
+    }
+    throw error;
+  }
   return { exitCode: EXIT_OK, outcome: 'changes-requested', phase: producer, fromState, toState: loopback.state };
 }
 

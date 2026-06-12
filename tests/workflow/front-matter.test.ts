@@ -156,6 +156,14 @@ test('generic-round-trip-preserves-unrelated-keys', () => {
   );
 });
 
+test('generic-serializer-canonicalizes-mutated-scalars', () => {
+  const doc = parseSubset('---\nnote: "uses\\u0020escape"\n---\n');
+  const note = doc.entries[0]?.[1];
+  assert.ok(note?.kind === 'string');
+  note.value = 'changed value';
+  assert.equal(serializeSubset(doc), '---\nnote: "changed value"\n---\n');
+});
+
 test('rejects-outside-subset', () => {
   const wrap = (body: string): string => `---\n${body}\n---\n`;
   const cases: Array<{ name: string; text: string }> = [

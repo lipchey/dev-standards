@@ -729,11 +729,10 @@ test('complete-refusal-with-foreign-staged-file-leaves-state-unchanged', () => {
   }
 });
 
-test('start-commit-failure-restores-planning-file', () => {
+test('start-commit-failure-records-failed-state', () => {
   const dir = initRepo();
   try {
     const planningPath = seed(dir);
-    const stateBefore = readFm(planningPath).state; // created
     const before = commitCount(dir);
     installFailingPreCommitHook(dir);
 
@@ -742,8 +741,10 @@ test('start-commit-failure-restores-planning-file', () => {
       'a rejected commit propagates as a throw',
     );
 
-    assert.equal(commitCount(dir), before, 'the rejected commit did not land');
-    assert.equal(readFm(planningPath).state, stateBefore, 'the planning file was restored (state UNCHANGED)');
+    assert.equal(commitCount(dir), before + 1, 'one failed-state commit was recorded');
+    assert.equal(readFm(planningPath).state, 'plan-failed', 'the hook rejection records the phase failure state');
+    assert.match(commitMessage(dir, 'HEAD'), /Workflow-Phase: plan-failed/, 'the failed-state commit carries a matching trailer');
+    assert.match(commitMessage(dir, 'HEAD'), /rejected by fixture pre-commit hook/, 'the hook output is captured');
     assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the hook rejection');
     assert.equal(porcelain(dir), '', 'the tree is fully CLEAN — the advanced state is not left staged in the index');
   } finally {
@@ -751,12 +752,11 @@ test('start-commit-failure-restores-planning-file', () => {
   }
 });
 
-test('complete-commit-failure-restores-planning-file', () => {
+test('complete-commit-failure-records-failed-state', () => {
   const dir = initRepo();
   try {
     const planningPath = seed(dir);
     start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
-    const stateBefore = readFm(planningPath).state; // plan-inprogress
     const before = commitCount(dir);
     installFailingPreCommitHook(dir); // bites the complete planning commit
 
@@ -765,8 +765,10 @@ test('complete-commit-failure-restores-planning-file', () => {
       'a rejected commit propagates as a throw',
     );
 
-    assert.equal(commitCount(dir), before, 'the rejected complete commit did not land');
-    assert.equal(readFm(planningPath).state, stateBefore, 'the planning file was restored (not advanced to plan-ready)');
+    assert.equal(commitCount(dir), before + 1, 'one failed-state commit was recorded');
+    assert.equal(readFm(planningPath).state, 'plan-failed', 'the hook rejection records the phase failure state');
+    assert.match(commitMessage(dir, 'HEAD'), /Workflow-Phase: plan-failed/, 'the failed-state commit carries a matching trailer');
+    assert.match(commitMessage(dir, 'HEAD'), /rejected by fixture pre-commit hook/, 'the hook output is captured');
     assert.equal(diverged(dir, planningPath), false, 'the tree is non-divergent after the hook rejection');
     assert.equal(porcelain(dir), '', 'the tree is fully CLEAN — the advanced state is not left staged in the index');
   } finally {

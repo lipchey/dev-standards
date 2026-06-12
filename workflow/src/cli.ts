@@ -38,6 +38,10 @@ import { runDoctor } from './doctor.ts';
 import type { DoctorProbes } from './doctor.ts';
 import { resume } from './resume.ts';
 import type { ResumeDeps } from './resume.ts';
+import { diffRangeForPhase } from './diff-range.ts';
+import { featureStart, newFeature } from './new-feature.ts';
+import type { NewFeatureDeps } from './new-feature.ts';
+import type { WorkflowConfig } from './types.ts';
 
 // The gate's --wait deadline when the caller does not configure one (the §2.8
 // config default lands with the manifest wiring; the CLI uses a fixed fallback).
@@ -53,6 +57,7 @@ const PLANNING_FILE_NAME = 'workflow-session-planning.md';
 // and checks the project-facts doc exists alongside the required review guides.
 const MANIFEST_FILE_NAME = 'quality.json';
 const PROJECT_FACTS_REL = '.agents/project-facts.md';
+const STATE_FILE_REL = '.agents/handoffs/STATE.md';
 
 const USAGE = [
   'usage: workflow <command> [options]',
@@ -66,6 +71,9 @@ const USAGE = [
   '  gate <phase> [--wait] [--force --reason t]  evaluate the three-step gate for a phase',
   '  resume [--file <path>]                      exit needs-human back to the prior state (by reason)',
   '  doctor [--arm] [--file ...] [--manifest ..] non-mutating setup/health diagnosis',
+  '  diff-range <phase> [--file <path>]          print an argv-safe git diff command',
+  '  new-feature <slug>                          create worktree, planning file, and feature record',
+  '  feature-start <slug> [--worktree] [--branch <name>] create branch and feature record',
   '',
 ].join('\n');
 
@@ -77,6 +85,7 @@ export interface CliIO {
   cwd: () => string;
   readFile: (filePath: string) => string; // throws on a missing/unreadable file
   writeFile: (filePath: string, content: string) => void; // recover rewrites the planning file
+  mkdir?: (dirPath: string) => void;
   runGit: RunGit; // recover/divergence read HEAD's Workflow-Phase trailer
   stdout: (text: string) => void;
   stderr: (text: string) => void;
@@ -153,6 +162,12 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
       return runResume(rest, io, lockSeams);
     case 'doctor':
       return runDoctorCommand(rest, io);
+    case 'diff-range':
+      return runDiffRange(rest, io);
+    case 'new-feature':
+      return runNewFeature(rest, io);
+    case 'feature-start':
+      return runFeatureStart(rest, io);
     default:
       return usageError(io, `unknown command "${command}"`);
   }
@@ -464,6 +479,7 @@ function runTransactionCommand(
     lockSeams: edge.lockSeams,
     now: edge.now,
     claimedBy: edge.claimedBy,
+    commitExclude: loadCommitExclude(io, worktree),
   };
   if (loadBudgetFor !== undefined) {
     deps.budget = loadBudgetFor(io, worktree);
@@ -516,6 +532,128 @@ function loadBudget(io: CliIO, worktree: string): { totalSeconds: number; perPas
     return { totalSeconds, perPassSeconds: perPassRaw };
   }
   return { totalSeconds };
+}
+
+function loadCommitExclude(io: CliIO, worktree: string): string[] {
+  const workflow = loadWorkflowConfigRaw(io, worktree);
+  const raw = workflow?.['commit_exclude'];
+  return Array.isArray(raw) && raw.every((item) => typeof item === 'string') ? raw : [];
+}
+
+function loadWorkflowConfigRaw(io: CliIO, worktree: string): Record<string, unknown> | undefined {
+  try {
+    const manifest = JSON.parse(io.readFile(path.join(worktree, MANIFEST_FILE_NAME))) as unknown;
+    return readRecord(manifest, 'workflow');
+  } catch {
+    return undefined;
+  }
+}
+
+function loadWorkflowConfigStrict(io: CliIO, worktree: string): WorkflowConfig {
+  const workflow = loadWorkflowConfigRaw(io, worktree);
+  if (workflow === undefined || workflow['enabled'] !== true) {
+    throw new Error('workflow config is missing or disabled');
+  }
+  return workflow as unknown as WorkflowConfig;
+}
+
+// ── diff-range ──────────────────────────────────────────────────────────────
+
+function runDiffRange(argv: string[], io: CliIO): number {
+  const parsed = parseCommandArgs('diff-range', argv, io, {});
+  if (!parsed.ok) return parsed.exitCode;
+  const resolved = parsed.args.filePath ?? path.join(io.cwd(), PLANNING_FILE_NAME);
+  try {
+    const fm = parseFrontMatter(extractFrontMatter(io.readFile(resolved)));
+    const worktree = worktreeOf(resolved);
+    const result = diffRangeForPhase(parsed.args.phase, fm, {
+      planningFile: path.relative(worktree, resolved),
+      reportsGlob: 'reports/**',
+      commitExclude: loadCommitExclude(io, worktree),
+    });
+    io.stdout(`${JSON.stringify(result.argv)}\n`);
+    return EXIT_OK;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    io.stderr(`diff-range: failed: ${detail}\n`);
+    return EXIT_FAILURE;
+  }
+}
+
+// ── new-feature / feature-start ─────────────────────────────────────────────
+
+type FeatureStartArgs =
+  | { ok: true; slug: string; branch: string | undefined; worktree: boolean }
+  | { ok: false; exitCode: number };
+
+function parseFeatureStartArgs(command: string, argv: string[], io: CliIO, allowFlags: boolean): FeatureStartArgs {
+  let slug: string | undefined;
+  let branch: string | undefined;
+  let worktree = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--worktree' && allowFlags) {
+      worktree = true;
+      continue;
+    }
+    if (arg === '--branch' && allowFlags) {
+      const value = argv[i + 1];
+      if (value === undefined) return { ok: false, exitCode: usageError(io, `${command}: missing value for --branch <name>`) };
+      branch = value;
+      i += 1;
+      continue;
+    }
+    if (arg?.startsWith('--')) return { ok: false, exitCode: usageError(io, `${command}: unexpected flag "${arg}"`) };
+    if (slug !== undefined) return { ok: false, exitCode: usageError(io, `${command}: unexpected argument "${arg}"`) };
+    slug = arg;
+  }
+  if (slug === undefined) return { ok: false, exitCode: usageError(io, `${command}: missing <slug> argument`) };
+  return { ok: true, slug, branch, worktree };
+}
+
+function newFeatureDeps(io: CliIO): NewFeatureDeps {
+  if (io.mkdir === undefined) throw new Error('mkdir seam was not provided');
+  const repoRoot = io.cwd();
+  return {
+    repoRoot,
+    statePath: path.join(repoRoot, STATE_FILE_REL),
+    config: loadWorkflowConfigStrict(io, repoRoot),
+    runGit: io.runGit,
+    readFile: io.readFile,
+    writeFile: io.writeFile,
+    mkdir: io.mkdir,
+  };
+}
+
+function runNewFeature(argv: string[], io: CliIO): number {
+  const parsed = parseFeatureStartArgs('new-feature', argv, io, false);
+  if (!parsed.ok) return parsed.exitCode;
+  try {
+    const result = newFeature(parsed.slug, newFeatureDeps(io));
+    io.stdout(`new-feature: ${result.slug} ${result.branch} ${result.worktree}\n`);
+    return EXIT_OK;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    io.stderr(`new-feature: failed: ${detail}\n`);
+    return EXIT_FAILURE;
+  }
+}
+
+function runFeatureStart(argv: string[], io: CliIO): number {
+  const parsed = parseFeatureStartArgs('feature-start', argv, io, true);
+  if (!parsed.ok) return parsed.exitCode;
+  try {
+    const opts = parsed.branch === undefined
+      ? { slug: parsed.slug, worktree: parsed.worktree }
+      : { slug: parsed.slug, branch: parsed.branch, worktree: parsed.worktree };
+    const result = featureStart(opts, newFeatureDeps(io));
+    io.stdout(`feature-start: ${result.slug} ${result.branch} ${result.worktree || '(in-place)'}\n`);
+    return EXIT_OK;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    io.stderr(`feature-start: failed: ${detail}\n`);
+    return EXIT_FAILURE;
+  }
 }
 
 // Reads a nested object field as a plain record (object, non-array), or undefined.

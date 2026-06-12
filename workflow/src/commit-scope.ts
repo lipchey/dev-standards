@@ -36,6 +36,33 @@ function splitNul(out: string): string[] {
   return out.split('\0').filter((p) => p !== '');
 }
 
+function escapeRegexLiteral(text: string): string {
+  return text.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+}
+
+function globToRegExp(pattern: string): RegExp {
+  let out = '^';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+    const next = pattern[i + 1];
+    if (ch === '*' && next === '*') {
+      out += '.*';
+      i += 1;
+    } else if (ch === '*') {
+      out += '[^/]*';
+    } else if (ch === '?') {
+      out += '[^/]';
+    } else {
+      out += escapeRegexLiteral(ch ?? '');
+    }
+  }
+  return new RegExp(`${out}$`);
+}
+
+function matchesAny(file: string, patterns: readonly string[]): boolean {
+  return patterns.some((pattern) => globToRegExp(pattern).test(file));
+}
+
 // The planning file path relative to the worktree root (spec §3: the planning
 // file lives at the worktree root). The single allowed pathspec for the planning
 // commit, and the one path excluded from the implement code commit.
@@ -70,6 +97,7 @@ export function worktreeChangesExcept(
   worktree: string,
   excludeRel: string,
   run: RunGit,
+  commitExclude: readonly string[] = [],
 ): string[] {
   const tracked = headExists(worktree, run)
     ? splitNul(run(['diff', '--name-only', '-z', 'HEAD'], worktree))
@@ -80,7 +108,42 @@ export function worktreeChangesExcept(
   // The workflow's own advisory lockfile is held DURING the transaction (it is an
   // untracked file at the worktree root); it must never ride a code commit.
   set.delete(LOCK_FILE_NAME);
-  return [...set].sort();
+  return [...set].filter((file) => !matchesAny(file, commitExclude)).sort();
+}
+
+export function assertCleanAtImplementStart(worktree: string, run: RunGit): void {
+  const dirty = splitNul(run(['status', '--porcelain', '-z'], worktree)).filter(
+    (entry) => !entry.endsWith(LOCK_FILE_NAME),
+  );
+  if (dirty.length > 0) {
+    throw new CommitScopeError(
+      `implement-plan requires a clean tree at start, but found: ${dirty.join(', ')}`,
+    );
+  }
+}
+
+export interface ImplementCommitScope {
+  paths: string[];
+  preStaged: string[];
+}
+
+export function commitScopeForImplement(
+  worktree: string,
+  planningRel: string,
+  startSha: string | null,
+  commitExclude: readonly string[],
+  run: RunGit,
+): ImplementCommitScope {
+  const base = startSha ?? 'HEAD';
+  const trackedSinceStart = headExists(worktree, run)
+    ? splitNul(run(['diff', '--name-only', '-z', base], worktree))
+    : [];
+  const untracked = splitNul(run(['ls-files', '--others', '--exclude-standard', '-z'], worktree));
+  const set = new Set<string>([...trackedSinceStart, ...untracked]);
+  set.delete(planningRel);
+  set.delete(LOCK_FILE_NAME);
+  const paths = [...set].filter((file) => !matchesAny(file, commitExclude)).sort();
+  return { paths, preStaged: stagedPaths(worktree, run).filter((file) => paths.includes(file)).sort() };
 }
 
 // CHECK A — the planning-only commit shape (plan / review-plan / consolidate /

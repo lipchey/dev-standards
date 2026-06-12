@@ -66,11 +66,11 @@ function corrupt(code: string, message: string, line?: number): CorruptStateErro
 // ── Generic subset model ────────────────────────────────────────────────────
 
 export type SubsetScalar =
-  | { kind: 'string'; value: string }
-  | { kind: 'int'; value: number }
-  | { kind: 'bool'; value: boolean }
-  | { kind: 'null' }
-  | { kind: 'timestamp'; value: string }; // raw ISO-8601 UTC text
+  | { kind: 'string'; value: string; raw?: string }
+  | { kind: 'int'; value: number; raw?: string }
+  | { kind: 'bool'; value: boolean; raw?: string }
+  | { kind: 'null'; raw?: string }
+  | { kind: 'timestamp'; value: string; raw?: string }; // raw ISO-8601 UTC text
 
 export interface SubsetMap {
   kind: 'map';
@@ -368,23 +368,23 @@ function parseScalar(token: string, lineNo: number): SubsetScalar {
         lineNo,
       );
     }
-    return { kind: 'string', value };
+    return { kind: 'string', value, raw: token };
   }
-  if (token === 'null') return { kind: 'null' };
-  if (token === 'true') return { kind: 'bool', value: true };
-  if (token === 'false') return { kind: 'bool', value: false };
+  if (token === 'null') return { kind: 'null', raw: token };
+  if (token === 'true') return { kind: 'bool', value: true, raw: token };
+  if (token === 'false') return { kind: 'bool', value: false, raw: token };
   if (INT_RE.test(token)) {
     const n = Number(token);
     if (!Number.isSafeInteger(n)) {
       throw corrupt('bad-int', `integer out of safe range: "${token}"`, lineNo);
     }
-    return { kind: 'int', value: n };
+    return { kind: 'int', value: n, raw: token };
   }
   if (TIMESTAMP_RE.test(token)) {
     if (!isValidTimestamp(token)) {
       throw corrupt('bad-timestamp', `not a real calendar instant: "${token}"`, lineNo);
     }
-    return { kind: 'timestamp', value: token };
+    return { kind: 'timestamp', value: token, raw: token };
   }
   throw corrupt('out-of-subset', `value not in the subset: "${token}"`, lineNo);
 }
@@ -442,6 +442,7 @@ function emitSeq(seq: SubsetSeq, indent: number, out: string[]): void {
 }
 
 function emitScalar(scalar: SubsetScalar): string {
+  if (scalar.raw !== undefined && rawStillMatches(scalar)) return scalar.raw;
   switch (scalar.kind) {
     case 'string':
       return JSON.stringify(scalar.value);
@@ -453,6 +454,25 @@ function emitScalar(scalar: SubsetScalar): string {
       return 'null';
     case 'timestamp':
       return scalar.value;
+  }
+}
+
+function rawStillMatches(scalar: SubsetScalar): boolean {
+  switch (scalar.kind) {
+    case 'string':
+      try {
+        return JSON.parse(scalar.raw ?? '') === scalar.value;
+      } catch {
+        return false;
+      }
+    case 'int':
+      return Number(scalar.raw) === scalar.value;
+    case 'bool':
+      return scalar.raw === (scalar.value ? 'true' : 'false');
+    case 'null':
+      return scalar.raw === 'null';
+    case 'timestamp':
+      return scalar.raw === scalar.value;
   }
 }
 
