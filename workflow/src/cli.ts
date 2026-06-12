@@ -25,10 +25,6 @@ import { CorruptStateError, parseFrontMatter } from './front-matter.ts';
 // and non-conventional layouts.
 const PLANNING_FILE_NAME = 'workflow-session-planning.md';
 
-// Commands the S10 skeleton actually implements. Kept as data so the usage text
-// and the dispatch stay in sync as later phases add rows.
-const IMPLEMENTED_COMMANDS = ['status'] as const;
-
 const USAGE = [
   'usage: workflow <command> [options]',
   '',
@@ -188,4 +184,4 @@ function formatStatus(fm: FrontMatter): string {
   return `${lines.join('\n')}\n`;
 }
 
-export { IMPLEMENTED_COMMANDS, PLANNING_FILE_NAME };
+export { PLANNING_FILE_NAME };

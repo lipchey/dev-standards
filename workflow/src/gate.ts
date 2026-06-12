@@ -60,7 +60,9 @@ const ROW_BY_PHASE = new Map<WorkflowPhase, TransitionRow>(
 export interface GateDeps {
   readState: () => FrontMatter; // re-read each --wait poll
   checkDivergence: () => boolean; // front-matter-vs-HEAD trailer; called ONCE at entry
-  now: () => number; // clock (ms since epoch)
+  // Clock (ms since epoch). MUST be monotonic non-decreasing: the --wait loop
+  // relies on now() advancing toward the deadline to terminate.
+  now: () => number;
   sleep: (ms: number) => void; // injectable poll step (real edge blocks synchronously)
   recordForcedAction: (action: ForcedAction) => void; // force sink (real persistence: later task)
 }
@@ -98,7 +100,6 @@ export interface GateResult {
 interface Verdict {
   outcome: 'proceed' | 'already-done' | 'needs-human' | 'wrong-state';
   exitCode: number;
-  requiredPreconditions?: readonly WorkflowState[];
 }
 
 function classify(
@@ -120,11 +121,7 @@ function classify(
   if (row.preconditions.includes(fm.state)) {
     return { outcome: 'proceed', exitCode: EXIT_OK };
   }
-  return {
-    outcome: 'wrong-state',
-    exitCode: EXIT_WRONG_STATE,
-    requiredPreconditions: row.preconditions,
-  };
+  return { outcome: 'wrong-state', exitCode: EXIT_WRONG_STATE };
 }
 
 function rowFor(phase: WorkflowPhase): TransitionRow {
@@ -152,6 +149,32 @@ function toResult(
     state: fm.state,
   };
   if (includePollCount) {
+    result.pollCount = pollCount;
+  }
+  return result;
+}
+
+// Builds a result that NAMES the phase's required precondition(s): the immediate
+// wrong-state refusal and the --wait timeout (still wrong when the clock ran
+// out) share this single construction site. `row.preconditions` is the one
+// source for the named preconditions; `pollCount` is included only on the wait
+// path (timeout), omitted on the immediate no-wait refusal.
+function wrongStateResult(
+  exitCode: number,
+  outcome: GateOutcome,
+  phase: WorkflowPhase,
+  fm: FrontMatter,
+  row: TransitionRow,
+  pollCount?: number,
+): GateResult {
+  const result: GateResult = {
+    exitCode,
+    outcome,
+    phase,
+    state: fm.state,
+    requiredPreconditions: row.preconditions,
+  };
+  if (pollCount !== undefined) {
     result.pollCount = pollCount;
   }
   return result;
@@ -214,13 +237,7 @@ export function gate(
 
   // No --wait: refuse and name the required precondition(s).
   if (opts.wait !== true) {
-    return {
-      exitCode: EXIT_WRONG_STATE,
-      outcome: 'wrong-state',
-      phase,
-      state: fm.state,
-      requiredPreconditions: row.preconditions,
-    };
+    return wrongStateResult(EXIT_WRONG_STATE, 'wrong-state', phase, fm, row);
   }
 
   // --wait: observe-only poll loop bounded by waitSeconds. It re-reads state and
@@ -232,14 +249,7 @@ export function gate(
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
   for (;;) {
     if (deps.now() - start >= deadlineMs) {
-      return {
-        exitCode: EXIT_TIMEOUT,
-        outcome: 'timeout',
-        phase,
-        state: fm.state,
-        requiredPreconditions: row.preconditions,
-        pollCount,
-      };
+      return wrongStateResult(EXIT_TIMEOUT, 'timeout', phase, fm, row, pollCount);
     }
     deps.sleep(pollMs);
     fm = deps.readState();

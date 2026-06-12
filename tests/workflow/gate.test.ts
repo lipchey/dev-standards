@@ -183,6 +183,73 @@ test('wait-timeout-nonzero-no-autopromote', () => {
   assert.ok(reads >= 1);
 });
 
+test('wait-timeout-on-exact-deadline-boundary', () => {
+  // Lock the inclusive `>=` edge: when now() reaches EXACTLY start+deadlineMs on
+  // the boundary iteration, the loop must TIMEOUT rather than poll once more. A
+  // strict `>` would never fire here (the clock holds at the deadline) and the
+  // loop would spin forever, so this both pins the contract and guards a hang.
+  const ticks = [0, 500, 1000]; // start, below-deadline poll, exact-deadline
+  let i = 0;
+  let reads = 0;
+  const deps = makeDeps({
+    now: () => ticks[Math.min(i++, ticks.length - 1)] ?? 0,
+    readState: () => {
+      reads += 1;
+      return makeFrontMatter({ state: 'plan-inprogress' }); // never a review-plan precondition
+    },
+  });
+  const result = gate('review-plan', { wait: true, waitSeconds: 1 }, deps);
+  assert.equal(result.exitCode, EXIT_TIMEOUT);
+  assert.equal(result.outcome, 'timeout');
+  assert.equal(result.state, 'plan-inprogress', 'state observed, never mutated');
+  assert.deepEqual(result.requiredPreconditions, ['plan-ready']);
+  assert.ok(reads >= 1);
+});
+
+test('wait-zero-seconds-times-out-immediately', () => {
+  // waitSeconds=0 -> deadlineMs=0; the first loop check (now()-start >= 0) is
+  // true at once, so a never-satisfiable wait returns TIMEOUT immediately with
+  // no further poll/sleep and no infinite loop, leaving the state unmutated.
+  let reads = 0;
+  const deps = makeDeps({
+    now: () => 0, // never advances; deadlineMs=0 still times out immediately
+    readState: () => {
+      reads += 1;
+      return makeFrontMatter({ state: 'plan-inprogress' });
+    },
+    sleep: () => assert.fail('must not sleep when waitSeconds is 0'),
+  });
+  const result = gate('review-plan', { wait: true, waitSeconds: 0 }, deps);
+  assert.equal(result.exitCode, EXIT_TIMEOUT);
+  assert.equal(result.outcome, 'timeout');
+  assert.equal(result.state, 'plan-inprogress', 'state observed, never mutated');
+  assert.equal(reads, 1, 'only the initial poll read; the loop times out before re-reading');
+});
+
+test('already-done-takes-precedence-over-wrong-state', () => {
+  // Step 2 (self-completion) precedes step 3 (precondition): even when the
+  // current state is NOT a precondition of the phase (which alone would be
+  // WRONG_STATE), last_success_loop === loopback_count yields ALREADY_DONE.
+  const deps = makeDeps({
+    readState: () =>
+      makeFrontMatter({
+        state: 'created', // NOT a review-plan precondition -> would be WRONG_STATE
+        loopback_count: 0,
+        phases: {
+          'review-plan': {
+            last_success_loop: 0,
+            attempts: 1,
+            start_sha: null,
+            complete_sha: null,
+          },
+        },
+      }),
+  });
+  const result = gate('review-plan', NO_WAIT, deps);
+  assert.equal(result.exitCode, EXIT_ALREADY_DONE);
+  assert.equal(result.outcome, 'already-done');
+});
+
 test('force-overrides-only-wrong-state', () => {
   // Wrong state + force -> forced-proceed, recorded.
   const recorded: ForcedAction[] = [];
