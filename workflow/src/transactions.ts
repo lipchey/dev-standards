@@ -236,13 +236,6 @@ function markPhaseSuccess(
   fm.phases[phase] = record;
 }
 
-function recordCompleteSha(fm: FrontMatter, phase: WorkflowPhase, sha: string): void {
-  const rec = fm.phases[phase];
-  if (rec !== undefined) {
-    rec.complete_sha = sha;
-  }
-}
-
 // ── start ────────────────────────────────────────────────────────────────────
 
 // `start <phase>`: claims the phase for the caller and advances `state` to the
@@ -360,12 +353,12 @@ function completePlanning(
     withWorkflowPhaseTrailer(`workflow(${phase}): complete -> ${toState}`, toState),
   );
 
-  // Post-commit record: complete_sha is the sha of the commit just made. Written
-  // into the working-tree front matter and left UNCOMMITTED (recover ignores it).
-  const sha = headSha(deps);
-  recordCompleteSha(fm, phase, sha);
-  if (autoAdvance) recordCompleteSha(fm, 'consolidate-plan', sha);
-  savePlanning(deps, fm, body);
+  // Fix 3 (P2): no post-commit complete_sha rewrite for planning/review phases.
+  // complete_sha for these phases is the trailer commit itself (knowable only
+  // post-commit, and NOT consumed by gate/transitions/recover), so it stays null
+  // and the worktree is left CLEAN — the contracted dirty-refusing `ship` (after
+  // `complete review-implementation`) must not trip on the helper's own metadata.
+  // (implement-plan keeps complete_sha = the code commit, recorded in its commit 2.)
 
   const result: TransactionResult = {
     exitCode: EXIT_OK,

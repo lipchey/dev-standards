@@ -143,6 +143,13 @@ function commitFiles(dir: string, rev: string): string[] {
     .filter((l) => l !== '');
 }
 
+// `git status --porcelain` output, trimmed. Empty string == a clean worktree
+// (nothing staged, modified, or untracked). The §2.10 lockfile is released before
+// this is read, so it never shows up.
+function porcelain(dir: string): string {
+  return runGit(['status', '--porcelain'], dir).trim();
+}
+
 function writeCode(dir: string, name: string, contents: string): string {
   const p = path.join(dir, name);
   fs.writeFileSync(p, contents);
@@ -208,7 +215,12 @@ test('complete-folds-mutation-into-trailer-commit', () => {
     const fm = readFm(planningPath);
     assert.equal(fm.state, 'plan-ready', 'front-matter mutation is folded in');
     assert.equal(fm.phases.plan?.last_success_loop, 0, 'phase marked succeeded in this round');
-    assert.equal(fm.phases.plan?.complete_sha, revParse(dir, 'HEAD'), 'complete_sha recorded post-commit (= the commit just made)');
+    // Fix 3 (P2): the planning-phase complete_sha is recorded as null in the single
+    // trailered transaction commit and NO post-commit rewrite is made, so the tree
+    // stays CLEAN. The trailer commit itself is the planning phase's "complete_sha"
+    // (derivable if ever needed; NOT consumed by gate/transitions/recover).
+    assert.equal(fm.phases.plan?.complete_sha, null, 'planning-phase complete_sha is null (no post-commit rewrite)');
+    assert.equal(porcelain(dir), '', 'the worktree is CLEAN after complete (no dirty planning metadata)');
     assert.equal(diverged(dir, planningPath), false);
   } finally {
     cleanup(dir);
@@ -330,6 +342,12 @@ test('approved-review-plan-auto-advances-same-transaction', () => {
     assert.ok(consolidate, 'a consolidate-plan record is written');
     assert.equal(consolidate.auto_advanced, true, 'auto_advanced: true is written');
     assert.equal(consolidate.last_success_loop, 0, 'keyed on the current loopback_count');
+    // Fix 3 (P2): the auto-advance no longer rewrites complete_sha post-commit, so
+    // both the review-plan and the auto-advanced consolidate complete_sha stay null
+    // and the worktree stays CLEAN (the contracted dirty-refusing `ship` won't trip).
+    assert.equal(fm.phases['review-plan']?.complete_sha, null, 'review-plan complete_sha is null');
+    assert.equal(consolidate.complete_sha, null, 'auto-advanced consolidate complete_sha is null');
+    assert.equal(porcelain(dir), '', 'the worktree is CLEAN after the auto-advance complete');
     assert.equal(readHeadWorkflowPhase(dir, runGit), 'plan-consolidated', 'the single trailer is the final resting state');
 
     // §2.9: the consolidate gate now observes ALREADY_DONE (no agent launched).
