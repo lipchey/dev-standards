@@ -16,6 +16,7 @@ import type { CliIO } from '../../workflow/src/cli.ts';
 import { realLockSeams } from '../../workflow/src/lock.ts';
 import {
   diverges,
+  GitError,
   lastWorkflowPhaseTrailer,
   readHeadWorkflowPhase,
   runGit,
@@ -228,6 +229,29 @@ test('trailer-read-only-from-the-final-trailer-block', () => {
       'plan-ready',
       'the prose mention is skipped; the real trailer below remains the authority',
     );
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('runGit-throws-structured-git-error-on-non-zero-exit', () => {
+  // Fix 4 (P2): a non-zero git exit must throw a STRUCTURED error carrying the
+  // §2.7 fields (command, stderr_tail), not a generic Error — so the CLI can emit
+  // the machine-readable error object. `git rev-parse HEAD` in a non-repo fails.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-nogit-'));
+  try {
+    let thrown: unknown;
+    try {
+      runGit(['rev-parse', 'HEAD'], dir);
+    } catch (err) {
+      thrown = err;
+    }
+    assert.ok(thrown instanceof GitError, 'a non-zero git exit throws a GitError');
+    const git = thrown as GitError;
+    assert.equal(git.kind, 'git-error', 'carries the cross-realm kind tag');
+    assert.equal(git.command, 'git rev-parse HEAD', 'names the exact git command (no shell string)');
+    assert.ok(typeof git.stderr_tail === 'string', 'carries a stderr_tail');
+    assert.ok(/not a git repository|rev-parse/i.test(git.message), 'message describes the failure');
   } finally {
     cleanup(dir);
   }

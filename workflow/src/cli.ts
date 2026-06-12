@@ -27,7 +27,8 @@ import {
 import { LockBusyError, withLock } from './lock.ts';
 import type { LockSeams } from './lock.ts';
 import { computeDivergence, recover, splitPlanningFile, worktreeOf } from './recover.ts';
-import type { RunGit } from './trailers.ts';
+import { GitError } from './trailers.ts';
+import type { MachineReadableError, RunGit } from './trailers.ts';
 import { gate } from './gate.ts';
 import type { GateOptions, GateResult } from './gate.ts';
 import { complete, requestChanges, start } from './transactions.ts';
@@ -277,6 +278,10 @@ function runRecover(args: string[], io: CliIO, lockSeams: LockSeams | undefined)
       const detail = error instanceof Error ? error.message : String(error);
       io.stderr(`recover: planning file at "${resolved}" is corrupt (${detail})\n`);
       return EXIT_NEEDS_HUMAN;
+    }
+    const git = asGitError(error);
+    if (git !== null) {
+      return emitGitFailure(io, 'recover', git);
     }
     const detail = error instanceof Error ? error.message : String(error);
     io.stderr(`recover: failed: ${detail}\n`);
@@ -691,7 +696,8 @@ function runDoctorCommand(args: string[], io: CliIO): number {
 
 // Maps a thrown error from a mutating verb (or the gate force path) to the §2.7
 // exit code: LOCK_BUSY (14), a commit-scope refusal -> WRONG_STATE (11), corrupt
-// planning file -> NEEDS_HUMAN (13), anything else -> FAILURE (1).
+// planning file -> NEEDS_HUMAN (13), a git/infra failure -> FAILURE (1) WITH the
+// §2.7 machine-readable error as the LAST stderr line, anything else -> FAILURE (1).
 function mapMutationError(io: CliIO, command: string, resolved: string, error: unknown): number {
   if (error instanceof LockBusyError) {
     io.stderr(`${command}: ${error.message}\n`);
@@ -706,8 +712,57 @@ function mapMutationError(io: CliIO, command: string, resolved: string, error: u
     io.stderr(`${command}: planning file at "${resolved}" is corrupt (${detail}); run \`workflow recover\`\n`);
     return EXIT_NEEDS_HUMAN;
   }
+  const git = asGitError(error);
+  if (git !== null) {
+    return emitGitFailure(io, command, git);
+  }
   const detail = error instanceof Error ? error.message : String(error);
   io.stderr(`${command}: failed: ${detail}\n`);
+  return EXIT_FAILURE;
+}
+
+// A git/infra failure (GitError) surfaced by the git seam. Cross-realm-safe:
+// matches both `instanceof` and the documented `kind` tag (a bundled copy can
+// defeat `instanceof`). Returns the typed shape or null. The structured fields
+// (command/stderr_tail/step) are read from the carrier when present, with safe
+// fallbacks so a foreign-realm copy still yields a well-formed §2.7 object.
+function asGitError(
+  error: unknown,
+): { command: string; stderr_tail: string; step: string | undefined; message: string } | null {
+  if (error instanceof GitError) {
+    return { command: error.command, stderr_tail: error.stderr_tail, step: error.step, message: error.message };
+  }
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { kind?: unknown }).kind === 'git-error'
+  ) {
+    const e = error as { command?: unknown; stderr_tail?: unknown; step?: unknown; message?: unknown };
+    return {
+      command: typeof e.command === 'string' ? e.command : '',
+      stderr_tail: typeof e.stderr_tail === 'string' ? e.stderr_tail : '',
+      step: typeof e.step === 'string' ? e.step : undefined,
+      message: typeof e.message === 'string' ? e.message : String(error),
+    };
+  }
+  return null;
+}
+
+// Emits a git/infra failure: a human-readable line ABOVE, then the §2.7
+// machine-readable error object as the LAST line of stderr (design §5; S14's gh
+// adapter reuses the same shape). Exit code stays FAILURE (1); never retried.
+function emitGitFailure(
+  io: CliIO,
+  command: string,
+  git: { command: string; stderr_tail: string; step: string | undefined; message: string },
+): number {
+  io.stderr(`${command}: failed: ${git.message}\n`);
+  // Keys in the §2.7-documented order (command, step, message, stderr_tail); step
+  // is included only when the call site named it.
+  const payload: MachineReadableError = git.step !== undefined
+    ? { command: git.command, step: git.step, message: git.message, stderr_tail: git.stderr_tail }
+    : { command: git.command, message: git.message, stderr_tail: git.stderr_tail };
+  io.stderr(`${JSON.stringify({ error: payload })}\n`);
   return EXIT_FAILURE;
 }
 

@@ -139,17 +139,65 @@ export function diverges(
 // repos while the pure trailer logic above needs no git at all.
 export type RunGit = (args: string[], cwd: string) => string;
 
+// The §2.7 machine-readable error payload (design §5). The CLI emits this as the
+// LAST line of stderr on any gh/git/network failure; S14's gh adapter reuses the
+// SAME shape. `step` is optional (named only where the call site knows it).
+export interface MachineReadableError {
+  command: string;
+  step?: string;
+  message: string;
+  stderr_tail: string;
+}
+
+// Structured git failure: a non-zero git exit (or a spawn error). Carries the
+// fields the §2.7 machine-readable error object needs — `command` (the git argv,
+// never a shell string) and `stderr_tail` (the trailing stderr) — plus an optional
+// `step`. `kind` is a cross-realm tag (a bundled copy can defeat `instanceof`),
+// mirroring CorruptStateError / LockBusyError / CommitScopeError.
+export class GitError extends Error {
+  readonly kind = 'git-error' as const;
+  readonly command: string;
+  readonly stderr_tail: string;
+  step?: string;
+  constructor(command: string, stderrTail: string, message: string, step?: string) {
+    super(message);
+    this.name = 'GitError';
+    this.command = command;
+    this.stderr_tail = stderrTail;
+    if (step !== undefined) this.step = step;
+    Object.setPrototypeOf(this, GitError.prototype);
+  }
+}
+
+// Keep the machine-readable `stderr_tail` bounded so a runaway stderr cannot
+// bloat the emitted JSON line. The trailing bytes are the most diagnostic.
+const STDERR_TAIL_MAX = 2000;
+
+function tailOf(text: string): string {
+  const trimmed = text.trim();
+  return trimmed.length > STDERR_TAIL_MAX ? trimmed.slice(-STDERR_TAIL_MAX) : trimmed;
+}
+
 export function runGit(args: string[], cwd: string): string {
+  const command = `git ${args.join(' ')}`;
   const result = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',
     shell: false,
     maxBuffer: 64 * 1024 * 1024,
   });
-  if (result.error !== undefined) throw result.error;
+  if (result.error !== undefined) {
+    // A spawn-level failure (git missing, cwd gone): no exit status, no stderr.
+    const message = result.error instanceof Error ? result.error.message : String(result.error);
+    throw new GitError(command, tailOf(message), `${command} failed to spawn: ${message}`);
+  }
   if (result.status !== 0) {
     const detail = (result.stderr ?? '').trim();
-    throw new Error(`git ${args.join(' ')} failed (status ${result.status}): ${detail}`);
+    throw new GitError(
+      command,
+      tailOf(result.stderr ?? ''),
+      `${command} failed (status ${result.status}): ${detail}`,
+    );
   }
   return result.stdout;
 }

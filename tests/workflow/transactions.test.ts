@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   EXIT_ALREADY_DONE,
+  EXIT_FAILURE,
   EXIT_OK,
   EXIT_WRONG_STATE,
 } from '../../workflow/src/types.ts';
@@ -575,6 +576,57 @@ test('cli-gate-force-records-forced-action-under-lock', () => {
     assert.equal(fm.forced_actions?.[0]?.reason, 'manual recovery');
     assert.equal(fm.forced_actions?.[0]?.from_state, 'created');
     assert.equal(fm.forced_actions?.[0]?.claimed_by, 'pane-9:human');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// Installs an executable pre-commit hook that rejects every commit, so a `complete`
+// transaction's `git commit` fails with a non-zero status (driving the structured
+// GitError -> §2.7 machine-readable error path) without any global git config.
+function installFailingPreCommitHook(dir: string): void {
+  const hooksDir = path.join(dir, '.git', 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const hook = path.join(hooksDir, 'pre-commit');
+  fs.writeFileSync(hook, '#!/bin/sh\necho "rejected by fixture pre-commit hook" 1>&2\nexit 1\n');
+  fs.chmodSync(hook, 0o755);
+}
+
+// ── Fix 4: git failures emit the §2.7 machine-readable error (last stderr line) ─
+
+test('git-commit-failure-emits-machine-readable-error-as-last-stderr-line', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    // Reach plan-inprogress (the seed + this start commit succeed; the hook is
+    // installed only AFTER, so it bites the `complete` planning commit).
+    runCli(['start', 'plan', '--file', planningPath], makeCliIO(dir, PRODUCER).io, realLockSeams());
+    assert.equal(readFm(planningPath).state, 'plan-inprogress');
+
+    installFailingPreCommitHook(dir);
+
+    const cap = makeCliIO(dir, PRODUCER);
+    const code = runCli(['complete', 'plan', '--file', planningPath], cap.io, realLockSeams());
+
+    // The git failure exits FAILURE (1) — no new exit code, no silent retry.
+    assert.equal(code, EXIT_FAILURE, 'a git/infra failure exits 1');
+
+    // The LAST line of stderr parses as the §2.7 machine-readable error object.
+    const stderr = cap.err();
+    const lines = stderr.split('\n').filter((l) => l.trim() !== '');
+    const last = lines[lines.length - 1];
+    assert.ok(last, 'stderr has a final line');
+    const parsed = JSON.parse(last) as { error?: { command?: string; stderr_tail?: string; message?: string } };
+    assert.ok(parsed.error, 'the last line is the { error: ... } object (§2.7)');
+    assert.ok(
+      typeof parsed.error.command === 'string' && parsed.error.command.startsWith('git commit'),
+      'the error names the failing git command',
+    );
+    assert.ok(
+      typeof parsed.error.stderr_tail === 'string' && /rejected by fixture pre-commit hook/.test(parsed.error.stderr_tail),
+      'the error carries the git stderr tail',
+    );
+    assert.ok(typeof parsed.error.message === 'string' && parsed.error.message.length > 0, 'a message is populated');
   } finally {
     cleanup(dir);
   }
