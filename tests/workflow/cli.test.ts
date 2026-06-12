@@ -8,7 +8,7 @@ import {
 } from '../../workflow/src/types.ts';
 import type { FrontMatter } from '../../workflow/src/types.ts';
 import { serializeFrontMatter } from '../../workflow/src/front-matter.ts';
-import { runCli } from '../../workflow/src/cli.ts';
+import { runCli, runCliAsync } from '../../workflow/src/cli.ts';
 import type { CliIO } from '../../workflow/src/cli.ts';
 import type { CmuxAdapter, CmuxSectionSpec } from '../../workflow/src/cmux-adapter.ts';
 
@@ -220,6 +220,44 @@ test('unknown-command-usage', () => {
   assert.match(cap.err(), /unknown command/i, 'names the failure');
   assert.match(cap.err(), /frobnicate/, 'echoes the offending command');
   assert.match(cap.err(), /usage/i, 'prints usage');
+});
+
+test('notify-standalone-posts-payload-from-cli', async () => {
+  const calls: unknown[] = [];
+  const cap = makeIO({
+    env: { WORKFLOW_NOTIFY_WEBHOOK: 'https://example.test/webhook' },
+    postJson: async (url, payload, timeoutMs) => {
+      calls.push({ url, payload, timeoutMs });
+      return { ok: true, status: 204 };
+    },
+  });
+
+  const code = await runCliAsync([
+    'notify',
+    'ready_for_review',
+    '--repo',
+    'owner/repo',
+    '--pr',
+    '42',
+    '--url',
+    'https://github.example/owner/repo/pull/42',
+    '--message',
+    'Ready for review',
+  ], cap.io);
+
+  assert.equal(code, EXIT_OK);
+  assert.deepEqual(calls, [{
+    url: 'https://example.test/webhook',
+    payload: {
+      event: 'ready_for_review',
+      repo: 'owner/repo',
+      pr: 42,
+      url: 'https://github.example/owner/repo/pull/42',
+      message: 'Ready for review',
+    },
+    timeoutMs: 10_000,
+  }]);
+  assert.match(cap.out(), /notify: sent/);
 });
 
 test('new-feature-invalid-slug-is-usage-error', () => {

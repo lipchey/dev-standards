@@ -8,11 +8,12 @@
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { runCli } from './cli.ts';
+import { runCli, runCliAsync } from './cli.ts';
 import type { CliIO } from './cli.ts';
 import { realLockSeams } from './lock.ts';
 import { runGit } from './trailers.ts';
 import { realDoctorProbes } from './doctor.ts';
+import { postJsonWithFetch } from './notify.ts';
 
 // Node realpaths import.meta.url under symlinks; realpath both sides for the
 // entrypoint check (the idiom from runner/src/manifest-cli.ts; inlined to keep
@@ -59,6 +60,8 @@ const realIO: CliIO = {
   sleep: sleepSync,
   claimedBy: process.env.WORKFLOW_CLAIMED_BY ?? '',
   doctorProbes: realDoctorProbes(),
+  env: process.env,
+  postJson: postJsonWithFetch,
   launchProcess: (launch) => {
     const result = spawnSync(launch.file, launch.args, {
       cwd: launch.cwd,
@@ -80,7 +83,18 @@ export function main(argv: string[]): number {
   return runCli(argv, realIO, realLockSeams());
 }
 
+export async function mainAsync(argv: string[]): Promise<number> {
+  return runCliAsync(argv, realIO, realLockSeams());
+}
+
 // Keep imports test-safe: only run (and exit) when invoked as the entrypoint.
 if (isMainModule(import.meta.url)) {
-  process.exit(main(process.argv.slice(2)));
+  mainAsync(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    (error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`workflow: fatal: ${detail}\n`);
+      process.exit(1);
+    },
+  );
 }

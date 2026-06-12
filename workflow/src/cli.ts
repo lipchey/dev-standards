@@ -46,6 +46,8 @@ import { awaitAndLaunch } from './await-and-launch.ts';
 import type { AgentLaunch, ProcessResult } from './await-and-launch.ts';
 import { createCmuxAdapter } from './cmux-adapter.ts';
 import type { CmuxAdapter } from './cmux-adapter.ts';
+import { isNotifyEvent, sendNotify } from './notify.ts';
+import type { NotifyPayload, NotifyPostJson } from './notify.ts';
 
 // The gate's --wait deadline when the caller does not configure one (the §2.8
 // config default lands with the manifest wiring; the CLI uses a fixed fallback).
@@ -80,6 +82,7 @@ const USAGE = [
   '  await-and-launch <phase> [--file <path>]    wait for a phase gate, then launch its seat',
   '  new-feature <slug>                          create worktree, planning file, and feature record',
   '  feature-start <slug> [--worktree] [--branch <name>] create branch and feature record',
+  '  notify <event> --repo r --pr n --url u --message m post the n8n review payload',
   '',
 ].join('\n');
 
@@ -110,6 +113,8 @@ export interface CliIO {
   launchProcess?: (launch: AgentLaunch) => ProcessResult;
   runShip?: () => ProcessResult; // S14 wires the real ship routine here.
   cmuxAdapter?: CmuxAdapter;
+  env?: Record<string, string | undefined>;
+  postJson?: NotifyPostJson;
 }
 
 function usageError(io: CliIO, message: string): number {
@@ -186,6 +191,12 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
     default:
       return usageError(io, `unknown command "${command}"`);
   }
+}
+
+export async function runCliAsync(argv: string[], io: CliIO, lockSeams?: LockSeams): Promise<number> {
+  const [command, ...rest] = argv;
+  if (command === 'notify') return runNotify(rest, io);
+  return runCli(argv, io, lockSeams);
 }
 
 // Parses the shared optional `--file <path>` flag (the only flag `status` and
@@ -573,6 +584,60 @@ function loadWorkflowConfigStrict(io: CliIO, worktree: string): WorkflowConfig {
 }
 
 // ── diff-range ──────────────────────────────────────────────────────────────
+
+async function runNotify(argv: string[], io: CliIO): Promise<number> {
+  const [eventRaw, ...rest] = argv;
+  if (eventRaw === undefined) return usageError(io, 'notify: missing <event>');
+  if (!isNotifyEvent(eventRaw)) return usageError(io, `notify: unknown event "${eventRaw}"`);
+
+  const values: Partial<Record<'repo' | 'pr' | 'url' | 'message', string>> = {};
+  for (let i = 0; i < rest.length; i += 1) {
+    const flag = rest[i];
+    if (flag !== '--repo' && flag !== '--pr' && flag !== '--url' && flag !== '--message') {
+      return usageError(io, `notify: unexpected argument "${flag ?? ''}"`);
+    }
+    const value = rest[i + 1];
+    if (value === undefined) return usageError(io, `notify: missing value for ${flag}`);
+    const key = flag.slice(2) as 'repo' | 'pr' | 'url' | 'message';
+    if (values[key] !== undefined) return usageError(io, `notify: ${flag} may be given only once`);
+    values[key] = value;
+    i += 1;
+  }
+
+  for (const key of ['repo', 'pr', 'url', 'message'] as const) {
+    if (values[key] === undefined) return usageError(io, `notify: missing --${key}`);
+  }
+  const repo = values.repo;
+  const prRaw = values.pr;
+  const url = values.url;
+  const message = values.message;
+  if (repo === undefined || prRaw === undefined || url === undefined || message === undefined) {
+    return usageError(io, 'notify: missing required payload field');
+  }
+  const pr = Number(prRaw);
+  if (!Number.isInteger(pr) || pr <= 0) return usageError(io, 'notify: --pr must be a positive integer');
+
+  const payload: NotifyPayload = {
+    event: eventRaw,
+    repo,
+    pr,
+    url,
+    message,
+  };
+  const notifyOpts: Parameters<typeof sendNotify>[1] = {
+    webhookEnv: 'WORKFLOW_NOTIFY_WEBHOOK',
+    env: io.env ?? {},
+    standalone: true,
+  };
+  if (io.postJson !== undefined) notifyOpts.postJson = io.postJson;
+  const result = await sendNotify(payload, notifyOpts);
+  if (result.ok) {
+    io.stdout(`notify: sent ${payload.event} for PR ${payload.pr}\n`);
+    return EXIT_OK;
+  }
+  io.stderr(`notify: failed: ${result.error ?? 'unknown notify failure'}\n`);
+  return EXIT_FAILURE;
+}
 
 function runDiffRange(argv: string[], io: CliIO): number {
   const parsed = parseCommandArgs('diff-range', argv, io, {});
