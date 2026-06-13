@@ -95,8 +95,9 @@ function readStateDoc(deps: FetchReviewDeps): StateDoc {
 }
 
 // The latest SUBMITTED review (state in the §2.5 verdict set, with a submittedAt),
-// chosen by max submittedAt (ISO-8601 sorts lexically). When none exists the file
-// is still written with review_id 0 / verdict commented so the step is idempotent.
+// chosen by max submittedAt (ISO-8601 sorts lexically). When none exists it returns
+// reviewId 0 — the caller (FIX 3) treats that as "no submitted review" and refuses
+// with EXIT_WRONG_STATE rather than fabricating a synthetic review-0 file.
 function latestSubmittedReview(reviews: GhReviewNode[]): {
   reviewId: number;
   verdict: ReviewVerdict;
@@ -199,6 +200,23 @@ export function fetchReview(opts: FetchReviewOptions, deps: FetchReviewDeps): Fe
       targetPr = record.pr;
     }
 
+    // FIX 4: state-precondition guard (runs BEFORE the gh fetch). §2.4 allows
+    // fetch-review only from awaiting_human_review or ci_failed, plus an idempotent
+    // re-run while already processing_review. A stale/hand-edited building/done/''
+    // record with a matching PR must NOT be advanced — refuse with EXIT_WRONG_STATE,
+    // write NO file, leave STATE.md untouched (so a later green `ship` cannot emit a
+    // spurious work_finished off a fabricated processing_review).
+    if (
+      record.review_state !== 'awaiting_human_review'
+      && record.review_state !== 'ci_failed'
+      && record.review_state !== 'processing_review'
+    ) {
+      return wrongState(
+        `fetch-review: record for branch ${JSON.stringify(record.branch)} is in review_state ${JSON.stringify(record.review_state)}; `
+          + 'fetch-review is only valid from awaiting_human_review, ci_failed, or processing_review',
+      );
+    }
+
     // Fetch reviews + threads + mergeability for the target PR in ONE GraphQL
     // round-trip (repoInfo resolves owner/name); single-shot, no retries.
     const repo = deps.gh.repoInfo();
@@ -221,6 +239,19 @@ export function fetchReview(opts: FetchReviewOptions, deps: FetchReviewDeps): Fe
     }
 
     const latest = latestSubmittedReview(data.reviews);
+
+    // FIX 3: when there is NO submitted review (the would-be review_id:0 case —
+    // which also covers a null/missing PR node, since the adapter normalizes it to
+    // empty reviews), refuse with EXIT_WRONG_STATE. The §2.5 file is for the LATEST
+    // SUBMITTED review and the process-review precondition is a submitted PR review,
+    // so a missing review/PR must NOT fabricate a synthetic pr-<n>-review-0.json
+    // success or advance the record. Write NO file; leave STATE.md untouched.
+    if (latest.reviewId === 0) {
+      return wrongState(
+        `fetch-review: PR ${targetPr} has no submitted review yet; nothing to fetch (no review file written, STATE.md unchanged)`,
+      );
+    }
+
     const normalized: NormalizedReview = {
       pr: targetPr,
       review_id: latest.reviewId,

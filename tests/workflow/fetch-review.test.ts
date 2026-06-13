@@ -473,3 +473,139 @@ test('truncation-warns-to-stderr-and-still-writes', () => {
   assert.match(warning, /review threads and comments/);
   assert.match(warning, /100/);
 });
+
+// ── FIX 3 (P2): no synthetic review when none is submitted / PR node is null ──
+// The §2.5 file is for the LATEST SUBMITTED review and the process-review
+// precondition is a submitted PR review. When no review has been submitted (the
+// would-be review_id:0 case) OR the PR node is null/missing, fetch-review must NOT
+// fabricate a `pr-<n>-review-0.json` success and must NOT advance the record — it
+// returns EXIT_WRONG_STATE, writes NO file, and leaves STATE.md untouched.
+
+test('no-submitted-review-wrong-state-no-file-no-advance', () => {
+  const before = stateDoc(DEFAULT_RECORDS);
+  const fx = fixture({
+    state: before,
+    gh: makeGh({ reviews: [], threads: [] }), // PR exists, but nothing submitted
+  });
+
+  const result = fetchReview({}, fx.deps);
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE, result.message);
+  // NO review file written (in particular no synthetic pr-42-review-0.json).
+  const synthetic = path.join(ROOT, 'reports', 'reviews', 'pr-42-review-0.json');
+  assert.equal(fx.files.has(synthetic), false, 'no synthetic review-0 file');
+  for (const key of fx.files.keys()) {
+    assert.ok(!key.includes(path.join('reports', 'reviews')), `no review file written: ${key}`);
+  }
+  // STATE.md untouched (record not advanced to processing_review).
+  assert.equal(fx.files.get(STATE_PATH), before, 'STATE.md untouched on a no-review refusal');
+});
+
+test('only-pending-or-dismissed-reviews-wrong-state', () => {
+  // PENDING / DISMISSED are NOT submitted verdicts, so latestSubmittedReview yields
+  // no submitted review — same WRONG_STATE refusal as an empty review list.
+  const before = stateDoc(DEFAULT_RECORDS);
+  const fx = fixture({
+    state: before,
+    gh: makeGh({
+      reviews: [
+        { databaseId: 1, state: 'PENDING', submittedAt: null },
+        { databaseId: 2, state: 'DISMISSED', submittedAt: '2026-06-12T00:00:00Z' },
+      ],
+    }),
+  });
+
+  const result = fetchReview({}, fx.deps);
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE, result.message);
+  for (const key of fx.files.keys()) {
+    assert.ok(!key.includes(path.join('reports', 'reviews')), `no review file written: ${key}`);
+  }
+  assert.equal(fx.files.get(STATE_PATH), before, 'STATE.md untouched');
+});
+
+test('null-pr-node-wrong-state-no-file-no-advance', () => {
+  // A null/missing pullRequest node normalizes (in the adapter) to empty reviews +
+  // null mergeable — fetch-review must refuse with WRONG_STATE, write no file, and
+  // leave STATE.md untouched, exactly like the no-submitted-review case.
+  const before = stateDoc(DEFAULT_RECORDS);
+  const fx = fixture({
+    state: before,
+    gh: makeGh({ reviews: [], threads: [], mergeable: null }), // null PR node shape
+  });
+
+  const result = fetchReview({}, fx.deps);
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE, result.message);
+  const synthetic = path.join(ROOT, 'reports', 'reviews', 'pr-42-review-0.json');
+  assert.equal(fx.files.has(synthetic), false, 'no synthetic review-0 file for a null PR node');
+  assert.equal(fx.files.get(STATE_PATH), before, 'STATE.md untouched on a null-PR refusal');
+});
+
+// ── FIX 4 (P2): refuse to advance from invalid lifecycle states ──────────────
+// §2.4 allows fetch-review only from awaiting_human_review or ci_failed (plus an
+// idempotent re-run while already processing_review). A stale/hand-edited
+// building/done/'' record with a matching PR must NOT be advanced to
+// processing_review — return EXIT_WRONG_STATE, write no file, leave STATE.md
+// untouched. The state-precondition guard runs BEFORE the gh fetch.
+
+test('building-record-fetch-review-wrong-state-no-advance', () => {
+  const records: FeatureRecord[] = [
+    { slug: 'dark-mode', branch: 'feature/dark-mode', worktree: '/repo', pr: 42, review_state: 'building' },
+  ];
+  const before = stateDoc(records);
+  const fx = fixture({
+    state: before,
+    // gh must NOT be called: the state guard precedes the fetch. makeGh()'s repoInfo/
+    // prReviewData would still answer, so we additionally assert no file/advance.
+    gh: makeGh({ reviews: [{ databaseId: 9, state: 'APPROVED', submittedAt: '2026-06-12T00:00:00Z' }] }),
+  });
+
+  const result = fetchReview({}, fx.deps);
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE, result.message);
+  for (const key of fx.files.keys()) {
+    assert.ok(!key.includes(path.join('reports', 'reviews')), `no review file written: ${key}`);
+  }
+  assert.equal(fx.files.get(STATE_PATH), before, 'STATE.md untouched for a building record');
+});
+
+test('done-record-fetch-review-wrong-state-no-advance', () => {
+  const records: FeatureRecord[] = [
+    { slug: 'dark-mode', branch: 'feature/dark-mode', worktree: '/repo', pr: 42, review_state: 'done' },
+  ];
+  const before = stateDoc(records);
+  const fx = fixture({
+    state: before,
+    gh: makeGh({ reviews: [{ databaseId: 9, state: 'APPROVED', submittedAt: '2026-06-12T00:00:00Z' }] }),
+  });
+
+  const result = fetchReview({}, fx.deps);
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE, result.message);
+  for (const key of fx.files.keys()) {
+    assert.ok(!key.includes(path.join('reports', 'reviews')), `no review file written: ${key}`);
+  }
+  assert.equal(fx.files.get(STATE_PATH), before, 'STATE.md untouched for a done record');
+});
+
+test('ci-failed-and-processing-review-records-proceed', () => {
+  // ci_failed proceeds (a re-fetch after CI failure), and an idempotent re-run while
+  // already processing_review proceeds — both write the file and advance/stay.
+  for (const startState of ['ci_failed', 'processing_review'] as const) {
+    const records: FeatureRecord[] = [
+      { slug: 'dark-mode', branch: 'feature/dark-mode', worktree: '/repo', pr: 42, review_state: startState },
+    ];
+    const fx = fixture({
+      state: stateDoc(records),
+      gh: makeGh({ reviews: [{ databaseId: 9, state: 'CHANGES_REQUESTED', submittedAt: '2026-06-12T00:00:00Z' }] }),
+    });
+
+    const result = fetchReview({}, fx.deps);
+
+    assert.equal(result.exitCode, EXIT_OK, `${startState} should proceed: ${result.message}`);
+    assert.deepEqual((readReviewFile(fx.files, 42, 9) as { pr: number }).pr, 42, `${startState} writes the review file`);
+    const after = fx.files.get(STATE_PATH) ?? '';
+    assert.match(after, /slug: "dark-mode"[\s\S]*?review_state: "processing_review"/, `${startState} -> processing_review`);
+  }
+});
