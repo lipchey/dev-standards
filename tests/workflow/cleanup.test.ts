@@ -139,6 +139,10 @@ function fixture(overrides: Overrides = {}) {
   const gitCalls: string[][] = [];
   const ghCalls: number[] = [];
   const archiveWrites: Array<{ path: string; content: string }> = [];
+  // Every writeFile call (any path) so a path-traversal escape is observable even
+  // when the escaped path falls OUTSIDE `.agents/handoffs` (where archiveWrites
+  // wouldn't record it).
+  const allWrites: Array<{ path: string; content: string }> = [];
   const cmuxClosed: string[] = [];
   const logs: string[] = [];
 
@@ -174,6 +178,7 @@ function fixture(overrides: Overrides = {}) {
     },
     writeFile: (file, text) => {
       files.set(file, text);
+      allWrites.push({ path: file, content: text });
       if (file.includes(path.join('.agents', 'handoffs')) && file.endsWith('.md') && !file.endsWith('STATE.md')) {
         archiveWrites.push({ path: file, content: text });
       }
@@ -248,7 +253,7 @@ function fixture(overrides: Overrides = {}) {
   };
 
   return {
-    root, statePath, files, deps, gitCalls, ghCalls, archiveWrites, cmuxClosed, logs,
+    root, statePath, files, deps, gitCalls, ghCalls, archiveWrites, allWrites, cmuxClosed, logs,
     opts: { dryRun: overrides.dryRun === true },
   };
 }
@@ -664,6 +669,16 @@ test('rerun-after-partial-failure-recovers', () => {
     pathExists: (p) => p !== wt('b'), // its path is gone on disk
     views: { 2: mergedView('feature/b') },
   });
+  // Real-git fidelity: `git status` in a removed cwd ENOENTs. The fix must SKIP the
+  // dirty/clean check for the gone worktree, so this stub must never be reached for
+  // wt('b') — if it is, cleanup would abort (proving the fix when it does not).
+  const secondInner = second.deps.runGit;
+  second.deps.runGit = (args, cwd) => {
+    if (args[0] === 'status' && args.includes('--porcelain') && cwd === wt('b')) {
+      throw new GitError('git status --porcelain', 'ENOENT', 'git status failed (status 128): cwd missing');
+    }
+    return secondInner(args, cwd);
+  };
   second.files.set(second.statePath, persistedState);
   try {
     const r2 = cleanup(second.opts, second.deps);
@@ -732,6 +747,16 @@ test('worktree-removed-but-branch-delete-failed-then-recovers-on-rerun', () => {
     views: { 5: mergedView('feature/leak') },
     // no failBranchDelete: the transient git error has cleared.
   });
+  // Real-git fidelity: `git status` in the removed worktree cwd ENOENTs. The fix
+  // must SKIP the dirty/clean check for the gone worktree; reaching this stub would
+  // abort the re-run, so its absence proves the fix.
+  const run2Inner = run2.deps.runGit;
+  run2.deps.runGit = (args, cwd) => {
+    if (args[0] === 'status' && args.includes('--porcelain') && cwd === wt('leak')) {
+      throw new GitError('git status --porcelain', 'ENOENT', 'git status failed (status 128): cwd missing');
+    }
+    return run2Inner(args, cwd);
+  };
   run2.files.set(run2.statePath, persistedState);
   try {
     const r2 = cleanup(run2.opts, run2.deps);
@@ -780,6 +805,137 @@ test('archive-bytes-scanned-equal-bytes-written-and-single-now', () => {
     assert.match(written.path, /2026-06-12-workflow-dark-mode\.md$/, 'filename date matches content date');
     assert.match(written.content, /- date: 2026-06-12\n/, 'content date is the single now()');
     assert.match(written.content, /- archived_at: 2026-06-12T23:59:59Z\n/, 'archived_at is the single now()');
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+// ── FIX 1 (P1): untrusted slug path-traversal in the cleanup archive ──────────
+// Feature records are UNTRUSTED; readFeatureRecords does NOT re-sanitize the slug.
+// archivePath() builds `.agents/handoffs/<date>-workflow-${slug}.md` from the RAW
+// slug, so a hand-edited `slug: "../../../../README"` (with an otherwise valid
+// merged/clean feature branch) used to WRITE the archive to a traversal path
+// (overwriting e.g. /repo/README.md) BEFORE any delete. The slug must be validated
+// in validateForDestruction (report-and-skip) and the resolved archive path must be
+// confined under <repoRoot>/.agents/handoffs as defense in depth.
+
+test('slug-path-traversal-record-skipped-no-write-no-delete', () => {
+  const fx = fixture({
+    records: [{
+      slug: '../../../../README',
+      branch: 'feature/evil',
+      worktree: wt('evil'),
+      pr: 42,
+      review_state: 'awaiting_human_review',
+    }],
+    worktreeAssoc: { 'feature/evil': wt('evil') },
+    views: { 42: mergedView('feature/evil') },
+  });
+  try {
+    const result = cleanup(fx.opts, fx.deps);
+    // Report-and-skip, not an infra failure.
+    assert.equal(result.exitCode, 0);
+    // NOTHING written anywhere outside `.agents/handoffs` (no archive at the
+    // traversal path); in fact NO archive is written at all for a skipped record.
+    assert.equal(fx.archiveWrites.length, 0, 'no archive written for a traversal slug');
+    for (const w of fx.allWrites) {
+      const inHandoffs = w.path.includes(path.join('.agents', 'handoffs'));
+      const isState = w.path.endsWith('STATE.md');
+      assert.ok(inHandoffs || isState, `unexpected write outside .agents/handoffs: ${w.path}`);
+    }
+    // NO destructive ops.
+    assert.deepEqual(destructiveCalls(fx.gitCalls), []);
+    // Record KEPT (not dropped).
+    assert.deepEqual(remainingRecords(fx.files, fx.statePath), ['feature/evil']);
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('control-char-empty-and-too-long-slug-records-skipped', () => {
+  const longSlug = 'a'.repeat(61);
+  // Cases the slug validator (rule 0) is responsible for: every one of these PARSES
+  // through the STATE.md subset codec but fails sanitizeFeatureSlug — whitespace,
+  // empty, too long, leading dash, uppercase, path separator, `..`. (A literal
+  // control char such as a tab/NUL/backslash never reaches the validator: the subset
+  // parser rejects it during readStateDoc — defense in depth at the parse layer.)
+  for (const slug of ['bad space', '', longSlug, '-leading-dash', 'Upper', 'with/slash', 'dot..dot']) {
+    const fx = fixture({
+      records: [{ slug, branch: 'feature/x', worktree: wt('x'), pr: 42, review_state: 'awaiting_human_review' }],
+      worktreeAssoc: { 'feature/x': wt('x') },
+      views: { 42: mergedView('feature/x') },
+    });
+    try {
+      const result = cleanup(fx.opts, fx.deps);
+      assert.equal(result.exitCode, 0, `invalid slug ${JSON.stringify(slug)} is report-and-skip`);
+      assert.equal(fx.archiveWrites.length, 0, `no archive for invalid slug ${JSON.stringify(slug)}`);
+      assert.deepEqual(destructiveCalls(fx.gitCalls), [], `no destructive op for invalid slug ${JSON.stringify(slug)}`);
+      assert.deepEqual(remainingRecords(fx.files, fx.statePath), ['feature/x'], `record kept for invalid slug ${JSON.stringify(slug)}`);
+    } finally {
+      fs.rmSync(fx.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('normal-slug-still-archives-under-handoffs', () => {
+  // Regression guard for the FIX 1 validator: a normal slug is unaffected and the
+  // archive still lands under `.agents/handoffs`.
+  const fx = fixture();
+  try {
+    const result = cleanup(fx.opts, fx.deps);
+    assert.equal(result.exitCode, 0);
+    assert.equal(fx.archiveWrites.length, 1);
+    assert.ok(
+      fx.archiveWrites[0]!.path.includes(path.join('.agents', 'handoffs')),
+      'normal slug archives under .agents/handoffs',
+    );
+    assert.match(fx.archiveWrites[0]!.path, /2026-06-12-workflow-dark-mode\.md$/);
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+// ── FIX 2 (P2): partial-failure rerun must not run `git status` in a removed cwd ─
+// decide() calls isWorktreeClean -> runGit(['status','--porcelain'], record.worktree)
+// with cwd=the worktree. On the already-removed rerun case (pathExists(worktree)
+// === false, which rule 4 now passes), the REAL runner spawns git against a missing
+// cwd -> ENOENT -> GitError -> cleanup ABORTS before the tolerant removeWorktree
+// no-op. The dirty/clean check must be SKIPPED when the recorded worktree is gone.
+
+test('rerun-removed-worktree-does-not-run-git-status-and-completes', () => {
+  const statusCwds: string[] = [];
+  const fx = fixture({
+    records: [{ slug: 'gone', branch: 'feature/gone', worktree: wt('gone'), pr: 5, review_state: 'awaiting_human_review' }],
+    worktreeAssoc: {}, // git no longer tracks the removed worktree
+    pathExists: (p) => p !== wt('gone'), // its path is gone on disk
+    views: { 5: mergedView('feature/gone') },
+  });
+  // Make `git status` THROW if it is ever invoked against the gone worktree cwd —
+  // exactly what the REAL runner does (spawnSync ENOENT on a missing cwd). The fix
+  // must never reach this call.
+  const innerRunGit = fx.deps.runGit;
+  fx.deps.runGit = (args, cwd) => {
+    if (args[0] === 'status' && args.includes('--porcelain')) {
+      statusCwds.push(cwd);
+      if (cwd === wt('gone')) {
+        throw new GitError('git status --porcelain', 'ENOENT', 'git status failed (status 128): cwd missing');
+      }
+    }
+    return innerRunGit(args, cwd);
+  };
+  try {
+    const result = cleanup(fx.opts, fx.deps);
+    // Cleanup completes: exit 0, branch deleted, record dropped.
+    assert.equal(result.exitCode, 0, 'rerun completes without aborting on git status in a missing cwd');
+    assert.ok(
+      !statusCwds.includes(wt('gone')),
+      'git status was NOT invoked for the removed worktree cwd',
+    );
+    assert.ok(
+      fx.gitCalls.some((c) => c[0] === 'branch' && c[1] === '-D' && c[3] === 'feature/gone'),
+      'branch deleted',
+    );
+    assert.deepEqual(remainingRecords(fx.files, fx.statePath), [], 'record dropped');
   } finally {
     fs.rmSync(fx.root, { recursive: true, force: true });
   }

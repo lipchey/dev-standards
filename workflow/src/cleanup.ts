@@ -34,6 +34,7 @@ import { isGitError, machineGitError } from './trailers.ts';
 import type { MachineReadableError, RunGit } from './trailers.ts';
 import { assertSafeFeatureBranch, isGhError, machineReadableGhError } from './gh.ts';
 import type { GhAdapter } from './gh.ts';
+import { sanitizeFeatureSlug } from './new-feature.ts';
 
 export interface CleanupOptions {
   dryRun: boolean;
@@ -181,6 +182,23 @@ function validateForDestruction(
   view: { state?: string; mergedAt?: string | null; headRefName?: string },
   worktrees: { byBranch: Map<string, string>; liveBranches: Set<string> },
 ): string | null {
+  // ── Rule 0: safe slug ─────────────────────────────────────────────────────
+  // Feature records are UNTRUSTED and readFeatureRecords does NOT re-sanitize the
+  // slug. The slug feeds the archive FILE PATH (`.agents/handoffs/<date>-workflow-
+  // ${slug}.md`), the cmux section name, and log lines, so a hand-edited
+  // `slug: "../../../../README"` would otherwise drive a path-traversal archive
+  // write (overwriting a repo file) BEFORE any delete. Screen it FIRST, before any
+  // archive/cmux/branch op, reusing the S12 slug validator (charset [a-z0-9-],
+  // length 1-60, no separators / `..` / leading `-` / control chars / empty). A
+  // failing slug is report-and-skip — never archive, never delete (same as the
+  // other rules). Defense in depth: applyFullCleanup also confines the resolved
+  // archive path under <repoRoot>/.agents/handoffs.
+  try {
+    sanitizeFeatureSlug(record.slug);
+  } catch {
+    return `unsafe slug ${JSON.stringify(record.slug)}: not a valid feature slug`;
+  }
+
   // ── Rule 1: safe ref ──────────────────────────────────────────────────────
   // PURE screen first (never pass an unscreened operand to git), then
   // `git check-ref-format --branch`. A check-ref-format non-zero exit is "rule
@@ -317,7 +335,15 @@ function decide(
 
   // Outcome 2: merged + DIRTY worktree -> set done, leave everything. (In-place
   // records have no worktree, so the dirty split is N/A — they are always clean.)
-  if (record.worktree !== '' && !isWorktreeClean(deps, record.worktree)) {
+  // FIX 2: only run the dirty/clean check when the recorded worktree STILL EXISTS
+  // on disk. On the already-removed rerun case (rule 4 passed because pathExists is
+  // false), running `git status --porcelain` with cwd=the gone worktree makes the
+  // REAL runner spawn git against a missing cwd -> ENOENT -> GitError -> the sweep
+  // would ABORT before applyFullCleanup's tolerant removeWorktree no-op. A gone
+  // worktree is treated as already-removed (like in-place for this run): fall
+  // through to the full-cleanup path WITHOUT calling git status in the missing dir.
+  const worktreeGone = record.worktree !== '' && !deps.pathExists(record.worktree);
+  if (record.worktree !== '' && !worktreeGone && !isWorktreeClean(deps, record.worktree)) {
     return { kind: 'dirty-done', record };
   }
 
@@ -353,8 +379,18 @@ function applyFullCleanup(
   if (archiveSkipped) {
     deps.log(`cleanup: ${record.slug}: archive SKIPPED (secret scan hit); proceeding with cleanup\n`);
   } else if (deps.config.archive) {
-    deps.mkdir(path.dirname(outcome.archivePath));
-    deps.writeFile(outcome.archivePath, outcome.archiveContent);
+    // DEFENSE IN DEPTH (FIX 1): even though rule 0 already screened the slug, never
+    // write outside the handoffs dir. Resolve both the handoffs root and the archive
+    // path and confirm the archive stays UNDER it (path-segment aware). A path that
+    // escapes is SKIPPED (no write) and logged — the rest of the cleanup PROCEEDS.
+    const handoffsRoot = safeRealpath(deps, path.join(deps.repoRoot, '.agents', 'handoffs'));
+    const resolvedArchive = safeRealpath(deps, outcome.archivePath);
+    if (!isUnder(handoffsRoot, resolvedArchive)) {
+      deps.log(`cleanup: ${record.slug}: archive SKIPPED (path escapes .agents/handoffs); proceeding with cleanup\n`);
+    } else {
+      deps.mkdir(path.dirname(outcome.archivePath));
+      deps.writeFile(outcome.archivePath, outcome.archiveContent);
+    }
   }
 
   // Remove the feature's OWN worktree FIRST (so its checkout no longer blocks the
