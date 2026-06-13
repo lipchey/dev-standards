@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGhAdapter, GhError, machineReadableGhError } from '../../workflow/src/gh.ts';
+import { createGhAdapter, GhError, machineReadableGhError, REVIEW_DATA_QUERY } from '../../workflow/src/gh.ts';
 
 interface SpawnCall {
   file: string;
@@ -122,4 +122,142 @@ test('argv-option-injection-screened', () => {
   assert.throws(() => gh.deleteLocalBranchArgs('main'), /refuses.*base/i);
   assert.deepEqual(gh.deleteLocalBranchArgs('feature/safe'), ['branch', '-D', '--', 'feature/safe']);
   assert.equal(fx.calls.length, 0, 'rejected branch operands never reach spawn');
+});
+
+test('repo-info-fixed-argv-and-parse', () => {
+  const fx = spawnFixture([{ status: 0, stdout: '{"name":"repo","owner":{"login":"acme"}}' }]);
+  const gh = createGhAdapter({ spawn: fx.spawn });
+
+  assert.deepEqual(gh.repoInfo(), { owner: 'acme', name: 'repo' });
+  assert.equal(fx.calls.length, 1, 'one gh call, no silent retries');
+  assert.equal(fx.calls[0]?.file, 'gh');
+  assert.deepEqual(fx.calls[0]?.args, ['repo', 'view', '--json', 'owner,name']);
+});
+
+test('pr-review-data-graphql-fixed-argv-and-parse', () => {
+  const envelope = {
+    data: {
+      repository: {
+        pullRequest: {
+          mergeable: 'MERGEABLE',
+          reviews: { nodes: [{ databaseId: 200, state: 'CHANGES_REQUESTED', submittedAt: '2026-06-12T00:00:00Z' }] },
+          reviewThreads: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                id: 'PRRT_a',
+                isResolved: false,
+                comments: {
+                  pageInfo: { hasNextPage: false },
+                  nodes: [{ databaseId: 11, path: 'src/a.ts', line: 5, body: 'fix', replyTo: null }],
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+  const fx = spawnFixture([{ status: 0, stdout: JSON.stringify(envelope) }]);
+  const gh = createGhAdapter({ spawn: fx.spawn, timeoutMs: 4321 });
+
+  const data = gh.prReviewData('acme', 'repo', 42);
+
+  assert.deepEqual(data, {
+    reviews: [{ databaseId: 200, state: 'CHANGES_REQUESTED', submittedAt: '2026-06-12T00:00:00Z' }],
+    threads: [
+      {
+        id: 'PRRT_a',
+        isResolved: false,
+        comments: {
+          pageInfo: { hasNextPage: false },
+          nodes: [{ databaseId: 11, path: 'src/a.ts', line: 5, body: 'fix', replyTo: null }],
+        },
+      },
+    ],
+    mergeable: 'MERGEABLE',
+    truncated: { threads: false, comments: false },
+  });
+  assert.equal(fx.calls.length, 1);
+  assert.equal(fx.calls[0]?.file, 'gh');
+  assert.deepEqual(fx.calls[0]?.args, [
+    'api',
+    'graphql',
+    '-f',
+    `query=${REVIEW_DATA_QUERY}`,
+    '-f',
+    'owner=acme',
+    '-f',
+    'name=repo',
+    '-F',
+    'number=42',
+  ]);
+  assert.deepEqual(fx.calls[0]?.options, { shell: false, encoding: 'utf8', timeout: 4321 });
+});
+
+test('pr-review-data-empty-nodes-default-to-empty-arrays', () => {
+  const envelope = { data: { repository: { pullRequest: { reviews: { nodes: [] }, reviewThreads: { nodes: [] } } } } };
+  const fx = spawnFixture([{ status: 0, stdout: JSON.stringify(envelope) }]);
+  const gh = createGhAdapter({ spawn: fx.spawn });
+
+  assert.deepEqual(gh.prReviewData('acme', 'repo', 1), {
+    reviews: [],
+    threads: [],
+    mergeable: null,
+    truncated: { threads: false, comments: false },
+  });
+});
+
+test('pr-review-data-flags-truncation-from-pageinfo', () => {
+  // A PR with more threads/comments than the page cap: GraphQL reports hasNextPage
+  // on the reviewThreads connection and on a thread's comments connection. The
+  // adapter must surface BOTH as truncated so fetch-review can WARN, never drop.
+  const envelope = {
+    data: {
+      repository: {
+        pullRequest: {
+          mergeable: 'MERGEABLE',
+          reviews: { nodes: [] },
+          reviewThreads: {
+            pageInfo: { hasNextPage: true },
+            nodes: [
+              {
+                id: 'PRRT_a',
+                isResolved: false,
+                comments: {
+                  pageInfo: { hasNextPage: true },
+                  nodes: [{ databaseId: 11, path: 'a.ts', line: 1, body: 'x', replyTo: null }],
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+  const fx = spawnFixture([{ status: 0, stdout: JSON.stringify(envelope) }]);
+  const gh = createGhAdapter({ spawn: fx.spawn });
+
+  assert.deepEqual(gh.prReviewData('acme', 'repo', 42).truncated, { threads: true, comments: true });
+});
+
+test('pr-review-data-screens-owner-and-name', () => {
+  const fx = spawnFixture([]);
+  const gh = createGhAdapter({ spawn: fx.spawn });
+
+  assert.throws(() => gh.prReviewData('-bad', 'repo', 1), /unsafe/i);
+  assert.throws(() => gh.prReviewData('acme', 'bad name', 1), /unsafe/i);
+  assert.equal(fx.calls.length, 0, 'rejected owner/name operands never reach spawn');
+});
+
+test('pr-review-data-no-silent-retries', () => {
+  const fx = spawnFixture([{ status: 1, stderr: 'HTTP 500' }, { status: 0, stdout: '{}' }]);
+  const gh = createGhAdapter({ spawn: fx.spawn });
+
+  assert.throws(() => gh.prReviewData('acme', 'repo', 1, 'review-data'), (error) => {
+    assert.ok(error instanceof GhError);
+    assert.equal(error.step, 'review-data');
+    return true;
+  });
+  assert.equal(fx.calls.length, 1);
 });

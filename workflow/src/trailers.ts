@@ -169,6 +169,23 @@ export class GitError extends Error {
   }
 }
 
+// The shared `GitError` predicate (its home, next to GitError/MachineReadableError).
+// Cross-realm-safe: a bundled copy can defeat `instanceof`, so it also matches the
+// documented `kind` tag. Imported by every command that maps a caught git failure
+// to the §2.7 machine-readable error (ship, fetch-review) instead of re-copying it.
+export function isGitError(error: unknown): error is GitError {
+  return error instanceof GitError || (typeof error === 'object' && error !== null && (error as { kind?: unknown }).kind === 'git-error');
+}
+
+// Projects a `GitError` onto the §2.7 machine-readable error object. Keys are in
+// the documented order (command, [step,] message, stderr_tail); `step` is present
+// only when the call site named it. Shared with ship/fetch-review (no local copy).
+export function machineGitError(error: GitError): MachineReadableError {
+  return error.step === undefined
+    ? { command: error.command, message: error.message, stderr_tail: error.stderr_tail }
+    : { command: error.command, step: error.step, message: error.message, stderr_tail: error.stderr_tail };
+}
+
 // Keep the machine-readable `stderr_tail` bounded so a runaway stderr cannot
 // bloat the emitted JSON line. The trailing bytes are the most diagnostic.
 const STDERR_TAIL_MAX = 2000;

@@ -130,6 +130,8 @@ function fixture(overrides: {
       },
       watchChecks: () => overrides.checks ?? [{ name: 'verify', conclusion: 'success' }],
       deleteLocalBranchArgs: (branch) => ['branch', '-D', '--', branch],
+      repoInfo: () => ({ owner: 'owner', name: 'repo' }),
+      prReviewData: () => ({ reviews: [], threads: [], mergeable: null, truncated: { threads: false, comments: false } }),
     },
     notify: (payload) => {
       notifications.push({ event: payload.event, pr: payload.pr, message: payload.message });

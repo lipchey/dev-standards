@@ -4,9 +4,9 @@ import type { FeatureRecord, FrontMatter, WorkflowConfig } from './types.ts';
 import { parseFrontMatter, serializeFrontMatter } from './front-matter.ts';
 import { parseSubset, serializeSubset } from './front-matter.ts';
 import { readFeatureRecords, writeFeatureRecords } from './feature-record.ts';
-import { GitError, withWorkflowPhaseTrailer } from './trailers.ts';
+import { isGitError, machineGitError, withWorkflowPhaseTrailer } from './trailers.ts';
 import type { MachineReadableError, RunGit } from './trailers.ts';
-import { GhError, machineReadableGhError } from './gh.ts';
+import { isGhError, machineReadableGhError } from './gh.ts';
 import type { GhAdapter, GhCheckRun } from './gh.ts';
 import type { NotifyPayload, NotifyPostResult } from './notify.ts';
 
@@ -156,20 +156,6 @@ function updateRecord(
       review_state: reviewState,
     }],
   };
-}
-
-function machineGitError(error: GitError): MachineReadableError {
-  return error.step === undefined
-    ? { command: error.command, message: error.message, stderr_tail: error.stderr_tail }
-    : { command: error.command, step: error.step, message: error.message, stderr_tail: error.stderr_tail };
-}
-
-function isGhError(error: unknown): error is GhError {
-  return error instanceof GhError || (typeof error === 'object' && error !== null && (error as { kind?: unknown }).kind === 'gh-error');
-}
-
-function isGitError(error: unknown): error is GitError {
-  return error instanceof GitError || (typeof error === 'object' && error !== null && (error as { kind?: unknown }).kind === 'git-error');
 }
 
 function failure(message: string, error?: MachineReadableError): ShipResult {

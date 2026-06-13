@@ -53,6 +53,8 @@ import { createGhAdapter } from './gh.ts';
 import type { GhAdapter } from './gh.ts';
 import { ship } from './ship.ts';
 import type { ShipOptions } from './ship.ts';
+import { fetchReview } from './fetch-review.ts';
+import type { FetchReviewOptions } from './fetch-review.ts';
 
 // The gate's --wait deadline when the caller does not configure one (the §2.8
 // config default lands with the manifest wiring; the CLI uses a fixed fallback).
@@ -89,6 +91,7 @@ const USAGE = [
   '  feature-start <slug> [--worktree] [--branch <name>] create branch and feature record',
   '  notify <event> --repo r --pr n --url u --message m post the n8n review payload',
   '  ship [--body-file <path>] [--no-ci-wait] [--file <path>] push, PR, CI, and record',
+  '  fetch-review [--pr <n>]                     fetch the latest PR review + threads, record processing_review',
   '',
 ].join('\n');
 
@@ -197,6 +200,8 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
       return runNewFeature(rest, io);
     case 'feature-start':
       return runFeatureStart(rest, io);
+    case 'fetch-review':
+      return runFetchReviewCommand(rest, io);
     default:
       return usageError(io, `unknown command "${command}"`);
   }
@@ -708,6 +713,44 @@ function runShipCommand(argv: string[], io: CliIO): number {
     scanPrBody: io.scanPrBody ?? (() => null),
   });
   const line = `ship: ${result.message}\n`;
+  (result.exitCode === EXIT_OK ? io.stdout : io.stderr)(line);
+  if (result.error !== undefined) io.stderr(`${JSON.stringify({ error: result.error })}\n`);
+  return result.exitCode;
+}
+
+// `fetch-review [--pr <n>]`: pull the latest submitted PR review + threads, write
+// the §2.5 normalized JSON, and advance the matching record to processing_review.
+// `--pr` is parsed as a positive integer (same rule as notify); a gh/git failure
+// surfaces the §2.7 machine-readable error as the LAST stderr line, never retried.
+function runFetchReviewCommand(argv: string[], io: CliIO): number {
+  const opts: FetchReviewOptions = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--pr') {
+      const value = argv[i + 1];
+      if (value === undefined) return usageErrorBare(io, 'fetch-review: missing value for --pr <n>');
+      if (opts.pr !== undefined) return usageErrorBare(io, 'fetch-review: --pr may be given only once');
+      const pr = Number(value);
+      if (!Number.isInteger(pr) || pr <= 0) return usageErrorBare(io, 'fetch-review: --pr must be a positive integer');
+      opts.pr = pr;
+      i += 1;
+      continue;
+    }
+    return usageError(io, `fetch-review: unexpected argument "${arg ?? ''}"`);
+  }
+
+  const repoRoot = io.cwd();
+  const result = fetchReview(opts, {
+    repoRoot,
+    statePath: path.join(repoRoot, STATE_FILE_REL),
+    readFile: io.readFile,
+    writeFile: io.writeFile,
+    mkdir: io.mkdir ?? (() => {}),
+    runGit: io.runGit,
+    gh: io.ghAdapter ?? createGhAdapter(),
+    stderr: io.stderr,
+  });
+  const line = `fetch-review: ${result.message}\n`;
   (result.exitCode === EXIT_OK ? io.stdout : io.stderr)(line);
   if (result.error !== undefined) io.stderr(`${JSON.stringify({ error: result.error })}\n`);
   return result.exitCode;

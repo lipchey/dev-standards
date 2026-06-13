@@ -5,6 +5,33 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const STDERR_TAIL_MAX = 2000;
 const LIST_FIELDS = 'number,url,state,mergedAt,headRefName,headRefOid';
 const VIEW_FIELDS = 'number,url,state,mergedAt,headRefName,headRefOid,isDraft,mergeable';
+const REPO_FIELDS = 'owner,name';
+
+// The per-connection page size of REVIEW_DATA_QUERY. The query does NOT paginate,
+// so this is a HARD cap: at most this many reviews / review threads / comments-
+// per-thread are fetched. `prReviewData` flags truncation (via `pageInfo` and the
+// returned node counts) so a PR beyond the cap is WARNed, never silently dropped.
+export const REVIEW_PAGE_LIMIT = 100;
+
+// The single GraphQL query that fetches, in one round-trip: the submitted reviews
+// (for the §2.5 verdict/submitted_at/review_id), the PR `mergeable` state (§2.5
+// pr_mergeable — folded in here so no extra `pr view` REST call is needed), and the
+// review threads with their comments (per-thread `resolved` + `thread_id` and each
+// comment). Each connection is capped at REVIEW_PAGE_LIMIT with NO pagination:
+// `reviews(last:N)` keeps the most recent reviews (the latest submitted verdict is
+// always among them), while `reviewThreads`/`comments` also select
+// `pageInfo{hasNextPage}` so `prReviewData` can flag a >cap PR for a WARNing rather
+// than silently dropping reviewer feedback. owner/name/number are passed as typed
+// GraphQL VARIABLES (`-f`/`-F`), never string-concatenated into the query or argv,
+// so no operand reaches a query-injection or shell-injection surface.
+export const REVIEW_DATA_QUERY = [
+  'query($owner:String!,$name:String!,$number:Int!){',
+  'repository(owner:$owner,name:$name){',
+  'pullRequest(number:$number){',
+  `mergeable reviews(last:${REVIEW_PAGE_LIMIT}){nodes{databaseId state submittedAt}}`,
+  `reviewThreads(first:${REVIEW_PAGE_LIMIT}){pageInfo{hasNextPage}nodes{id isResolved comments(first:${REVIEW_PAGE_LIMIT}){pageInfo{hasNextPage}nodes{databaseId path line body replyTo{databaseId}}}}}`,
+  '}}}',
+].join('');
 
 export interface GhSpawnOptions {
   shell: false;
@@ -50,6 +77,45 @@ export interface GhCheckRun {
   conclusion?: string;
 }
 
+export interface GhRepoInfo {
+  owner: string;
+  name: string;
+}
+
+export interface GhReviewNode {
+  databaseId?: number;
+  state?: string;
+  submittedAt?: string | null;
+}
+
+export interface GhReviewCommentNode {
+  databaseId?: number;
+  path?: string;
+  line?: number | null;
+  body?: string;
+  replyTo?: { databaseId?: number } | null;
+}
+
+export interface GhReviewThreadNode {
+  id?: string;
+  isResolved?: boolean;
+  comments?: { nodes?: GhReviewCommentNode[]; pageInfo?: { hasNextPage?: boolean } };
+}
+
+export interface GhReviewData {
+  reviews: GhReviewNode[];
+  threads: GhReviewThreadNode[];
+  // §2.5 pr_mergeable source (MergeableState enum string / null), folded into the
+  // same GraphQL node so fetch-review needs no separate `pr view` round-trip.
+  mergeable: string | boolean | null;
+  // Honest truncation signal: true when the connection hit REVIEW_PAGE_LIMIT (its
+  // `pageInfo.hasNextPage` was true, or it returned a full page). The caller WARNs
+  // so a >cap thread/comment PR is never silently under-reported. Reviews are not
+  // flagged: `reviews(last:N)` always retains the latest submitted verdict, which
+  // is all §2.5 reads from them.
+  truncated: { threads: boolean; comments: boolean };
+}
+
 export interface GhAdapter {
   findPrByHead: (head: string, step?: string) => GhPrView | null;
   viewPr: (pr: number, step?: string) => GhPrView;
@@ -57,6 +123,8 @@ export interface GhAdapter {
   editPrBody: (pr: number, bodyFile: string, step?: string) => void;
   watchChecks: (pr: number, step?: string) => GhCheckRun[];
   deleteLocalBranchArgs: (branch: string, base?: string) => string[];
+  repoInfo: (step?: string) => GhRepoInfo;
+  prReviewData: (owner: string, name: string, pr: number, step?: string) => GhReviewData;
 }
 
 export interface GhAdapterDeps {
@@ -86,6 +154,14 @@ export function machineReadableGhError(error: GhError): { error: MachineReadable
     ? { command: error.command, message: error.message, stderr_tail: error.stderr_tail }
     : { command: error.command, step: error.step, message: error.message, stderr_tail: error.stderr_tail };
   return { error: payload };
+}
+
+// The shared `GhError` predicate (its home, next to GhError/machineReadableGhError).
+// Cross-realm-safe: a bundled copy can defeat `instanceof`, so it also matches the
+// documented `kind` tag. Imported by every command that maps a caught gh failure
+// to the §2.7 machine-readable error (ship, fetch-review) instead of re-copying it.
+export function isGhError(error: unknown): error is GhError {
+  return error instanceof GhError || (typeof error === 'object' && error !== null && (error as { kind?: unknown }).kind === 'gh-error');
 }
 
 export function assertSafeRefName(ref: string, label = 'ref'): void {
@@ -200,6 +276,51 @@ export function createGhAdapter(deps: GhAdapterDeps = {}): GhAdapter {
       if (branch === base) throw new Error(`refuses to delete base branch ${JSON.stringify(branch)}`);
       assertSafeFeatureBranch(branch);
       return ['branch', '-D', '--', branch];
+    },
+
+    repoInfo(step = 'repo-view'): GhRepoInfo {
+      const args = ['repo', 'view', '--json', REPO_FIELDS];
+      const raw = ghJson<{ owner?: { login?: string }; name?: string }>(run(args, step), commandString(binary, args), step);
+      return { owner: raw.owner?.login ?? '', name: raw.name ?? '' };
+    },
+
+    prReviewData(owner: string, name: string, pr: number, step = 'review-data'): GhReviewData {
+      assertSafeRefName(owner, 'owner');
+      assertSafeRefName(name, 'repo name');
+      const args = [
+        'api',
+        'graphql',
+        '-f',
+        `query=${REVIEW_DATA_QUERY}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `name=${name}`,
+        '-F',
+        `number=${String(pr)}`,
+      ];
+      const envelope = ghJson<{
+        data?: { repository?: { pullRequest?: {
+          mergeable?: string | boolean | null;
+          reviews?: { nodes?: GhReviewNode[] };
+          reviewThreads?: { nodes?: GhReviewThreadNode[]; pageInfo?: { hasNextPage?: boolean } };
+        } | null } };
+      }>(run(args, step), commandString(binary, args), step);
+      const prNode = envelope.data?.repository?.pullRequest;
+      const threads = prNode?.reviewThreads?.nodes ?? [];
+      const threadsTruncated =
+        prNode?.reviewThreads?.pageInfo?.hasNextPage === true || threads.length >= REVIEW_PAGE_LIMIT;
+      const commentsTruncated = threads.some(
+        (thread) =>
+          thread.comments?.pageInfo?.hasNextPage === true
+          || (thread.comments?.nodes?.length ?? 0) >= REVIEW_PAGE_LIMIT,
+      );
+      return {
+        reviews: prNode?.reviews?.nodes ?? [],
+        threads,
+        mergeable: prNode?.mergeable ?? null,
+        truncated: { threads: threadsTruncated, comments: commentsTruncated },
+      };
     },
   };
 }
