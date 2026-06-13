@@ -215,6 +215,7 @@ test('arms-full-pane-pipeline-per-plan-2-3', () => {
         return { ok: true, paneIds: spec.panes.map((pane) => pane.pane_id), instructions: '' };
       },
       notify: () => ({ ok: true }),
+      closeSection: () => ({ ok: true }),
     };
 
     const result = newFeature('pipeline-demo', deps(root, { cmux }));
@@ -265,6 +266,7 @@ test('degrades-to-copy-paste-when-cmux-absent', () => {
         instructions: 'copy-paste these commands into panes\n',
       }),
       notify: () => ({ ok: false, error: 'cmux not found on PATH' }),
+      closeSection: () => ({ ok: false, error: 'cmux not found on PATH' }),
     };
 
     const result = newFeature('manual-demo', deps(root, { cmux }));

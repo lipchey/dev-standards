@@ -50,6 +50,7 @@ const realIO: CliIO = {
     mkdirSync(dirPath, { recursive: true });
   },
   runGit: (args, cwd) => runGit(args, cwd),
+  realpath: (filePath) => realpathSync(filePath),
   stdout: (text) => {
     process.stdout.write(text);
   },

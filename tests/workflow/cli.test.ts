@@ -11,6 +11,9 @@ import { serializeFrontMatter } from '../../workflow/src/front-matter.ts';
 import { runCli, runCliAsync } from '../../workflow/src/cli.ts';
 import type { CliIO } from '../../workflow/src/cli.ts';
 import type { CmuxAdapter, CmuxSectionSpec } from '../../workflow/src/cmux-adapter.ts';
+import type { GhAdapter, GhPrView } from '../../workflow/src/gh.ts';
+import { assertSafeFeatureBranch } from '../../workflow/src/gh.ts';
+import { GitError } from '../../workflow/src/trailers.ts';
 
 // A complete, schema-valid FrontMatter; tests override only what the case is
 // about. Serialized through the real serializer so the fixture is, by
@@ -293,6 +296,7 @@ test('await-and-launch-dispatches-agent-from-config', () => {
       notifications.push({ section, message });
       return { ok: true };
     },
+    closeSection: () => ({ ok: true }),
   };
   const planningFile = `${serializeFrontMatter(makeFrontMatter({
     cmux_section: 'dark-mode-toggle',
@@ -331,6 +335,7 @@ test('await-and-launch-notify-failure-does-not-block-launch', () => {
     plan: () => assert.fail('await-and-launch should not plan panes'),
     launch: () => assert.fail('await-and-launch should not arm panes'),
     notify: () => ({ ok: false, error: 'notify refused' }),
+    closeSection: () => ({ ok: false, error: 'close refused' }),
   };
   const planningFile = `${serializeFrontMatter(makeFrontMatter({
     state: 'created',
@@ -426,6 +431,7 @@ test('cmux-plan-dry-run-prints-planned-actions-without-launching', () => {
       return { ok: true, paneIds: [], instructions: '' };
     },
     notify: () => ({ ok: true }),
+    closeSection: () => ({ ok: true }),
   };
   const planningFile = `${serializeFrontMatter(makeFrontMatter({
     feature: 'dry-run-demo',
@@ -474,8 +480,186 @@ test('cmux-plan-usage-and-manual-degrade-paths', () => {
     }),
     launch: () => assert.fail('cmux plan --dry-run must not launch'),
     notify: () => ({ ok: false, error: 'cmux unavailable' }),
+    closeSection: () => ({ ok: false, error: 'cmux unavailable' }),
   };
   const manual = makeIO({ cmuxAdapter });
   assert.equal(runCli(['cmux', 'plan', '--dry-run'], manual.io), EXIT_OK);
   assert.match(manual.out(), /copy-paste/);
+});
+
+// A GhAdapter whose viewPr always reports a merged PR matching the head ref, so the
+// merge guard + head-ref rule pass and `cleanup` reaches the destructive ops.
+function mergedGhAdapter(branch: string, base = 'main'): GhAdapter {
+  const view: GhPrView = {
+    number: 0,
+    url: 'https://github.example/owner/repo/pull/0',
+    state: 'MERGED',
+    mergedAt: '2026-06-12T09:00:00Z',
+    headRefName: branch,
+    mergeable: 'MERGEABLE',
+  };
+  return {
+    findPrByHead: () => null,
+    viewPr: () => view,
+    createPr: () => ({ url: '' }),
+    editPrBody: () => {},
+    watchChecks: () => [],
+    deleteLocalBranchArgs: (b: string, baseRef = base): string[] => {
+      if (b === baseRef) throw new Error(`refuses to delete base branch ${JSON.stringify(b)}`);
+      assertSafeFeatureBranch(b);
+      return ['branch', '-D', '--', b];
+    },
+    repoInfo: () => ({ owner: 'owner', name: 'repo' }),
+    prReviewData: () => ({ reviews: [], threads: [], mergeable: null, truncated: { threads: false, comments: false } }),
+  };
+}
+
+test('cleanup-tolerates-already-absent-worktree-and-completes', () => {
+  // Item B.2: the CLI-edge removeWorktree seam treats an ALREADY-GONE worktree (a
+  // re-run after a partial-failure sweep) as success — `git worktree remove` failing
+  // with "is not a working tree" must NOT abort the sweep. The branch is still
+  // deleted, the record still dropped, exit 0.
+  const wtParent = '/tmp/cli-cleanup-wts';
+  const wtPath = `${wtParent}/dark-mode`;
+  const branch = 'feature/dark-mode';
+  const workflow = { ...workflowConfigFixture(), worktree_parent: wtParent };
+  const stateMd = [
+    '---',
+    'updated: "2026-06-12T10:00:00Z"',
+    'features:',
+    '  - slug: "dark-mode"',
+    `    branch: "${branch}"`,
+    `    worktree: "${wtPath}"`,
+    '    pr: 42',
+    '    review_state: "awaiting_human_review"',
+    '---',
+    '',
+    '# Handoff State',
+    '',
+  ].join('\n');
+
+  const gitCalls: string[][] = [];
+  let writtenState = '';
+  const cap = makeIO({
+    cwd: () => '/tmp/repo',
+    readFile: (filePath) => {
+      if (filePath.endsWith('quality.json')) return JSON.stringify({ workflow });
+      if (filePath.endsWith('STATE.md')) return stateMd;
+      throw new Error(`unexpected read ${filePath}`);
+    },
+    writeFile: (filePath, content) => {
+      if (filePath.endsWith('STATE.md')) writtenState = content;
+    },
+    mkdir: () => {},
+    now: () => Date.parse('2026-06-12T12:00:00Z'),
+    realpath: (p) => p, // identity: wtPath stays under wtParent (rule 4 passes)
+    ghAdapter: mergedGhAdapter(branch),
+    runGit: (args) => {
+      gitCalls.push(args);
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return [
+          'worktree /tmp/repo',
+          'HEAD 0000000000000000000000000000000000000000',
+          'branch refs/heads/main',
+          '',
+          `worktree ${wtPath}`,
+          'HEAD 1111111111111111111111111111111111111111',
+          `branch refs/heads/${branch}`,
+          '',
+        ].join('\n');
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        // Simulate the worktree being already gone (the re-run case).
+        throw new GitError(
+          `git ${args.join(' ')}`,
+          "fatal: '" + wtPath + "' is not a working tree",
+          `git ${args.join(' ')} failed (status 128): fatal: '${wtPath}' is not a working tree`,
+        );
+      }
+      return ''; // status --porcelain (clean), check-ref-format, branch -D, prune
+    },
+  });
+
+  const code = runCli(['cleanup'], cap.io);
+
+  // Exit 0: the already-absent worktree was swallowed, the sweep completed.
+  assert.equal(code, EXIT_OK, `cleanup should complete despite gone worktree; stderr=${cap.err()}`);
+  // The destructive `git worktree remove` WAS attempted (and tolerated).
+  assert.ok(gitCalls.some((a) => a[0] === 'worktree' && a[1] === 'remove'), 'worktree remove attempted');
+  // Cleanup still PROCEEDED past the gone worktree: branch force-deleted + pruned.
+  assert.ok(
+    gitCalls.some((a) => a[0] === 'branch' && a[1] === '-D' && a[3] === branch),
+    'branch still force-deleted after tolerated worktree-removal',
+  );
+  assert.ok(gitCalls.some((a) => a[0] === 'worktree' && a[1] === 'prune'), 'pruned');
+  // Record dropped from STATE.md (the sweep persisted its progress).
+  assert.doesNotMatch(writtenState, /branch: "feature\/dark-mode"/, 'cleaned record dropped');
+});
+
+test('cleanup-other-worktree-removal-failure-still-aborts', () => {
+  // The idempotent swallow is NARROW: a NON-absent worktree-removal failure (e.g.
+  // a locked/dirty worktree git refuses to remove) must still surface as exit 1, so
+  // the swallow cannot mask a genuine destructive failure.
+  const wtParent = '/tmp/cli-cleanup-wts';
+  const wtPath = `${wtParent}/dark-mode`;
+  const branch = 'feature/dark-mode';
+  const workflow = { ...workflowConfigFixture(), worktree_parent: wtParent };
+  const stateMd = [
+    '---',
+    'updated: "2026-06-12T10:00:00Z"',
+    'features:',
+    '  - slug: "dark-mode"',
+    `    branch: "${branch}"`,
+    `    worktree: "${wtPath}"`,
+    '    pr: 42',
+    '    review_state: "awaiting_human_review"',
+    '---',
+    '',
+    '# Handoff State',
+    '',
+  ].join('\n');
+
+  const gitCalls: string[][] = [];
+  const cap = makeIO({
+    cwd: () => '/tmp/repo',
+    readFile: (filePath) => {
+      if (filePath.endsWith('quality.json')) return JSON.stringify({ workflow });
+      if (filePath.endsWith('STATE.md')) return stateMd;
+      throw new Error(`unexpected read ${filePath}`);
+    },
+    writeFile: () => {},
+    mkdir: () => {},
+    now: () => Date.parse('2026-06-12T12:00:00Z'),
+    realpath: (p) => p,
+    ghAdapter: mergedGhAdapter(branch),
+    runGit: (args) => {
+      gitCalls.push(args);
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return [
+          'worktree /tmp/repo',
+          'HEAD 0000000000000000000000000000000000000000',
+          'branch refs/heads/main',
+          '',
+          `worktree ${wtPath}`,
+          'HEAD 1111111111111111111111111111111111111111',
+          `branch refs/heads/${branch}`,
+          '',
+        ].join('\n');
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        throw new GitError(
+          `git ${args.join(' ')}`,
+          'fatal: working tree is locked',
+          `git ${args.join(' ')} failed (status 128): fatal: working tree is locked`,
+        );
+      }
+      return '';
+    },
+  });
+
+  const code = runCli(['cleanup'], cap.io);
+
+  assert.equal(code, EXIT_FAILURE, 'a genuine worktree-removal failure still aborts');
+  // It aborted BEFORE the branch delete (validation-before-destruction ordering).
+  assert.ok(!gitCalls.some((a) => a[0] === 'branch' && a[1] === '-D'), 'branch not deleted on abort');
 });

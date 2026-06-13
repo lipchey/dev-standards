@@ -74,11 +74,21 @@ export interface CmuxNotifyResult {
   error?: string;
 }
 
+export interface CmuxCloseResult {
+  ok: boolean;
+  error?: string;
+}
+
 export interface CmuxAdapter {
   capabilities: () => CmuxCapabilities;
   plan: (spec: CmuxSectionSpec) => CmuxPlan;
   launch: (spec: CmuxSectionSpec) => CmuxLaunchResult;
   notify: (section: string, message: string) => CmuxNotifyResult;
+  // Closes a feature's cmux section (the §2.7 cleanup close-section step). Probe-
+  // first like `notify`: degrades (ok:false) when cmux or the verb is absent, and
+  // refuses an unsafe section positional. Reuses the `close_section` argv already
+  // used internally for launch rollback.
+  closeSection: (section: string) => CmuxCloseResult;
 }
 
 interface CmuxAdapterDeps {
@@ -173,7 +183,16 @@ export function createCmuxAdapter(deps: CmuxAdapterDeps = {}): CmuxAdapter {
     return { ok: true };
   };
 
-  return { capabilities, plan, launch, notify };
+  const closeSection = (section: string): CmuxCloseResult => {
+    if (!isReady(probed)) return { ok: false, error: probed.detail };
+    const sectionError = unsafePositionalDetail('section', section);
+    if (sectionError !== undefined) return { ok: false, error: sectionError };
+    const result = runCmux(binary, ['close_section', section], spawn, spawnOptions);
+    if (isFailure(result)) return { ok: false, error: resultDetail(result) };
+    return { ok: true };
+  };
+
+  return { capabilities, plan, launch, notify, closeSection };
 }
 
 export function probeCmux(): { ok: boolean; detail: string } {

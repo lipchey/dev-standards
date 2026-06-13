@@ -55,6 +55,8 @@ import { ship } from './ship.ts';
 import type { ShipOptions } from './ship.ts';
 import { fetchReview } from './fetch-review.ts';
 import type { FetchReviewOptions } from './fetch-review.ts';
+import { cleanup } from './cleanup.ts';
+import type { CleanupOptions } from './cleanup.ts';
 
 // The gate's --wait deadline when the caller does not configure one (the §2.8
 // config default lands with the manifest wiring; the CLI uses a fixed fallback).
@@ -92,6 +94,7 @@ const USAGE = [
   '  notify <event> --repo r --pr n --url u --message m post the n8n review payload',
   '  ship [--body-file <path>] [--no-ci-wait] [--file <path>] push, PR, CI, and record',
   '  fetch-review [--pr <n>]                     fetch the latest PR review + threads, record processing_review',
+  '  cleanup [--dry-run]                         sweep merged features: archive, delete branch/worktree, drop record',
   '',
 ].join('\n');
 
@@ -127,6 +130,10 @@ export interface CliIO {
   ghAdapter?: GhAdapter;
   notifySync?: (payload: NotifyPayload) => NotifyPostResult;
   scanPrBody?: (body: string) => string | null;
+  // Resolves a path's realpath for `cleanup`'s rule-4 worktree confinement. The
+  // runner edge wires fs.realpathSync; optional so non-cleanup callers need not
+  // provide it (cleanup falls back to identity when absent).
+  realpath?: (filePath: string) => string;
 }
 
 function usageError(io: CliIO, message: string): number {
@@ -202,6 +209,8 @@ export function runCli(argv: string[], io: CliIO, lockSeams?: LockSeams): number
       return runFeatureStart(rest, io);
     case 'fetch-review':
       return runFetchReviewCommand(rest, io);
+    case 'cleanup':
+      return runCleanupCommand(rest, io);
     default:
       return usageError(io, `unknown command "${command}"`);
   }
@@ -751,6 +760,80 @@ function runFetchReviewCommand(argv: string[], io: CliIO): number {
     stderr: io.stderr,
   });
   const line = `fetch-review: ${result.message}\n`;
+  (result.exitCode === EXIT_OK ? io.stdout : io.stderr)(line);
+  if (result.error !== undefined) io.stderr(`${JSON.stringify({ error: result.error })}\n`);
+  return result.exitCode;
+}
+
+// True when a `git worktree remove` failure means the worktree is ALREADY gone —
+// the idempotent re-run case (Item B.2). Matches git's own diagnostics ("is not a
+// working tree", "No such file or directory") and a spawn-level ENOENT, so a sweep
+// re-run after a partial failure never re-sticks on a worktree it already removed.
+// Any other failure is a genuine error and is NOT swallowed.
+function isAlreadyAbsentWorktree(error: unknown): boolean {
+  if (!(error instanceof GitError)) return false;
+  const text = `${error.message}\n${error.stderr_tail}`.toLowerCase();
+  return (
+    text.includes('is not a working tree')
+    || text.includes('no such file or directory')
+    || text.includes('enoent')
+  );
+}
+
+// `cleanup [--dry-run]`: sweep EVERY feature record, archive merged-clean features,
+// remove their worktree + force-delete the branch + drop the record, set
+// merged-but-dirty to done, and leave in-flight features untouched. `--dry-run`
+// performs ZERO side effects. Production deps are assembled from CliIO exactly like
+// ship/fetch-review; the cmux close-section seam degrades silently when unarmed.
+function runCleanupCommand(argv: string[], io: CliIO): number {
+  const opts: CleanupOptions = { dryRun: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--dry-run') {
+      opts.dryRun = true;
+      continue;
+    }
+    return usageError(io, `cleanup: unexpected argument "${arg ?? ''}"`);
+  }
+
+  const repoRoot = io.cwd();
+  const config = loadWorkflowConfigStrict(io, repoRoot);
+  // The cmux section is armed when the adapter reports ready; closeSection then
+  // degrades silently if the verb fails at call time.
+  const cmuxAdapter = io.cmuxAdapter ?? createCmuxAdapter();
+  const caps = cmuxAdapter.capabilities();
+  const cmuxArmed = caps.present && caps.missing.length === 0;
+  const result = cleanup(opts, {
+    repoRoot,
+    statePath: path.join(repoRoot, STATE_FILE_REL),
+    config,
+    readFile: io.readFile,
+    writeFile: io.writeFile,
+    mkdir: io.mkdir ?? (() => {}),
+    now: () => new Date((io.now ?? Date.now)()).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    runGit: io.runGit,
+    // `git worktree remove --force` is the worktree-removal edge (fixed argv,
+    // shell:false via the same runGit seam; `--` guards the screened path operand).
+    // IDEMPOTENT (Item B.2): a worktree that is ALREADY gone (a re-run after a
+    // partial-failure sweep) must NOT re-throw and re-stick the sweep. An ENOENT /
+    // git "is not a working tree" / "No such" failure is treated as success; any
+    // OTHER git failure still propagates as the §2.7 infra error. No retries.
+    removeWorktree: (worktreePath) => {
+      try {
+        io.runGit(['worktree', 'remove', '--force', '--', worktreePath], repoRoot);
+      } catch (error) {
+        if (isAlreadyAbsentWorktree(error)) return;
+        throw error;
+      }
+    },
+    gh: io.ghAdapter ?? createGhAdapter(),
+    closeCmuxSection: (section) => cmuxAdapter.closeSection(section),
+    cmuxArmed,
+    scanPrBody: io.scanPrBody ?? (() => null),
+    realpath: io.realpath ?? ((p) => p),
+    log: io.stderr,
+  });
+  const line = `cleanup: ${result.message}\n`;
   (result.exitCode === EXIT_OK ? io.stdout : io.stderr)(line);
   if (result.error !== undefined) io.stderr(`${JSON.stringify({ error: result.error })}\n`);
   return result.exitCode;
