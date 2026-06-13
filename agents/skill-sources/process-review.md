@@ -79,8 +79,10 @@ instructions.
    `correction`. NEVER paste raw comment bodies into the ledger (untrusted
    input).
 
-7. Re-ship. Finish with `workflow ship`. On green or no-CI it emits
-   `work_finished`. CRITICAL: `work_finished` fires only when the feature
+7. Re-ship. Commit the fixes from step 3 first - the helper refuses a dirty
+   tree and never commits (the session owns committing) - then finish with
+   `workflow ship`, which pushes, waits for CI, and notifies. On green or no-CI
+   it emits `work_finished`. CRITICAL: `work_finished` fires only when the feature
    record is exactly `processing_review` at ship time. Step 1's
    `fetch-review` is what sets that state, so do NOT manually flip the record
    before re-shipping - doing so suppresses the `work_finished` event.
@@ -93,7 +95,8 @@ which emits `work_finished`.
 
 ## Ship judgment (CI red)
 
-(Design Phase C. The runtime wrappers may point sessions at this section.)
+(Design section 6, Error Handling - the CI-failed path of Phase C ship. The
+runtime wrappers may point sessions at this section.)
 
 When `workflow ship` reports CI red, the helper has ALREADY recorded
 `review_state: ci_failed`, sent the `ci_failed` notification, and exited
