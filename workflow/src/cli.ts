@@ -134,6 +134,11 @@ export interface CliIO {
   // runner edge wires fs.realpathSync; optional so non-cleanup callers need not
   // provide it (cleanup falls back to identity when absent).
   realpath?: (filePath: string) => string;
+  // Tests whether a recorded worktree path still exists on disk, for `cleanup`'s
+  // rule-4 already-removed (partial-failure re-run) recovery. The runner edge wires
+  // fs.existsSync; optional so non-cleanup callers need not provide it (cleanup
+  // falls back to "exists" when absent, preserving the present-path behavior).
+  pathExists?: (filePath: string) => boolean;
 }
 
 function usageError(io: CliIO, message: string): number {
@@ -831,6 +836,10 @@ function runCleanupCommand(argv: string[], io: CliIO): number {
     cmuxArmed,
     scanPrBody: io.scanPrBody ?? (() => null),
     realpath: io.realpath ?? ((p) => p),
+    // Rule-4 already-removed recovery: a recorded worktree gone on disk is treated
+    // as already-removed so its deferred branch delete can be retried. Falls back to
+    // "exists" when the edge omits the seam, preserving the present-path behavior.
+    pathExists: io.pathExists ?? (() => true),
     log: io.stderr,
   });
   const line = `cleanup: ${result.message}\n`;

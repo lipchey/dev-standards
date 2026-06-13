@@ -5,7 +5,7 @@
 // ./cli.ts behind the injected CliIO seam so it stays unit-testable without
 // touching the filesystem or the process. Mirrors runner/src/verify-runner.ts.
 
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { runCli, runCliAsync } from './cli.ts';
@@ -51,6 +51,7 @@ const realIO: CliIO = {
   },
   runGit: (args, cwd) => runGit(args, cwd),
   realpath: (filePath) => realpathSync(filePath),
+  pathExists: (filePath) => existsSync(filePath),
   stdout: (text) => {
     process.stdout.write(text);
   },

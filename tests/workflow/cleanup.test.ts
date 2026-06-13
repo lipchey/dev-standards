@@ -115,6 +115,11 @@ interface Overrides {
   // (models ONE record's destructive op failing mid-sweep).
   failBranchDelete?: Set<string>;
   realpath?: (p: string) => string; // override realpath resolution (rule 4)
+  // Models real git's on-disk presence for a recorded worktree path (rule 4): a
+  // path returns false here once its worktree has been removed on disk. Defaults
+  // to "every recorded worktree path still exists" so legacy fixtures keep their
+  // present-but-out-of-parent / unassociated-but-present skip semantics.
+  pathExists?: (p: string) => boolean;
 }
 
 function fixture(overrides: Overrides = {}) {
@@ -235,6 +240,10 @@ function fixture(overrides: Overrides = {}) {
     cmuxArmed: overrides.cmuxArmed === true,
     scanPrBody: (content: string) => overrides.scanHit ?? (content.includes('SECRET') ? 'secret hit' : null),
     realpath: overrides.realpath ?? ((p: string) => p),
+    // Default: every recorded worktree path still exists on disk (matches real
+    // git for a record whose worktree has NOT yet been removed). Tests that model
+    // a removed-on-disk worktree pass an explicit stub returning false for it.
+    pathExists: overrides.pathExists ?? (() => true),
     log: (text: string) => logs.push(text),
   };
 
@@ -617,6 +626,15 @@ test('rerun-after-partial-failure-recovers', () => {
   // operates on the persisted STATE.md (only the second record). This time nothing
   // throws and the sweep completes the remaining record without re-processing the
   // already-cleaned first one.
+  //
+  // CRITICAL real-git fidelity: run 1 removed feature/b's worktree on disk BEFORE
+  // its `git branch -D` threw. So on the re-run, real `git worktree list` no longer
+  // reports that worktree (drop it from worktreeAssoc) AND `pathExists(wt('b'))` is
+  // false. Rule 4 must treat a genuinely-gone recorded worktree as already-removed
+  // (validation PASSES) so the branch delete can be retried — otherwise the record
+  // leaks forever. (A fixture that re-supplied the association would be vacuous: it
+  // would assert git still tracks a worktree it had already removed, which real git
+  // never does.)
   const records: FeatureRecord[] = [
     { slug: 'a', branch: 'feature/a', worktree: wt('a'), pr: 1, review_state: 'awaiting_human_review' },
     { slug: 'b', branch: 'feature/b', worktree: wt('b'), pr: 2, review_state: 'awaiting_human_review' },
@@ -638,10 +656,12 @@ test('rerun-after-partial-failure-recovers', () => {
   }
 
   // Re-run: STATE.md now carries ONLY feature/b; the destructive op no longer fails.
-  // Seed the fixture's STATE.md with the persisted post-failure document.
+  // Real git no longer associates feature/b with any worktree (it was removed on
+  // disk in run 1) and that path no longer exists on disk.
   const second = fixture({
     records: [{ slug: 'b', branch: 'feature/b', worktree: wt('b'), pr: 2, review_state: 'awaiting_human_review' }],
-    worktreeAssoc: { 'feature/b': wt('b') },
+    worktreeAssoc: {}, // git no longer tracks the removed worktree
+    pathExists: (p) => p !== wt('b'), // its path is gone on disk
     views: { 2: mergedView('feature/b') },
   });
   second.files.set(second.statePath, persistedState);
@@ -655,8 +675,8 @@ test('rerun-after-partial-failure-recovers', () => {
       !second.gitCalls.some((c) => c[0] === 'branch' && c[1] === '-D' && c[3] === 'feature/a'),
       'cleaned branch not re-deleted',
     );
-    // feature/b finishes: worktree removed, branch deleted, record dropped.
-    assert.ok(second.gitCalls.some((c) => c[0] === '__rm-worktree' && c[1] === wt('b')), 'remaining worktree removed');
+    // feature/b finishes: removeWorktree is still CALLED (it no-ops on the gone
+    // path at the CLI edge), branch deleted, record dropped.
     assert.ok(
       second.gitCalls.some((c) => c[0] === 'branch' && c[1] === '-D' && c[3] === 'feature/b'),
       'remaining branch deleted',
@@ -664,6 +684,66 @@ test('rerun-after-partial-failure-recovers', () => {
     assert.deepEqual(remainingRecords(second.files, second.statePath), [], 'all records cleaned after re-run');
   } finally {
     fs.rmSync(second.root, { recursive: true, force: true });
+  }
+});
+
+test('worktree-removed-but-branch-delete-failed-then-recovers-on-rerun', () => {
+  // The proven partial-failure scenario, end to end:
+  //   Run 1: worktree removal SUCCEEDS but `git branch -D` THROWS (e.g. branch
+  //          concurrently checked out / index lock / transient git error). The
+  //          record is correctly NOT dropped (throw precedes the drop), so it stays
+  //          in STATE.md with its original non-empty worktree field. Exit 1.
+  //   Run 2: real git no longer reports that worktree (removed on disk in run 1)
+  //          AND pathExists(worktree) is false; `git branch -D` now succeeds. The
+  //          gone worktree must NOT trip rule 4 — the branch is deleted and the
+  //          record dropped. Exit 0. (Before the fix this record leaked forever.)
+  const record: FeatureRecord = {
+    slug: 'leak', branch: 'feature/leak', worktree: wt('leak'), pr: 5, review_state: 'awaiting_human_review',
+  };
+
+  // ── Run 1: removeWorktree ok, branch -D throws. ──────────────────────────────
+  let persistedState: string;
+  const run1 = fixture({
+    records: [record],
+    worktreeAssoc: { 'feature/leak': wt('leak') }, // git tracks it before removal
+    pathExists: () => true, // worktree still on disk at the start of run 1
+    views: { 5: mergedView('feature/leak') },
+    failBranchDelete: new Set(['feature/leak']),
+  });
+  try {
+    const r1 = cleanup(run1.opts, run1.deps);
+    assert.equal(r1.exitCode, 1, 'branch -D failure surfaces as exit 1');
+    assert.ok(r1.error !== undefined, 'machine-readable git error surfaced');
+    // The worktree WAS removed before the throw.
+    assert.ok(run1.gitCalls.some((c) => c[0] === '__rm-worktree' && c[1] === wt('leak')), 'worktree removed in run 1');
+    // The record is KEPT (throw precedes the drop) with its original worktree.
+    assert.deepEqual(remainingRecords(run1.files, run1.statePath), ['feature/leak'], 'record kept, branch not dropped');
+    persistedState = run1.files.get(run1.statePath) ?? '';
+    assert.match(persistedState, /worktree: "[^"]+leak"/, 'record still carries its original worktree path');
+  } finally {
+    fs.rmSync(run1.root, { recursive: true, force: true });
+  }
+
+  // ── Run 2: association gone, path gone, branch -D now succeeds. ───────────────
+  const run2 = fixture({
+    records: [record],
+    worktreeAssoc: {}, // git no longer tracks the removed worktree
+    pathExists: (p) => p !== wt('leak'), // gone on disk
+    views: { 5: mergedView('feature/leak') },
+    // no failBranchDelete: the transient git error has cleared.
+  });
+  run2.files.set(run2.statePath, persistedState);
+  try {
+    const r2 = cleanup(run2.opts, run2.deps);
+    assert.equal(r2.exitCode, 0, 're-run recovers: rule 4 treats the gone worktree as already-removed');
+    // Branch finally deleted, record finally dropped — no permanent leak.
+    assert.ok(
+      run2.gitCalls.some((c) => c[0] === 'branch' && c[1] === '-D' && c[3] === 'feature/leak'),
+      'branch deleted on re-run',
+    );
+    assert.deepEqual(remainingRecords(run2.files, run2.statePath), [], 'record dropped on re-run');
+  } finally {
+    fs.rmSync(run2.root, { recursive: true, force: true });
   }
 });
 

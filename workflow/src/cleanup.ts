@@ -70,6 +70,14 @@ export interface CleanupDeps {
   // Resolves a worktree path's realpath for rule 4 confinement (the CLI wires the
   // real fs.realpathSync; tests inject identity / an escape).
   realpath: (filePath: string) => string;
+  // Tests whether a recorded worktree path still exists on disk (the CLI wires
+  // fs.existsSync; tests inject a controllable stub). Used by rule 4 to recognize
+  // the partial-failure re-run case: a recorded worktree that was already removed
+  // on disk (so real `git worktree list` no longer reports it) is treated as the
+  // already-removed / in-place case — validation PASSES so the deferred branch
+  // delete can be retried — WITHOUT weakening the present-but-out-of-parent or
+  // present-but-unassociated skip. Takes the recorded path as-is (no resolution).
+  pathExists: (filePath: string) => boolean;
   // Non-fatal operator log (skips, dry-run plan lines). The CLI wires io.stderr/stdout.
   log: (text: string) => void;
 }
@@ -216,11 +224,24 @@ function validateForDestruction(
     return `branch ${JSON.stringify(record.branch)} is checked out in a live worktree; refusing to delete`;
   }
 
-  // ── Rule 4: worktree confinement (in-place exempt) ────────────────────────
-  // When record.worktree is non-empty: its realpath must resolve UNDER
-  // config.worktree_parent AND be the worktree git associates with record.branch.
+  // ── Rule 4: worktree confinement (in-place + already-removed exempt) ───────
+  // When record.worktree is non-empty:
+  //   - If the recorded path is GONE on disk (deps.pathExists === false), the
+  //     worktree was already removed — the partial-failure re-run case (Item B):
+  //     run 1 removed the worktree but its `git branch -D` then threw, so the
+  //     record was kept; on re-run real `git worktree list` no longer reports it
+  //     and its byBranch association is gone. Treat this exactly like the already-
+  //     removed / in-place case: validation PASSES (fall through to return null).
+  //     applyFullCleanup still calls removeWorktree on the gone path, which no-ops
+  //     idempotently (isAlreadyAbsentWorktree tolerance at the CLI edge), then
+  //     retries the branch delete (gated by rules 1-3) and drops the record. This
+  //     is the ONLY way the record stops leaking — without it rule 4 below would
+  //     skip it forever once git stops associating the removed worktree.
+  //   - Else (path EXISTS): its realpath must resolve UNDER config.worktree_parent
+  //     AND be the worktree git associates with record.branch (the present-but-
+  //     out-of-parent and present-but-unassociated skips are preserved unchanged).
   // When worktree === "": skip this rule (and the worktree-removal step).
-  if (record.worktree !== '') {
+  if (record.worktree !== '' && deps.pathExists(record.worktree)) {
     const resolved = safeRealpath(deps, record.worktree);
     const parent = safeRealpath(deps, deps.config.worktree_parent);
     if (!isUnder(parent, resolved)) {
