@@ -202,6 +202,20 @@ function parseDirtyPaths(out: string): string[] {
   return paths;
 }
 
+// Parses `git diff --cached --name-only -z` into the EXACT set of STAGED
+// repo-relative paths. Unlike `git status --porcelain`, this output carries NO
+// 2-char status prefix — each record is the bare path, NUL-terminated (no
+// quoting under `-z`) — so the whole record IS the path. Used by the post-test
+// re-gate to inspect what an untrusted test_cmd may have added to the index.
+function parseStagedPaths(out: string): string[] {
+  const paths: string[] = [];
+  const NUL = String.fromCharCode(0);
+  for (const record of out.split(NUL)) {
+    if (record !== '') paths.push(record);
+  }
+  return paths;
+}
+
 // The slice commit message: a deterministic subject derived ONLY from the
 // validated finding id (a slug, so no newline can break the layout), with the
 // trailer as the exact LAST line.
@@ -279,13 +293,37 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
     if (cmdFile === undefined) return { exitCode: EXIT_WRONG_STATE };
     const test = deps.spawn(cmdFile, finding.test_cmd.slice(1), { cwd: deps.cwd });
 
+    // Step 4.5 — post-test STAGED-index re-gate. test_cmd is UNTRUSTED and runs
+    // with full worktree/index write access, so it can stage paths AFTER the
+    // pre-test scope gate (step 3) ran. Because `git commit` (no pathspec) commits
+    // the WHOLE index, a test_cmd that does `git add <out-of-slice|no-touch>` could
+    // otherwise smuggle that path into the slice commit. So BEFORE branching on the
+    // test result, re-read the STAGED index and refuse (EXIT_WRONG_STATE, NO commit,
+    // NO fix-failed record — surface it) if ANY staged path is outside the slice OR
+    // is no-touch. The STAGED index specifically (not the worktree) is checked so a
+    // legitimate test_cmd that writes transient UNSTAGED artifacts (coverage, logs)
+    // outside the slice is tolerated; only staged out-of-slice/no-touch changes are
+    // refused. The diff command takes no path operands, so no --literal-pathspecs is
+    // needed here. This runs on BOTH the green and red branches: a smuggled stage is
+    // refused regardless of the test's exit code.
+    const staged = parseStagedPaths(
+      runGit(deps, ['diff', '--cached', '--name-only', '-z'], 'status'),
+    );
+    for (const p of staged) {
+      if (!sliceSet.has(p) || isNoTouch(p, deps.noTouchSet)) {
+        return { exitCode: EXIT_WRONG_STATE };
+      }
+    }
+
     if (test.status === 0) {
-      // Step 5 — GREEN. Stage EXACTLY the slice paths (never `-A`/`.`), commit with
-      // the trailer as the last line, record the resulting sha. `--literal-pathspecs`
-      // forbids git from interpreting any magic/glob in a path operand even if one
-      // slipped past assertSafeRepoPath.
+      // Step 5 — GREEN. Stage EXACTLY the slice paths (never `-A`/`.`), then commit
+      // SCOPED to those same paths so the recorded tree can contain ONLY the slice
+      // even if something slipped into the index — belt-and-suspenders behind the
+      // step-4.5 gate. The commit message's last line is the trailer; the resulting
+      // sha is recorded. `--literal-pathspecs` forbids git from interpreting any
+      // magic/glob in a path operand even if one slipped past assertSafeRepoPath.
       runGit(deps, ['--literal-pathspecs', 'add', '--', ...slice], 'add');
-      runGit(deps, ['commit', '-m', buildSliceMessage(finding)], 'commit');
+      runGit(deps, ['--literal-pathspecs', 'commit', '-m', buildSliceMessage(finding), '--', ...slice], 'commit');
       finding.sha = runGit(deps, ['rev-parse', 'HEAD'], 'rev-parse').trim();
       finding.status = 'fixed';
       deps.writeFindings(findingsPath, findings);

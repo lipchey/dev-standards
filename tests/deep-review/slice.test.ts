@@ -87,6 +87,36 @@ function lastLine(body: string): string {
   return lines[lines.length - 1] ?? '';
 }
 
+// Writes a throwaway node script that, run with cwd=<repo>, creates the file
+// named by argv[2] (content "pwn"), and — when argv[3] === 'stage' — also runs
+// `git add -- <that path>` before exiting 0. Used to simulate an UNTRUSTED
+// test_cmd that mutates the worktree/index out from under the engine: a `stage`
+// run smuggles a path into the index; a non-stage run leaves a transient
+// UNSTAGED artifact. The script is built from an array joined by '\n' so no
+// control byte ever appears literally in this source.
+function makeMutatingScript(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dr-script-'));
+  const script = path.join(dir, 'mutate.mjs');
+  fs.writeFileSync(
+    script,
+    [
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      "import { spawnSync } from 'node:child_process';",
+      'const rel = process.argv[2];',
+      'const full = path.join(process.cwd(), rel);',
+      'fs.mkdirSync(path.dirname(full), { recursive: true });',
+      "fs.writeFileSync(full, 'pwn\\n');",
+      "if (process.argv[3] === 'stage') {",
+      "  const r = spawnSync('git', ['add', '--', rel], { cwd: process.cwd() });",
+      '  process.exit(r.status === 0 ? 0 : 2);',
+      '}',
+      'process.exit(0);',
+    ].join('\n'),
+  );
+  return script;
+}
+
 // ── Findings builders ─────────────────────────────────────────────────────────
 
 function validFinding(over: Partial<FindingRecord> = {}): FindingRecord {
@@ -371,7 +401,9 @@ test('git failure: a pre-commit hook rejects -> EXIT_FAILURE + machine error nam
   assert.equal(result.exitCode, EXIT_FAILURE);
   assert.ok(result.machineError, 'machine error present');
   assert.equal(result.machineError?.step, 'commit');
-  assert.match(result.machineError?.command ?? '', /^git commit/);
+  // The green commit is scoped to the slice and pathspec-hardened.
+  assert.match(result.machineError?.command ?? '', /^git --literal-pathspecs commit\b/);
+  assert.match(result.machineError?.command ?? '', /-- src\/app\.ts$/);
   assert.equal(head(repo), before, 'no commit landed');
   // Error outcome: findings are NOT written.
   assert.equal(readFindings(fpath).findings[0]?.status, 'pending');
@@ -458,6 +490,81 @@ test('no-touch (pure): a finding whose file is no-touch (classification pre-set 
   assert.equal(commitSlice('f-001', 'findings.json', deps).exitCode, EXIT_WRONG_STATE);
   assert.deepEqual(spawnCalls, [], 'refused before any git/spawn');
   assert.deepEqual(written, [], 'findings not mutated');
+});
+
+// ── Codex P1: post-test re-gate of the STAGED index + scoped slice commit ─────
+// The pre-test scope gate cannot cover a test_cmd that stages a path AFTER it
+// runs: `git commit` (no pathspec) would commit the whole index, so an untrusted
+// test_cmd that does `git add <out-of-slice|no-touch>` could smuggle that file
+// into the slice commit. After test_cmd returns, the engine re-reads the STAGED
+// index and refuses (EXIT_WRONG_STATE, NO commit) if any staged path is outside
+// the slice or is no-touch; the green commit is additionally scoped to the slice.
+
+test('post-test re-gate: a test_cmd that stages an OUT-OF-SLICE no-touch file (git add .github/workflows/pwn.yml) and exits 0 -> EXIT_WRONG_STATE, NO commit, pwn.yml never committed, HEAD unmoved', () => {
+  const repo = repoWithEditedSlice();
+  const before = head(repo);
+  const script = makeMutatingScript();
+  const fpath = externalFindings();
+  // slice is src/app.ts; test_cmd smuggles .github/workflows/pwn.yml into the index.
+  writeFindings(
+    fpath,
+    validFile([validFinding({ test_cmd: ['node', script, '.github/workflows/pwn.yml', 'stage'] })]),
+  );
+
+  const result = commitSlice('f-001', fpath, realSliceDeps(repo, ['.github/workflows/**']));
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE, 'staged out-of-slice/no-touch path refused');
+  assert.equal(head(repo), before, 'no new commit (HEAD unmoved)');
+  // The smuggled file appears in NO commit anywhere in history.
+  const everCommitted = git(repo, ['log', '--all', '--name-only', '--format=']);
+  assert.ok(!everCommitted.includes('.github/workflows/pwn.yml'), 'pwn.yml never committed');
+  // Surfaced, not silently recorded as a failed fix.
+  assert.equal(readFindings(fpath).findings[0]?.status, 'pending', 'status unchanged (surfaced)');
+});
+
+test('post-test re-gate: a test_cmd that stages an OUT-OF-SLICE (non-no-touch) file and exits 0 -> EXIT_WRONG_STATE, NO commit (slice-membership branch alone)', () => {
+  const repo = repoWithEditedSlice();
+  const before = head(repo);
+  const script = makeMutatingScript();
+  const fpath = externalFindings();
+  // No no-touch set at all: the refusal must come from the slice-membership check.
+  writeFindings(
+    fpath,
+    validFile([validFinding({ test_cmd: ['node', script, 'rogue.ts', 'stage'] })]),
+  );
+
+  const result = commitSlice('f-001', fpath, realSliceDeps(repo, []));
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE, 'staged out-of-slice path refused on membership alone');
+  assert.equal(head(repo), before, 'no new commit');
+  const everCommitted = git(repo, ['log', '--all', '--name-only', '--format=']);
+  assert.ok(!everCommitted.includes('rogue.ts'), 'rogue.ts never committed');
+  assert.equal(readFindings(fpath).findings[0]?.status, 'pending', 'status unchanged');
+});
+
+test('post-test re-gate: a test_cmd that writes an UNSTAGED out-of-slice transient (coverage/log) and exits 0 -> slice still commits (fixed); only the STAGED index is gated', () => {
+  const repo = repoWithEditedSlice();
+  const script = makeMutatingScript();
+  const fpath = externalFindings();
+  // No 'stage' arg: the transient is written but NOT staged, so it must be tolerated.
+  writeFindings(
+    fpath,
+    validFile([validFinding({ test_cmd: ['node', script, 'coverage/lcov.info'] })]),
+  );
+
+  const result = commitSlice('f-001', fpath, realSliceDeps(repo, []));
+
+  assert.equal(result.exitCode, EXIT_OK, 'unstaged transient artifact is tolerated');
+  // Exactly the slice was committed (the transient is not in the tree).
+  const committed = git(repo, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  assert.deepEqual(committed, ['src/app.ts'], 'only the slice committed');
+  assert.equal(lastLine(git(repo, ['log', '-1', '--format=%B'])), `${SLICE_TRAILER_KEY}: f-001`);
+  assert.equal(readFindings(fpath).findings[0]?.status, 'fixed');
+  // The transient remains in the worktree (untracked) — tolerated, not removed.
+  assert.equal(fs.existsSync(path.join(repo, 'coverage/lcov.info')), true, 'transient left untouched');
 });
 
 test('test_cmd-safety: empty / non-array / control-char test_cmd -> EXIT_WRONG_STATE, no git, status unchanged', () => {
