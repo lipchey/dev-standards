@@ -1,31 +1,60 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Phase 1a check: validate root quality.json and require the schema file.
+# standards-sync: validate the root quality.json (Phase 1a) and the generated
+# skill wrappers (spec §13). Two modes:
+#   --check            validate quality.json + schema, then fail on skill drift
+#   --generate-skills  (re)generate the per-runtime skill wrappers from sources
 REPO_ROOT="$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)"
 BUNDLE="${REPO_ROOT}/runner/dist/validate-quality-manifest.mjs"
+SKILLS_BUNDLE="${REPO_ROOT}/runner/dist/generate-skill-wrappers.mjs"
 SCHEMA="${REPO_ROOT}/schemas/quality.schema.json"
 MANIFEST="${REPO_ROOT}/quality.json"
 
 usage() {
-  echo "usage: standards-sync --check" >&2
+  echo "usage: standards-sync --check | --generate-skills" >&2
 }
 
-if [[ "$#" -ne 1 || "$1" != "--check" ]]; then
+if [[ "$#" -ne 1 ]]; then
   usage
   exit 2
 fi
 
-if [[ ! -f "${BUNDLE}" ]]; then
-  echo "validate-quality-manifest bundle not found at ${BUNDLE}. Run: npm run build" >&2
-  exit 127
-fi
+require_skills_bundle() {
+  if [[ ! -f "${SKILLS_BUNDLE}" ]]; then
+    echo "generate-skill-wrappers bundle not found at ${SKILLS_BUNDLE}. Run: npm run build" >&2
+    exit 127
+  fi
+}
 
-node "${BUNDLE}" --manifest "${MANIFEST}"
+case "$1" in
+  --generate-skills)
+    require_skills_bundle
+    node "${SKILLS_BUNDLE}" --generate --repo-root "${REPO_ROOT}"
+    exit 0
+    ;;
+  --check)
+    if [[ ! -f "${BUNDLE}" ]]; then
+      echo "validate-quality-manifest bundle not found at ${BUNDLE}. Run: npm run build" >&2
+      exit 127
+    fi
 
-if [[ ! -f "${SCHEMA}" ]]; then
-  echo "quality schema not found at ${SCHEMA}" >&2
-  exit 1
-fi
+    node "${BUNDLE}" --manifest "${MANIFEST}"
 
-echo "standards-sync check passed"
+    if [[ ! -f "${SCHEMA}" ]]; then
+      echo "quality schema not found at ${SCHEMA}" >&2
+      exit 1
+    fi
+
+    # Skill-wrapper drift dimension (spec §13): regenerate in memory and fail on
+    # any drift. Requires the generator bundle too.
+    require_skills_bundle
+    node "${SKILLS_BUNDLE}" --check --repo-root "${REPO_ROOT}"
+
+    echo "standards-sync check passed"
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

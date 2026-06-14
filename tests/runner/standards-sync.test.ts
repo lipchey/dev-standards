@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const shimPath = path.join(repoRoot, 'tools', 'standards-sync');
 const bundleRel = path.join('runner', 'dist', 'validate-quality-manifest.mjs');
+const skillsBundleRel = path.join('runner', 'dist', 'generate-skill-wrappers.mjs');
+const sourcesRel = path.join('agents', 'skill-sources');
 
 // Use bash so the suite never depends on the file's executable bit.
 function runShim(args: string[], cwd: string = repoRoot): SpawnSyncReturns<string> {
@@ -21,11 +23,14 @@ function combined(result: SpawnSyncReturns<string>): string {
 }
 
 before(() => {
+  // The full --check path now spans both the validator and the skill-wrapper
+  // generator bundles, so build both before exercising the shim.
   const build = spawnSync(
     'npx',
     [
       'esbuild',
       'runner/src/validate-quality-manifest.ts',
+      'runner/src/generate-skill-wrappers.ts',
       '--bundle',
       '--platform=node',
       '--target=node20',
@@ -36,8 +41,43 @@ before(() => {
     ],
     { cwd: repoRoot, stdio: 'inherit' },
   );
-  assert.equal(build.status, 0, 'esbuild build of validate-quality-manifest.ts must succeed');
+  assert.equal(build.status, 0, 'esbuild build of the standards-sync bundles must succeed');
 });
+
+// Build a self-contained fixture repo: the shim, both bundles, quality.json +
+// schema, and the canonical skill sources. Wrappers are NOT copied so each test
+// generates them fresh.
+function makeFixtureRepo(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-sync-'));
+  fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'runner', 'dist'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'schemas'), { recursive: true });
+  fs.mkdirSync(path.join(dir, sourcesRel), { recursive: true });
+
+  fs.copyFileSync(shimPath, path.join(dir, 'tools', 'standards-sync'));
+  fs.copyFileSync(path.join(repoRoot, bundleRel), path.join(dir, bundleRel));
+  fs.copyFileSync(path.join(repoRoot, skillsBundleRel), path.join(dir, skillsBundleRel));
+  fs.copyFileSync(path.join(repoRoot, 'quality.json'), path.join(dir, 'quality.json'));
+  fs.copyFileSync(
+    path.join(repoRoot, 'schemas', 'quality.schema.json'),
+    path.join(dir, 'schemas', 'quality.schema.json'),
+  );
+  for (const file of fs.readdirSync(path.join(repoRoot, sourcesRel))) {
+    if (file.endsWith('.md')) {
+      fs.copyFileSync(path.join(repoRoot, sourcesRel, file), path.join(dir, sourcesRel, file));
+    }
+  }
+  return dir;
+}
+
+// The phases generated, derived from the canonical sources (filename == name).
+function phaseNames(): string[] {
+  return fs
+    .readdirSync(path.join(repoRoot, sourcesRel))
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => f.replace(/\.md$/, ''))
+    .sort();
+}
 
 test('standards-sync: no args prints usage on stderr and exits 2', () => {
   const result = runShim([]);
@@ -137,6 +177,193 @@ test('standards-sync: a missing bundle exits 127 with a build hint', () => {
     });
     assert.equal(result.status, 127, `expected exit 127; got ${result.status}: ${combined(result)}`);
     assert.match(result.stderr ?? '', /npm run build/, 'expected a "run npm run build" hint on stderr');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- skill-wrapper generation + drift (spec §13) --------------------------
+
+test('standards-sync: both-runtimes-generated', () => {
+  const dir = makeFixtureRepo();
+  try {
+    const gen = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(gen.status, 0, `generate should exit 0; got ${gen.status}: ${combined(gen)}`);
+
+    for (const name of phaseNames()) {
+      for (const runtimeDir of ['.agents/skills', '.claude/skills']) {
+        const wrapper = path.join(dir, runtimeDir, name, 'SKILL.md');
+        assert.ok(fs.existsSync(wrapper), `expected a generated wrapper at ${runtimeDir}/${name}/SKILL.md`);
+      }
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: wrappers-are-metadata-plus-pointer-no-duplicated-body', () => {
+  const dir = makeFixtureRepo();
+  try {
+    spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], { cwd: dir, encoding: 'utf8' });
+
+    for (const name of phaseNames()) {
+      const sourceBody = fs.readFileSync(path.join(dir, sourcesRel, `${name}.md`), 'utf8');
+      // A distinctive line from each canonical body: its H1 heading.
+      const bodyHeading = `# ${name} - canonical skill body`;
+      assert.ok(sourceBody.includes(bodyHeading), `sanity: source ${name}.md should contain "${bodyHeading}"`);
+
+      for (const runtimeDir of ['.agents/skills', '.claude/skills']) {
+        const wrapper = fs.readFileSync(path.join(dir, runtimeDir, name, 'SKILL.md'), 'utf8');
+        // Metadata is present...
+        assert.match(wrapper, new RegExp(`^name: ${name}$`, 'm'), `wrapper ${runtimeDir}/${name} must carry the name`);
+        assert.match(wrapper, /^description: /m, `wrapper ${runtimeDir}/${name} must carry a description`);
+        // ...and a pointer naming the canonical source...
+        assert.ok(
+          wrapper.includes(`agents/skill-sources/${name}.md`),
+          `wrapper ${runtimeDir}/${name} must point at the canonical source path`,
+        );
+        // ...but the canonical body prose is NOT duplicated.
+        assert.ok(
+          !wrapper.includes(bodyHeading),
+          `wrapper ${runtimeDir}/${name} must NOT duplicate the canonical body`,
+        );
+        assert.ok(
+          !wrapper.includes('## Judgment steps') && !wrapper.includes('## Contract block'),
+          `wrapper ${runtimeDir}/${name} must NOT duplicate body sections`,
+        );
+      }
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: a clean generate then --check round-trips to exit 0', () => {
+  const dir = makeFixtureRepo();
+  try {
+    const gen = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(gen.status, 0, `generate should exit 0; got ${combined(gen)}`);
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(check.status, 0, `--check after a clean generate should exit 0; got ${combined(check)}`);
+    assert.match(combined(check), /skill wrappers in sync/, 'expected the in-sync phrase');
+    assert.match(combined(check), /standards-sync check passed/, 'expected overall success');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: drift-fails-check', () => {
+  const dir = makeFixtureRepo();
+  try {
+    spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], { cwd: dir, encoding: 'utf8' });
+
+    // Mutate one committed wrapper to introduce drift.
+    const [first] = phaseNames();
+    assert.ok(first, 'at least one phase must exist');
+    const mutated = path.join(dir, '.claude', 'skills', first as string, 'SKILL.md');
+    fs.appendFileSync(mutated, '\nhand-edited drift line\n');
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.notEqual(check.status, 0, 'a drifted wrapper must fail --check');
+    assert.match(check.stderr ?? '', /drift/i, `expected a drift message; got ${JSON.stringify(check.stderr)}`);
+    assert.match(check.stderr ?? '', new RegExp(first as string), 'the drift message should name the offending wrapper');
+    assert.doesNotMatch(combined(check), /standards-sync check passed/, 'must not report success on drift');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: a missing wrapper fails --check as drift', () => {
+  const dir = makeFixtureRepo();
+  try {
+    spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], { cwd: dir, encoding: 'utf8' });
+
+    const [first] = phaseNames();
+    fs.rmSync(path.join(dir, '.agents', 'skills', first as string, 'SKILL.md'), { force: true });
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.notEqual(check.status, 0, 'a missing wrapper must fail --check');
+    assert.match(check.stderr ?? '', /missing wrapper/i, `expected a missing-wrapper message; got ${JSON.stringify(check.stderr)}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: check-skips-wrapper-drift-when-no-skills-tree', () => {
+  // Mirrors dev-standards as a SOURCE repo: it has the canonical bodies and a
+  // valid quality.json, but hosts NO .agents/skills or .claude/skills tree.
+  // --check must validate the manifest, SKIP wrapper drift, and still pass.
+  const dir = makeFixtureRepo();
+  try {
+    // Sanity: the fixture has the bodies but no wrappers yet (none generated).
+    assert.ok(!fs.existsSync(path.join(dir, '.agents', 'skills')), 'fixture must not host .agents/skills');
+    assert.ok(!fs.existsSync(path.join(dir, '.claude', 'skills')), 'fixture must not host .claude/skills');
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(check.status, 0, `--check on a source repo must exit 0; got ${check.status}: ${combined(check)}`);
+    const blob = combined(check);
+    assert.match(blob, /valid quality manifest/, 'the manifest validator must still run');
+    assert.match(blob, /wrapper drift check skipped/, 'wrapper-drift must report it was skipped');
+    assert.match(blob, /standards-sync check passed/, 'overall check must still pass');
+    // No drift comparison ran, so it must not claim wrappers are in sync.
+    assert.doesNotMatch(blob, /skill wrappers in sync/, 'must not claim in-sync when no wrappers exist');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: a source with missing frontmatter fails sanely (exit 1, no crash)', () => {
+  const dir = makeFixtureRepo();
+  try {
+    // Strip the frontmatter from one canonical source.
+    const [first] = phaseNames();
+    const srcPath = path.join(dir, sourcesRel, `${first as string}.md`);
+    const raw = fs.readFileSync(srcPath, 'utf8');
+    const stripped = raw.replace(/^---\n[\s\S]*?\n---\n\n/, '');
+    assert.notEqual(stripped, raw, 'sanity: frontmatter should have been removed');
+    fs.writeFileSync(srcPath, stripped);
+
+    const gen = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(gen.status, 1, `missing frontmatter should exit 1; got ${gen.status}: ${combined(gen)}`);
+    assert.match(gen.stderr ?? '', /frontmatter/i, 'expected a frontmatter error message');
+    assert.doesNotMatch(gen.stderr ?? '', /at Object\.|node:internal/, 'must be a clean error, not a stack trace');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: --generate-skills with a missing generator bundle exits 127', () => {
+  const dir = makeFixtureRepo();
+  try {
+    fs.rmSync(path.join(dir, skillsBundleRel), { force: true });
+    const gen = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(gen.status, 127, `expected exit 127; got ${gen.status}: ${combined(gen)}`);
+    assert.match(gen.stderr ?? '', /npm run build/, 'expected a build hint on stderr');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

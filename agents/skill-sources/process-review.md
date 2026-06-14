@@ -1,3 +1,8 @@
+---
+name: process-review
+description: Use when a human triggers process review (process review / оброби ревью) on a feature in awaiting_human_review or ci_failed to reconcile a submitted PR review with the repo's rule set, fix in-scope issues, reply on every thread, promote rule candidates, and re-ship.
+---
+
 # process-review - canonical skill body
 
 Canonical body (single source per ADR-003) for the human-triggered
