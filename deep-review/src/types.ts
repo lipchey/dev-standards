@@ -1,0 +1,62 @@
+// Core types for the deep-review engine (ADR-007). This is a THIRD top-level
+// helper module alongside the frozen runner/ and workflow/ modules, built to its
+// own esbuild bundle (S22) and invoked only by the `deep-review-refactor` skill —
+// never autonomously. Zero runtime dependencies; pure data + type declarations.
+//
+// The exit-code subset and machine-readable error shape are declared LOCALLY,
+// not imported from workflow/. They are a serialization boundary each module owns
+// independently (the deep-review module must not depend on the frozen workflow
+// module), exactly as the Phase-1 runner declares its own copy of the workflow
+// config shape on Manifest.workflow.
+
+// §2.7 exit-code subset this engine uses. The numeric values MIRROR
+// workflow/src/types.ts so a shared launcher reads the same contract.
+export const EXIT_OK = 0;
+export const EXIT_FAILURE = 1;
+export const EXIT_USAGE = 2;
+export const EXIT_WRONG_STATE = 11;
+export const EXIT_NEEDS_HUMAN = 13;
+
+// Mirror of workflow/src/trailers.ts `MachineReadableError`: the machine-readable
+// error payload emitted as the last line of stderr on a tool/git/network failure.
+// `step` is optional and OMITTED (never set to `undefined`) when unknown, under
+// exactOptionalPropertyTypes. Declared locally, not imported (serialization
+// boundary; no dependency on the frozen workflow module).
+export interface MachineError {
+  command: string;
+  step?: string;
+  message: string;
+  stderr_tail: string;
+}
+
+export type Severity = 'P1' | 'P2' | 'P3';
+export type Classification = 'fixable-now' | 'no-touch' | 'needs-plan';
+export type FindingStatus =
+  | 'pending'
+  | 'fixed'
+  | 'fix-failed'
+  | 'no-touch'
+  | 'needs-plan'
+  | 'invalid';
+
+export interface FindingRecord {
+  id: string;
+  severity: Severity;
+  file: string;
+  line: number;
+  title: string;
+  impact: string;
+  needs_plan: boolean;
+  test_cmd: string[];
+  slice_files: string[];
+  classification: Classification | '';
+  status: FindingStatus;
+  sha: string;
+}
+
+export interface FindingsFile {
+  schema: 1;
+  mode: 'review-only' | 'review-and-refactor';
+  generated_at: string;
+  findings: FindingRecord[];
+}
