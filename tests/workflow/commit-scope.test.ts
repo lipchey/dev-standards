@@ -43,6 +43,51 @@ test('implement-requires-clean-tree-at-start', () => {
   }
 });
 
+test('implement-clean-tree-refuses-dirty-nested-lockfile-suffix-path', () => {
+  // The clean-tree preflight must match ONLY the exact root .workflow.lock, not any
+  // path that merely ENDS in ".workflow.lock". A dirty src/.workflow.lock (an
+  // unrelated file, nothing to do with the workflow mutex) must still trip the
+  // clean-tree refusal. (Porcelain -z entries are "XY <path>", so a naive endsWith
+  // on the whole entry dropped a modified " M src/.workflow.lock" entry.) Committed
+  // first, then modified, so porcelain reports the full nested path rather than
+  // collapsing an untracked dir to "?? src/".
+  const dir = initRepo();
+  try {
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', '.workflow.lock'), 'v1\n');
+    runGit(['add', '--', 'src/.workflow.lock'], dir);
+    runGit(['commit', '-q', '-m', 'seed nested'], dir);
+    fs.writeFileSync(path.join(dir, 'src', '.workflow.lock'), 'v2\n');
+    assert.throws(() => assertCleanAtImplementStart(dir, runGit), CommitScopeError);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('implement-clean-tree-refuses-dirty-suffix-filename-lockfile', () => {
+  // A top-level file whose name merely ends in ".workflow.lock" (e.g.
+  // notes.workflow.lock) is NOT the mutex lockfile and must still trip the refusal.
+  const dir = initRepo();
+  try {
+    fs.writeFileSync(path.join(dir, 'notes.workflow.lock'), 'unrelated\n');
+    assert.throws(() => assertCleanAtImplementStart(dir, runGit), CommitScopeError);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('implement-clean-tree-ignores-exact-root-lockfile', () => {
+  // The ONLY path the preflight ignores is the exact root .workflow.lock (the live
+  // mutex held during the transition). A tree dirty with ONLY that file is clean.
+  const dir = initRepo();
+  try {
+    fs.writeFileSync(path.join(dir, '.workflow.lock'), '{"pid":1}\n');
+    assert.doesNotThrow(() => assertCleanAtImplementStart(dir, runGit));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('implement-stages-changed-since-start-sha-minus-exclusions', () => {
   const dir = initRepo();
   try {

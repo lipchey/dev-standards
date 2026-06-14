@@ -95,10 +95,22 @@ export function worktreeChangesExcept(
   return [...set].sort();
 }
 
+// A `git status --porcelain -z` token is `XY <path>` (2 status chars + space +
+// path); under `-z` a rename's old/new names are SEPARATE tokens, so the path is
+// always `entry.slice(3)` with no ` -> ` to split. Mirrors ship.ts's parseDirtyPaths
+// so the lockfile is matched by EXACT path, never a suffix.
+function porcelainPath(entry: string): string {
+  return entry.length > 3 ? entry.slice(3) : entry;
+}
+
 export function assertCleanAtImplementStart(worktree: string, run: RunGit): void {
-  const dirty = splitNul(run(['status', '--porcelain', '-z'], worktree)).filter(
-    (entry) => !entry.endsWith(LOCK_FILE_NAME),
-  );
+  // Ignore ONLY the live mutex at the worktree root (.workflow.lock). Match the
+  // EXACT root path, not any path whose name ends in ".workflow.lock" (e.g.
+  // src/.workflow.lock or notes.workflow.lock) — those are unrelated dirty files
+  // and must still trip the clean-tree refusal.
+  const dirty = splitNul(run(['status', '--porcelain', '-z'], worktree))
+    .map(porcelainPath)
+    .filter((p) => p !== LOCK_FILE_NAME);
   if (dirty.length > 0) {
     throw new CommitScopeError(
       `implement-plan requires a clean tree at start, but found: ${dirty.join(', ')}`,
