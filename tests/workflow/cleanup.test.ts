@@ -579,6 +579,43 @@ test('gh-failure-is-infra-error-exit-1-machine-readable', () => {
   }
 });
 
+test('in-progress-no-pr-record-skipped-before-gh-and-merged-record-still-cleaned', () => {
+  // An in-progress feature record (new-feature/feature-start write pr:0,
+  // review_state:"building") has NO real PR. cleanup must SKIP it BEFORE the
+  // `viewPr(record.pr)` round-trip — otherwise `gh pr view 0` throws a GhError that
+  // aborts the WHOLE sweep. MIXED fixture: the pr:0 building record is skipped AND
+  // an eligible merged record is still fully cleaned in the SAME run (the sweep
+  // continues past the no-PR record). `failGh: 0` makes any viewPr(0) throw, so the
+  // assertion that the merged record is cleaned also proves viewPr(0) was never
+  // called (a GhError would have aborted the sweep before reaching it).
+  const records: FeatureRecord[] = [
+    { slug: 'building', branch: 'feature/building', worktree: wt('building'), pr: 0, review_state: 'building' },
+    { slug: 'shipped', branch: 'feature/shipped', worktree: wt('shipped'), pr: 7, review_state: 'awaiting_human_review' },
+  ];
+  const fx = fixture({
+    records,
+    worktreeAssoc: { 'feature/shipped': wt('shipped') },
+    views: { 7: mergedView('feature/shipped') },
+    failGh: 0, // any viewPr(0) would throw -> proves we skip BEFORE the gh round-trip
+  });
+  try {
+    const result = cleanup(fx.opts, fx.deps);
+    assert.equal(result.exitCode, 0, 'sweep completes despite the no-PR record');
+    // the no-PR record was skipped WITHOUT a gh round-trip for pr 0.
+    assert.ok(!fx.ghCalls.includes(0), 'viewPr(0) was never called for the no-PR record');
+    // the eligible merged record was still fully cleaned in the same run.
+    assert.ok(fx.gitCalls.some((c) => c[0] === '__rm-worktree' && c[1] === wt('shipped')), 'merged record worktree removed');
+    assert.ok(
+      fx.gitCalls.some((c) => c[0] === 'branch' && c[1] === '-D' && c[3] === 'feature/shipped'),
+      'merged record branch deleted',
+    );
+    // STATE.md: the merged record dropped, the in-progress record retained untouched.
+    assert.deepEqual(remainingRecords(fx.files, fx.statePath), ['feature/building'], 'merged dropped, building kept');
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
 test('git-destructive-failure-is-infra-error-exit-1', () => {
   const fx = fixture({ failGitDestructive: true });
   try {

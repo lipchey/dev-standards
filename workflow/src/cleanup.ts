@@ -320,6 +320,18 @@ function decide(
   record: FeatureRecord,
   worktrees: { byBranch: Map<string, string>; liveBranches: Set<string> },
 ): Outcome {
+  // Outcome 3 (no-PR variant): an in-progress feature record has no PR yet —
+  // new-feature/feature-start write `pr: 0` (and `review_state: "building"`) until
+  // ship opens one. Skip it BEFORE the `viewPr(record.pr)` round-trip: `gh pr view 0`
+  // exits non-zero -> GhError, which (thrown from this pre-apply decide() map) would
+  // ABORT the whole sweep instead of skipping one record. `pr <= 0` is the load-
+  // bearing no-PR signal (a real PR always has a positive number); the skip outcome
+  // is the same report-and-continue family as the not-merged/validation skips, and
+  // changes no §2.7 destructive-op rule.
+  if (record.pr <= 0) {
+    return { kind: 'skip', record, reason: `no PR yet (pr=${record.pr}, review_state=${record.review_state})` };
+  }
+
   const view = deps.gh.viewPr(record.pr);
 
   // Outcome 3: not merged -> untouched.
