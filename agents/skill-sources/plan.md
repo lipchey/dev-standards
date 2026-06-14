@@ -51,8 +51,10 @@ slash commands drives the same verbs directly.
    HEAD-trailer mismatch is divergence, which the gate and every transaction
    refuse (exit 13) until `workflow recover` runs. Edit only the plan content.
 6. Keep the working change set to the planning file. The `complete` commit must
-   contain exactly the planning file; a foreign staged/dirty path is refused
-   (commit-scope, exit 11).
+   contain exactly the planning file; a foreign STAGED path is refused
+   (commit-scope, exit 11). Unrelated UNSTAGED dirty files are not inspected by
+   this check — they are left untouched, not refused or cleaned, so keep them out
+   of the index.
 7. Finish with `workflow complete plan`.
 
 ## Contract block
@@ -74,7 +76,8 @@ workflow start plan
 
 # 3. (author / refine the Plan in the planning-file body)
 
-# 4. Complete - ONE trailered commit (planning file only); worktree left clean.
+# 4. Complete - ONE trailered commit (planning file only). Refuses a foreign
+#    STAGED path; unrelated UNSTAGED dirty files are left untouched.
 workflow complete plan
 #   plan-inprogress  ->  plan-ready          (resting state)
 #   commit msg: "workflow(plan): complete -> plan-ready"

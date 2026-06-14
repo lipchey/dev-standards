@@ -44,8 +44,9 @@ runtime drives the same verbs directly.
 3. The helper-owned front matter is transaction-written only; edit only the plan
    content (a front-matter vs HEAD-trailer mismatch is divergence, refused until
    `workflow recover` runs).
-4. Keep the working change set to the planning file (a foreign staged/dirty path
-   is refused, exit 11). Finish with `workflow complete consolidate-plan`.
+4. Keep the working change set to the planning file (a foreign STAGED path is
+   refused, exit 11; unrelated UNSTAGED dirty files are left untouched, so keep
+   them out of the index). Finish with `workflow complete consolidate-plan`.
 
 ## Contract block
 
