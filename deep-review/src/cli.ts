@@ -14,6 +14,7 @@ import { buildNoTouchSet, isNoTouch } from './no-touch.ts';
 import { readFindings, writeFindings } from './findings-io.ts';
 import { classifyAll } from './classify.ts';
 import { commitSlice, realSliceDeps } from './slice.ts';
+import { writeReport, realReportDeps } from './report.ts';
 
 export interface CliDeps {
   stdout: (text: string) => void;
@@ -168,11 +169,43 @@ function commitSliceCmd(rest: string[], deps: CliDeps): number {
   return result.exitCode;
 }
 
+// `report --findings <path>` — render + write the metadata-only deep-review
+// report to <reportsDir>/deep-review-<date>.md. Construction is the primary
+// safety guarantee (metadata only, single-line-per-field); a best-effort secret
+// scan over the rendered body aborts the write on a hit. Runs in EITHER mode
+// (§2.3 — no mode gate): it summarizes the run regardless of review-only vs
+// review-and-refactor. The untrusted findings file goes through readFindings
+// (real-fs default), which re-validates path safety. reportsDir comes from the
+// manifest (paths.reports), resolved against the repo root so the file lands in
+// the right place; the scanner + write seam are wired to the same repo root via
+// realReportDeps. On a secret-scan hit the §2.4 machine error is the LAST line of
+// stderr; on success the written path is printed to stdout.
+function report(rest: string[], deps: CliDeps): number {
+  const findingsPath = parseFindingsFlag(rest);
+  if (findingsPath === undefined || findingsPath === '') {
+    deps.stderr('deep-review report: missing --findings <path>\n');
+    return EXIT_USAGE;
+  }
+  const env = resolveEnv(deps);
+  const config = loadConfig(resolve(env.cwd, 'quality.json'));
+  const findingsFile = readFindings(findingsPath);
+  const result = writeReport(
+    findingsFile,
+    realReportDeps(env.cwd, resolve(env.cwd, config.reportsDir)),
+  );
+  if (result.machineError !== undefined) {
+    deps.stderr(`${JSON.stringify({ error: result.machineError })}\n`);
+  } else if (result.path !== undefined) {
+    deps.stdout(`${result.path}\n`);
+  }
+  return result.exitCode;
+}
+
 const DISPATCH: Record<Command, CommandHandler> = {
   'check-path': checkPath,
   classify,
   'commit-slice': commitSliceCmd,
-  report: notImplemented('report'),
+  report,
   'select-worktree': notImplemented('select-worktree'),
   handoff: notImplemented('handoff'),
   verify: notImplemented('verify'),
