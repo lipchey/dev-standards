@@ -7,7 +7,9 @@ import {
   createSecretScanner,
   realScannerResolution,
   resolveScanner,
+  gitleaksArgs,
   GITLEAKS_ARGS,
+  GITLEAKS_CONFIG_REL,
   SCANNER_REL,
 } from '../../workflow/src/secret-scan.ts';
 import type {
@@ -49,11 +51,15 @@ function spawnFixture(response: {
 }
 
 // Deps where the convention wrapper is PRESENT + EXECUTABLE at <root>/tools/run-gitleaks.
-function presentExecDeps(spawn: SecretScanSpawn, root = '/repo') {
+// By default NO <root>/.gitleaks.toml is present (so the base argv, no `-c`, is
+// used); pass hasConfig:true to also make <root>/.gitleaks.toml exist.
+function presentExecDeps(spawn: SecretScanSpawn, root = '/repo', hasConfig = false) {
+  const wrapper = `${root}/${SCANNER_REL}`;
+  const config = `${root}/.gitleaks.toml`;
   return {
     spawn,
     cwd: () => root,
-    fileExists: () => true,
+    fileExists: (p: string) => p === wrapper || (hasConfig && p === config),
     statMode: () => 0o755,
   };
 }
@@ -70,6 +76,18 @@ test('resolveScanner reports present + executable from the mode bits', () => {
 
   const absent = resolveScanner('/repo', { fileExists: () => false, statMode: () => null });
   assert.deepEqual(absent, { path: '/repo/tools/run-gitleaks', present: false, executable: false });
+});
+
+test('gitleaksArgs: base argv with no config, -c <abs> threaded when a config path is given', () => {
+  assert.deepEqual(gitleaksArgs(null), ['stdin', '--no-banner', '--redact']);
+  assert.deepEqual(gitleaksArgs('/repo/.gitleaks.toml'), [
+    'stdin',
+    '-c',
+    '/repo/.gitleaks.toml',
+    '--no-banner',
+    '--redact',
+  ]);
+  assert.equal(GITLEAKS_CONFIG_REL, '.gitleaks.toml');
 });
 
 // ── scanner behaviour against an injected spawn ───────────────────────────────
@@ -126,13 +144,10 @@ test('(e) present-but-not-executable wrapper is a no-op (null); doctor makes it 
   assert.equal(fx.calls.length, 0, 'non-executable wrapper => spawn is never reached');
 });
 
-test('(f) spawns the FIXED argv with body on stdin, shell:false (no option injection)', () => {
+test('(f) spawns the base argv (no -c) with body on stdin, shell:false, cwd=root when no repo config', () => {
   const fx = spawnFixture({ status: 0 });
   const scan = createSecretScanner({
-    spawn: fx.spawn,
-    cwd: () => '/repo',
-    fileExists: () => true,
-    statMode: () => 0o755,
+    ...presentExecDeps(fx.spawn, '/repo'), // wrapper present, NO .gitleaks.toml
     timeoutMs: 4321,
   });
 
@@ -142,20 +157,58 @@ test('(f) spawns the FIXED argv with body on stdin, shell:false (no option injec
   assert.equal(fx.calls.length, 1);
   const call = fx.calls[0];
   assert.equal(call?.file, `/repo/${SCANNER_REL}`, 'resolves <root>/tools/run-gitleaks at call time');
-  assert.deepEqual(call?.args, ['stdin', '--no-banner', '--redact']);
+  assert.deepEqual(call?.args, ['stdin', '--no-banner', '--redact'], 'no -c when no repo config');
+  assert.ok(!call?.args.includes('-c'), 'argv must omit -c when .gitleaks.toml is absent');
   assert.equal(call?.options.shell, false);
   assert.equal(call?.options.encoding, 'utf8');
   assert.equal(call?.options.timeout, 4321);
   assert.equal(call?.options.input, 'PR BODY CONTENT', 'the candidate content is passed on stdin');
+  assert.equal(call?.options.cwd, '/repo', 'spawns with cwd = resolved root for deterministic config resolution');
+});
+
+test('(g) FIX 3: a repo .gitleaks.toml adds -c <abs path> to the argv and sets cwd=root', () => {
+  const fx = spawnFixture({ status: 0 });
+  const scan = createSecretScanner(presentExecDeps(fx.spawn, '/repo', /* hasConfig */ true));
+
+  scan('PR BODY CONTENT');
+
+  assert.equal(fx.calls.length, 1);
+  const call = fx.calls[0];
+  assert.deepEqual(
+    call?.args,
+    ['stdin', '-c', '/repo/.gitleaks.toml', '--no-banner', '--redact'],
+    'argv includes -c with the ABSOLUTE config path when .gitleaks.toml exists at root',
+  );
+  assert.equal(call?.options.cwd, '/repo', 'cwd is the resolved root');
+  assert.equal(call?.options.input, 'PR BODY CONTENT', 'content still passed on stdin (non-body argv only)');
+});
+
+test('(h) FIX 3: a feature-worktree root resolves -c to THAT root’s .gitleaks.toml', () => {
+  const fx = spawnFixture({ status: 0 });
+  const scan = createSecretScanner(presentExecDeps(fx.spawn, '/feature-worktree', true));
+
+  scan('body');
+
+  const call = fx.calls[0];
+  assert.deepEqual(call?.args, [
+    'stdin',
+    '-c',
+    '/feature-worktree/.gitleaks.toml',
+    '--no-banner',
+    '--redact',
+  ]);
+  assert.equal(call?.options.cwd, '/feature-worktree');
 });
 
 test('the wrapper is resolved at CALL time relative to the current cwd', () => {
   const fx = spawnFixture({ status: 0 });
   let root = '/feature-worktree';
+  // Path-aware presence so config resolution also tracks the (changing) root;
+  // here neither root ships a .gitleaks.toml, so the base argv is used.
   const scan = createSecretScanner({
     spawn: fx.spawn,
     cwd: () => root,
-    fileExists: () => true,
+    fileExists: (p: string) => p === `${root}/${SCANNER_REL}`,
     statMode: () => 0o755,
   });
 
@@ -164,7 +217,9 @@ test('the wrapper is resolved at CALL time relative to the current cwd', () => {
   scan('second');
 
   assert.equal(fx.calls[0]?.file, `/feature-worktree/${SCANNER_REL}`);
+  assert.equal(fx.calls[0]?.options.cwd, '/feature-worktree', 'cwd tracks the call-time root');
   assert.equal(fx.calls[1]?.file, `/main-repo-root/${SCANNER_REL}`);
+  assert.equal(fx.calls[1]?.options.cwd, '/main-repo-root');
 });
 
 // ── real-fs resolution + a real wrapper end-to-end (NOT real gitleaks) ────────
@@ -208,6 +263,39 @@ test('end-to-end with a real wrapper script: stdin received, exit 0 clean / exit
     const hit = scan('this body has a SECRET token');
     assert.notEqual(hit, null, 'tainted stdin => exit 1 => non-null hit');
     assert.match(hit ?? '', /exit 1/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('end-to-end: a real <root>/.gitleaks.toml is threaded to the wrapper via -c (real spawn)', () => {
+  // FIX 3 through the DEFAULT (real) deps: a stand-in wrapper records its argv so
+  // we can assert -c <abs config> reached it. The exact real-gitleaks rule
+  // application is validated by the pilot smoke at S15b.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-scan-cfg-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    const argvLog = path.join(dir, 'argv.log');
+    const wrapper = path.join(dir, 'tools', 'run-gitleaks');
+    // Records its own argv (one per line) then drains stdin and exits clean.
+    fs.writeFileSync(
+      wrapper,
+      `#!/bin/sh\nfor a in "$@"; do echo "$a" >> "${argvLog}"; done\ncat >/dev/null\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(path.join(dir, GITLEAKS_CONFIG_REL), '[allowlist]\n');
+
+    const scan = createSecretScanner({ cwd: () => dir });
+    assert.equal(scan('clean body'), null, 'clean exit 0 => null');
+
+    const recorded = fs.readFileSync(argvLog, 'utf8').trim().split('\n');
+    assert.deepEqual(recorded, [
+      'stdin',
+      '-c',
+      path.join(dir, GITLEAKS_CONFIG_REL),
+      '--no-banner',
+      '--redact',
+    ]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

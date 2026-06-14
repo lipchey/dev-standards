@@ -31,18 +31,40 @@ const OUTPUT_TAIL_MAX = 2000;
 // worktree root. This is the SOLE wiring channel for the scanner (owner decision).
 export const SCANNER_REL = 'tools/run-gitleaks';
 
-// The FIXED argv handed to the wrapper. `stdin` makes gitleaks read the candidate
-// content from stdin; `--no-banner` keeps its stderr to findings only; `--redact`
-// masks any matched secret value in the wrapper's own output. Fixed argv + shell:false
-// + content-on-stdin means no operand ever reaches a shell or an option slot (no
-// injection surface), exactly like gh.ts / cmux-adapter.ts.
+// CONVENTION path of an adopting repo's custom gitleaks config, at the repo /
+// worktree root. gitleaks' `stdin` subcommand does NOT auto-discover a cwd
+// `.gitleaks.toml`, so we must pass it explicitly (see GITLEAKS_ARGS below).
+export const GITLEAKS_CONFIG_REL = '.gitleaks.toml';
+
+// The base argv handed to the wrapper when NO repo config is present. `stdin`
+// makes gitleaks read the candidate content from stdin; `--no-banner` keeps its
+// stderr to findings only; `--redact` masks any matched secret value in the
+// wrapper's own output. Fixed, non-body argv + shell:false + content-on-stdin
+// means no operand ever reaches a shell or an option slot (no injection surface),
+// exactly like gh.ts / cmux-adapter.ts.
 export const GITLEAKS_ARGS: readonly string[] = ['stdin', '--no-banner', '--redact'];
+
+// Build the argv for a scan, optionally threading an absolute config path.
+// gitleaks `stdin` does NOT load a cwd `.gitleaks.toml` on its own, so an adopting
+// repo's custom rules (e.g. the pilot's anthropic/openai/deepseek/openclaw token
+// rules) would be MISSED without an explicit `-c`. `-c` is a standard gitleaks
+// GLOBAL flag, valid for the stdin subcommand. The config path is still an
+// absolute, NON-body operand resolved from fs presence — never from scanned
+// content — so the no-injection property is preserved. NOTE: the exact
+// real-gitleaks end-to-end behaviour (custom rules actually applied to stdin) is
+// validated by the pilot smoke at S15b; here we pin the argv shape + cwd.
+export function gitleaksArgs(configPath: string | null): string[] {
+  return configPath === null
+    ? [...GITLEAKS_ARGS]
+    : ['stdin', '-c', configPath, '--no-banner', '--redact'];
+}
 
 export interface SecretScanSpawnOptions {
   shell: false;
   encoding: 'utf8';
   timeout: number;
   input: string; // the candidate content, handed to the wrapper on stdin
+  cwd: string; // the resolved root, for deterministic gitleaks config resolution
 }
 
 export interface SecretScanSpawnResult {
@@ -127,22 +149,34 @@ function tail(text: string): string {
 export function createSecretScanner(deps: SecretScannerDeps = {}): (body: string) => string | null {
   const spawn = deps.spawn ?? realSecretScanSpawn;
   const cwd = deps.cwd ?? (() => process.cwd());
-  const fileExists = deps.fileExists ?? ((p) => existsSync(p));
-  const statMode = deps.statMode ?? defaultStatMode;
   const timeout = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // Hold the fs probes as one resolved deps object instead of unpacking then
+  // re-packing them at each call site (behavior-preserving tidy, FIX 4).
+  const fsDeps = {
+    fileExists: deps.fileExists ?? ((p: string) => existsSync(p)),
+    statMode: deps.statMode ?? defaultStatMode,
+  };
 
   return (body: string): string | null => {
-    const resolution = resolveScanner(cwd(), { fileExists, statMode });
+    const root = cwd();
+    const resolution = resolveScanner(root, fsDeps);
     // No wrapper wired (dev-standards / every fixture repo), or a present-but-non-
     // executable file: resolve to a NO-OP. The doctor CHECK_SECRET_SCANNER probe makes
     // this state LOUD whenever the workflow is ENABLED, so it is never a silent gap.
     if (!resolution.present || !resolution.executable) return null;
 
-    const result = spawn(resolution.path, [...GITLEAKS_ARGS], {
+    // FIX 3: spawn at `cwd: root` and, if the adopting repo ships a custom
+    // `<root>/.gitleaks.toml`, pass it explicitly via `-c` so its rules apply to
+    // stdin scanning (gitleaks stdin does not auto-discover a cwd config).
+    const configPath = path.join(root, GITLEAKS_CONFIG_REL);
+    const configArg = fsDeps.fileExists(configPath) ? configPath : null;
+
+    const result = spawn(resolution.path, gitleaksArgs(configArg), {
       shell: false,
       encoding: 'utf8',
       timeout,
       input: body,
+      cwd: root,
     });
 
     // FAIL-CLOSED interpretation: only a clean exit 0 is a "pass" (null). A spawn

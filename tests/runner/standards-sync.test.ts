@@ -331,6 +331,68 @@ test('standards-sync: check-skips-wrapper-drift-when-no-skills-tree', () => {
   }
 });
 
+test('standards-sync: --check on a source repo (bodies, no skills tree) FAILS on a malformed body', () => {
+  // FIX 1: even with NO .agents/skills or .claude/skills tree, --check must
+  // validate the canonical bodies themselves. A body with broken frontmatter
+  // must fail (exit 1) and name the offending body, NOT pass via the old early
+  // hostsWrappers return. (The wrapper-drift COMPARISON is still skipped.)
+  const dir = makeFixtureRepo();
+  try {
+    assert.ok(!fs.existsSync(path.join(dir, '.agents', 'skills')), 'fixture must not host .agents/skills');
+    assert.ok(!fs.existsSync(path.join(dir, '.claude', 'skills')), 'fixture must not host .claude/skills');
+
+    // Corrupt one canonical body's frontmatter (drop the closing "---").
+    const [first] = phaseNames();
+    assert.ok(first, 'at least one phase must exist');
+    const srcPath = path.join(dir, sourcesRel, `${first as string}.md`);
+    const raw = fs.readFileSync(srcPath, 'utf8');
+    const broken = raw.replace(/^---\n([\s\S]*?)\n---\n/, '---\n$1\n');
+    assert.notEqual(broken, raw, 'sanity: the closing --- should have been removed');
+    fs.writeFileSync(srcPath, broken);
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(check.status, 1, `a malformed body must fail --check; got ${check.status}: ${combined(check)}`);
+    assert.match(check.stderr ?? '', /frontmatter/i, 'expected a frontmatter error on stderr');
+    assert.match(check.stderr ?? '', new RegExp(first as string), 'the error should name the offending body');
+    assert.doesNotMatch(combined(check), /standards-sync check passed/, 'must not report success on a malformed body');
+    assert.doesNotMatch(check.stderr ?? '', /at Object\.|node:internal/, 'must be a clean error, not a stack trace');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: --check on a source repo FAILS when a body name is not kebab-case', () => {
+  // FIX 1 + FIX 2 together: the body-parse path runs on a source repo, so a
+  // non-kebab-case name in a canonical body is caught even with no skills tree.
+  const dir = makeFixtureRepo();
+  try {
+    const [first] = phaseNames();
+    assert.ok(first, 'at least one phase must exist');
+    const srcPath = path.join(dir, sourcesRel, `${first as string}.md`);
+    const raw = fs.readFileSync(srcPath, 'utf8');
+    // Rewrite the name line to a non-kebab value (and rename the file to match,
+    // so the failure is the kebab check, not the name!=filename check).
+    const badName = 'Bad_Name';
+    const rewritten = raw.replace(/^name: .*$/m, `name: ${badName}`);
+    assert.notEqual(rewritten, raw, 'sanity: the name line should have changed');
+    fs.rmSync(srcPath, { force: true });
+    fs.writeFileSync(path.join(dir, sourcesRel, `${badName}.md`), rewritten);
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(check.status, 1, `a non-kebab body name must fail --check; got ${check.status}: ${combined(check)}`);
+    assert.match(check.stderr ?? '', /kebab-case/i, 'expected a kebab-case error on stderr');
+    assert.doesNotMatch(combined(check), /standards-sync check passed/, 'must not report success');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('standards-sync: a source with missing frontmatter fails sanely (exit 1, no crash)', () => {
   const dir = makeFixtureRepo();
   try {

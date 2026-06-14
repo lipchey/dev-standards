@@ -48,6 +48,13 @@ export type FrontmatterResult =
   | { ok: true; frontmatter: Frontmatter }
   | { ok: false; message: string };
 
+// Kebab-case allowlist for the wrapper `name` (ADR-010 metadata). The name is
+// already required to equal the source filename stem, and it is interpolated
+// into on-disk wrapper paths (`<skillsDir>/<name>/SKILL.md`); restricting it to
+// lower-case letters/digits/hyphens starting with a letter makes that safety
+// explicit and rules out path-significant stems (e.g. "..") at parse time.
+export const NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
+
 // Minimal, deterministic frontmatter reader: a leading `---` line, scalar
 // `key: value` lines, a closing `---`. Only `name` and `description` are read;
 // values are single-line (the canonical bodies use single-line scalars). This
@@ -89,6 +96,12 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
   if (name === undefined || name === '') {
     return { ok: false, message: 'frontmatter is missing a non-empty "name"' };
   }
+  if (!NAME_PATTERN.test(name)) {
+    return {
+      ok: false,
+      message: `frontmatter "name" must be kebab-case (${NAME_PATTERN.source}): "${name}"`,
+    };
+  }
   if (description === undefined || description === '') {
     return { ok: false, message: 'frontmatter is missing a non-empty "description"' };
   }
@@ -108,6 +121,20 @@ export function wrapperPath(repoRoot: string, runtime: Runtime, name: string): s
 // fully active there.
 export function hostsWrappers(repoRoot: string): boolean {
   return RUNTIMES.some((runtime) => existsSync(path.join(repoRoot, runtime.skillsDir)));
+}
+
+// Does this repo AUTHOR canonical bodies? True when agents/skill-sources holds
+// at least one `.md`. The source repo (dev-standards) does; an adopting repo
+// that only vendors wrappers does not. `check()` uses this so it ALWAYS parses
+// and validates its own bodies (catching broken frontmatter) regardless of
+// whether a skills tree exists - only the wrapper-drift COMPARISON is gated on
+// hostsWrappers. A repo with neither bodies nor a skills tree still passes.
+export function hasCanonicalBodies(repoRoot: string): boolean {
+  try {
+    return readdirSync(path.join(repoRoot, SOURCE_DIR)).some((f) => f.endsWith('.md'));
+  } catch {
+    return false;
+  }
 }
 
 // Render a deterministic wrapper. Output is fully determined by (frontmatter,
@@ -233,29 +260,45 @@ export function generate(repoRoot: string): GenResult {
   return { code: EXIT_OK, stdout, stderr };
 }
 
-// check mode: regenerate in memory and compare against committed files. Any
+// check mode: validate the canonical bodies, then (only where wrappers are
+// hosted) regenerate in memory and compare against the committed files. Any
 // missing, extra-content, or drifted wrapper is a failure with a clear message.
 //
-// Wrapper-drift only applies to repos that HOST wrappers. The source repo
-// (dev-standards) and any non-adopting repo host none, so there is nothing to
-// drift against - skip the comparison and pass (option C). This guard runs
-// before collectPhases so a repo without the canonical bodies still passes.
+// TWO independent dimensions, decoupled (FIX 1):
+//   1. Body validation. If this repo AUTHORS bodies (agents/skill-sources/*.md),
+//      ALWAYS parse and validate them - even with no skills tree. This catches
+//      broken/invalid frontmatter in the source repo's own bodies, which the
+//      old hostsWrappers early-return let pass with exit 0.
+//   2. Wrapper-drift COMPARISON. Only applies to repos that HOST wrappers; the
+//      source repo (dev-standards) and any non-adopting repo host none, so there
+//      is nothing to drift against - skip the comparison and pass (option C).
+// A repo with neither bodies nor a skills tree still passes.
 export function check(repoRoot: string): GenResult {
   const stdout: string[] = [];
   const stderr: string[] = [];
 
-  if (!hostsWrappers(repoRoot)) {
+  const authorsBodies = hasCanonicalBodies(repoRoot);
+  const hosts = hostsWrappers(repoRoot);
+
+  // Dimension 1: validate bodies whenever they exist. collectPhases is also the
+  // source of the drift plan when wrappers are hosted, so collect once and reuse.
+  let phases: PhaseSource[] = [];
+  if (authorsBodies || hosts) {
+    const collected = collectPhases(repoRoot);
+    if (!collected.ok) {
+      stderr.push(collected.message);
+      return { code: EXIT_FAIL, stdout, stderr };
+    }
+    phases = collected.phases;
+  }
+
+  // Dimension 2: wrapper-drift comparison is gated on hosting wrappers.
+  if (!hosts) {
     stdout.push('no skill wrappers present (source repo) - wrapper drift check skipped');
     return { code: EXIT_OK, stdout, stderr };
   }
 
-  const collected = collectPhases(repoRoot);
-  if (!collected.ok) {
-    stderr.push(collected.message);
-    return { code: EXIT_FAIL, stdout, stderr };
-  }
-
-  const planned = planWrappers(collected.phases);
+  const planned = planWrappers(phases);
   const drift: string[] = [];
   for (const w of planned) {
     const abs = path.join(repoRoot, w.relPath);
