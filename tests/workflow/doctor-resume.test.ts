@@ -27,8 +27,10 @@ import {
   CHECK_NOTIFY_ENV,
   CHECK_REVIEW_GUIDES,
   CHECK_SCHEMA_PARSE,
+  CHECK_SECRET_SCANNER,
   CHECK_WORKTREE_PARENT,
   CHECK_WRAPPER,
+  realDoctorProbes,
   realGhAuthProbe,
   runDoctor,
 } from '../../workflow/src/doctor.ts';
@@ -121,6 +123,7 @@ function makeProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
     probeCmux: () => ({ ok: true, detail: 'cmux session reachable' }),
     probeWrapper: () => ({ ok: true, detail: 'wrapper present' }),
     probeGhAuth: () => ({ ok: true, detail: 'authenticated as stub-user' }),
+    probeSecretScanner: () => ({ ok: true, detail: 'tools/run-gitleaks present and executable' }),
     ...overrides,
   };
 }
@@ -393,6 +396,75 @@ test('doctor gh-auth real probe: green via the tests/stubs/gh PATH stub, failing
   } finally {
     process.env.PATH = originalPath;
     cleanup(emptyDir);
+  }
+});
+
+test('doctor secret-scanner: enabled-only; green when the convention scanner resolves', () => {
+  const dir = initRepo('workflow-doctor-');
+  try {
+    const planningPath = setupGreenRepo(dir);
+    const green = runDoctor(doctorDeps(dir, planningPath, { probes: makeProbes() }));
+    const c = check(green.checks, CHECK_SECRET_SCANNER);
+    assert.equal(c.ok, true);
+    assert.equal(c.blocking, true);
+    assert.equal(green.ok, true);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('doctor secret-scanner: enabled + unresolved scanner FAILS loudly naming the convention path', () => {
+  const dir = initRepo('workflow-doctor-');
+  try {
+    const planningPath = setupGreenRepo(dir);
+    const red = runDoctor(
+      doctorDeps(dir, planningPath, {
+        probes: makeProbes({ probeSecretScanner: () => ({ ok: false, detail: 'not found' }) }),
+      }),
+    );
+    const c = check(red.checks, CHECK_SECRET_SCANNER);
+    assert.equal(c.ok, false);
+    assert.equal(c.blocking, true);
+    assert.match(c.detail, /tools\/run-gitleaks/, 'the failure names the convention path');
+    // Closing the silent-no-op gap: enabling the workflow without a scanner blocks.
+    assert.equal(red.ok, false);
+    assert.equal(red.exitCode, EXIT_FAILURE);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('doctor secret-scanner: omitted entirely when the workflow is disabled', () => {
+  const dir = initRepo('workflow-doctor-');
+  try {
+    const planningPath = setupGreenRepo(dir, { enabled: false });
+    const result = runDoctor(
+      doctorDeps(dir, planningPath, {
+        // Even a failing probe is irrelevant when disabled: the check is skipped.
+        probes: makeProbes({ probeSecretScanner: () => ({ ok: false, detail: 'not found' }) }),
+      }),
+    );
+    assert.equal(result.checks.find((c) => c.name === CHECK_SECRET_SCANNER), undefined);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('doctor secret-scanner real probe: resolves a real executable wrapper (no drift vs the scanner)', () => {
+  const dir = initRepo('workflow-doctor-');
+  try {
+    const probes = realDoctorProbes();
+    assert.equal(probes.probeSecretScanner(dir).ok, false, 'absent wrapper => probe fails');
+
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    const wrapper = path.join(dir, 'tools', 'run-gitleaks');
+    fs.writeFileSync(wrapper, '#!/bin/sh\nexit 0\n', { mode: 0o644 });
+    assert.equal(probes.probeSecretScanner(dir).ok, false, 'present-but-non-executable wrapper => probe fails');
+
+    fs.chmodSync(wrapper, 0o755);
+    assert.equal(probes.probeSecretScanner(dir).ok, true, 'present + executable => probe passes');
+  } finally {
+    cleanup(dir);
   }
 });
 

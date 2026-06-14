@@ -14,6 +14,7 @@ import { realLockSeams } from './lock.ts';
 import { runGit } from './trailers.ts';
 import { realDoctorProbes } from './doctor.ts';
 import { postJsonWithFetch } from './notify.ts';
+import { createSecretScanner } from './secret-scan.ts';
 
 // Node realpaths import.meta.url under symlinks; realpath both sides for the
 // entrypoint check (the idiom from runner/src/manifest-cli.ts; inlined to keep
@@ -64,6 +65,11 @@ const realIO: CliIO = {
   doctorProbes: realDoctorProbes(),
   env: process.env,
   postJson: postJsonWithFetch,
+  // Real secret scanner (§ frozen scanPrBody seam). The closure self-resolves the
+  // convention wrapper <cwd>/tools/run-gitleaks at CALL time, so it stays a no-op
+  // wherever no wrapper exists and runs the pinned gitleaks where one does. cli.ts
+  // keeps its `?? (() => null)` fallback for the unit-test edge (frozen).
+  scanPrBody: createSecretScanner(),
   launchProcess: (launch) => {
     const result = spawnSync(launch.file, launch.args, {
       cwd: launch.cwd,

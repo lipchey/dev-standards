@@ -32,6 +32,7 @@ import { SEAT_MAP, TRANSITION_TABLE } from './transitions.ts';
 import type { RunGit } from './trailers.ts';
 import { validate } from '../../runner/src/validate.ts';
 import { probeCmux } from './cmux-adapter.ts';
+import { realScannerResolution, SCANNER_REL } from './secret-scan.ts';
 
 // ── Result + probe seams ─────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ export interface DoctorProbes {
   probeCmux: () => ProbeResult; // arming-only: cmux session reachability (S13 adapter)
   probeWrapper: (runtime: 'claude' | 'codex') => ProbeResult; // arming-only: wrapper presence
   probeGhAuth: () => ProbeResult; // enabled-only: `gh` present + authenticated (S14 adapter)
+  probeSecretScanner: (root: string) => ProbeResult; // enabled-only: convention scanner resolves
 }
 
 // The inputs doctor needs, all resolved by the caller (the CLI edge). `arming` is
@@ -96,6 +98,7 @@ export const CHECK_WORKTREE_PARENT = 'worktree-parent-writable';
 export const CHECK_CMUX = 'cmux-probe';
 export const CHECK_WRAPPER = 'wrapper-presence';
 export const CHECK_GH_AUTH = 'gh-auth';
+export const CHECK_SECRET_SCANNER = 'secret-scanner';
 export const CHECK_NOTIFY_ENV = 'notify-env';
 
 // ── Manifest workflow-block extraction (pure) ────────────────────────────────
@@ -255,7 +258,18 @@ function checkGhAuth(deps: DoctorDeps): DoctorCheck {
     : fail(CHECK_GH_AUTH, `gh not usable: ${probe.detail}`);
 }
 
-// (9) WARN-ONLY: the notify webhook env var is set (never blocks the diagnosis).
+// (9) ENABLED-ONLY: the convention secret scanner (<root>/tools/run-gitleaks)
+// resolves — it exists AND is executable. When the workflow is enabled this MUST
+// hold, else ship/cleanup would silently no-op the secret scan; a loud FAIL here
+// closes that gap. Skipped entirely when the workflow is disabled/absent.
+function checkSecretScanner(deps: DoctorDeps): DoctorCheck {
+  const probe = deps.probes.probeSecretScanner(deps.repoRoot);
+  return probe.ok
+    ? ok(CHECK_SECRET_SCANNER, `secret scanner resolves: ${probe.detail}`)
+    : fail(CHECK_SECRET_SCANNER, `workflow enabled but no secret scanner at ${SCANNER_REL}: ${probe.detail}`);
+}
+
+// (10) WARN-ONLY: the notify webhook env var is set (never blocks the diagnosis).
 function checkNotifyEnv(deps: DoctorDeps, cfg: WorkflowConfigView): DoctorCheck {
   const notifyVal = cfg.workflow?.['notify'];
   const webhookEnv = isRecord(notifyVal) ? notifyVal['webhook_env'] : undefined;
@@ -290,6 +304,7 @@ export function runDoctor(deps: DoctorDeps): DoctorResult {
   }
   if (enabled) {
     checks.push(checkGhAuth(deps));
+    checks.push(checkSecretScanner(deps));
   }
   checks.push(checkNotifyEnv(deps, cfg));
 
@@ -371,7 +386,21 @@ export function realDoctorProbes(): DoctorProbes {
       detail: `${runtime} wrapper adapter not yet available (skill-wrapper generator); cannot verify presence`,
     }),
     probeGhAuth: realGhAuthProbe,
+    probeSecretScanner: realSecretScannerProbe,
   };
+}
+
+// Real convention-scanner probe: reuses `realScannerResolution` (the SAME resolution
+// the runtime scanner uses) so doctor's PASS/FAIL can never drift from "the scanner
+// will actually run". Present + executable -> ok; otherwise a detail that names the
+// missing/non-executable wrapper path.
+export function realSecretScannerProbe(root: string): ProbeResult {
+  const res = realScannerResolution(root);
+  if (res.present && res.executable) {
+    return { ok: true, detail: `${res.path} is present and executable` };
+  }
+  if (!res.present) return { ok: false, detail: `${res.path} not found` };
+  return { ok: false, detail: `${res.path} is present but not executable (chmod +x required)` };
 }
 
 // Real `gh auth status` probe: fixed-argv spawnSync (shell:false; untrusted state
