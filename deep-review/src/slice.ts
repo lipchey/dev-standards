@@ -1,0 +1,272 @@
+// E3 — the atomic slice engine. This is the ONLY part of the deep-review engine
+// that MUTATES a git repo, so every irreversible boundary is enforced
+// DETERMINISTICALLY (never assumed): a mode gate, an eligibility gate, a path-
+// safety gate, and a scope gate all run BEFORE any test spawn or git mutation,
+// and every git call is fixed-argv `spawnSync` with `shell: false` (no string is
+// ever interpolated into a shell, and `git add` is ALWAYS scoped to explicit
+// slice paths — `git add -A`/`.` never appear).
+//
+// `commitSlice` implements the §2.4 contract in seven ordered steps:
+//   1. load + validate findings; mode gate; locate finding; eligibility gate.
+//   2. path-safety gate (per-finding "invalid") + test_cmd fail-closed re-check.
+//   3. deterministic scope gate (the worktree's dirty set MUST be a subset of the
+//      slice).
+//   4. spawn the finding's test_cmd (fixed argv, shell:false).
+//   5. GREEN (test exit 0): `git add -- <slice>` then a commit whose LAST line is
+//      the trailer `Deep-Review-Slice: <id>`; status "fixed", sha = new HEAD.
+//   6. RED (test non-zero): `git checkout HEAD -- <slice>` (revert only the
+//      slice), status "fix-failed", NO commit.
+//   7. any git error -> EXIT_FAILURE carrying a §2.4 MachineError naming the
+//      failing step.
+//
+// Effects (git/test spawn + findings fs) live behind an injected `deps` seam so
+// the engine logic is unit-testable; the real defaults run git in the worktree
+// and read/write findings through the validating findings-io boundary.
+
+import { spawnSync } from 'node:child_process';
+import { EXIT_OK, EXIT_FAILURE, EXIT_WRONG_STATE } from './types.ts';
+import type { FindingRecord, FindingsFile, MachineError } from './types.ts';
+import { assertSafeRepoPath, FindingsValidationError, readFindings, writeFindings } from './findings-io.ts';
+
+// The git-commit trailer key (pinned so call sites read by name and never drift).
+// The slice commit message's LAST line is exactly `Deep-Review-Slice: <id>`, the
+// durable per-slice provenance record (mirrors workflow's Workflow-Phase trailer).
+export const SLICE_TRAILER_KEY = 'Deep-Review-Slice';
+
+// Bound the machine-readable stderr_tail so a runaway stderr cannot bloat the
+// emitted JSON line (matches workflow/src/trailers.ts STDERR_TAIL_MAX).
+const STDERR_TAIL_MAX = 2000;
+
+// True if the string carries any C0 control char (0x00-0x1F) or DEL (0x7F). Used
+// to reject a test_cmd argv that could smuggle a terminator. Written as a codepoint
+// scan (not a regex literal) so no control byte ever appears in this source.
+function hasControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+// ── Effects seam ───────────────────────────────────────────────────────────────
+
+// The result of a fixed-argv spawn. `status` is the process exit code, or null
+// when the process failed to spawn (treated as a non-green result, never as 0).
+export interface SpawnResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+// The injected effects. `spawn` runs BOTH git and the finding's test_cmd (fixed
+// argv, never a shell); `cwd` is the worktree root; findings read/write go
+// through the validating findings-io boundary by default.
+export interface SliceDeps {
+  cwd: string;
+  spawn: (file: string, args: readonly string[], options: { cwd: string }) => SpawnResult;
+  readFindings: (path: string) => FindingsFile;
+  writeFindings: (path: string, file: FindingsFile) => void;
+}
+
+// What `commitSlice` returns at the command edge: an exit code plus, on a git
+// failure only, the §2.4 machine-readable error the CLI prints as the last
+// stderr line. `machineError` is OMITTED (never undefined) under
+// exactOptionalPropertyTypes when there is no error.
+export interface SliceResult {
+  exitCode: number;
+  machineError?: MachineError;
+}
+
+// The real default spawn: fixed argv, `shell: false`, never a shell string. A
+// spawn-level failure (binary missing, cwd gone) maps to `status: null` so the
+// caller treats it as a non-green result rather than confusing it with exit 0.
+const defaultSpawn: SliceDeps['spawn'] = (file, args, options) => {
+  const r = spawnSync(file, args, {
+    cwd: options.cwd,
+    encoding: 'utf8',
+    shell: false,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.error !== undefined) {
+    return { status: null, stdout: '', stderr: r.error instanceof Error ? r.error.message : String(r.error) };
+  }
+  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+};
+
+// The production deps: git + test spawn at the real edge, findings through the
+// validating findings-io boundary. `cwd` is the worktree the slice lives in.
+export function realSliceDeps(cwd: string): SliceDeps {
+  return {
+    cwd,
+    spawn: defaultSpawn,
+    readFindings: (path) => readFindings(path),
+    writeFindings: (path, file) => {
+      writeFindings(path, file);
+    },
+  };
+}
+
+// ── Git edge (fixed argv, shell:false) ─────────────────────────────────────────
+
+function tailOf(text: string): string {
+  const trimmed = text.trim();
+  return trimmed.length > STDERR_TAIL_MAX ? trimmed.slice(-STDERR_TAIL_MAX) : trimmed;
+}
+
+// A failing git step. Carries the §2.4 MachineError fields (`command` — the git
+// argv, never a shell string — `stderr_tail`, `step`). `kind` is a cross-realm
+// tag (a bundled copy can defeat `instanceof`), mirroring workflow's GitError.
+class GitStepError extends Error {
+  readonly kind = 'slice-git-error' as const;
+  readonly command: string;
+  readonly stderr_tail: string;
+  readonly step: string;
+  constructor(step: string, command: string, stderrTail: string, message: string) {
+    super(message);
+    this.name = 'GitStepError';
+    this.step = step;
+    this.command = command;
+    this.stderr_tail = stderrTail;
+    Object.setPrototypeOf(this, GitStepError.prototype);
+  }
+}
+
+// Runs one git command through the spawn seam; returns stdout, or throws a
+// GitStepError (naming `step`) on a non-zero/failed-to-spawn result. The argv is
+// passed verbatim (paths come after `--`); no shell, ever.
+function runGit(deps: SliceDeps, args: string[], step: string): string {
+  const command = `git ${args.join(' ')}`;
+  const result = deps.spawn('git', args, { cwd: deps.cwd });
+  if (result.status !== 0) {
+    const detail = result.stderr.trim();
+    throw new GitStepError(step, command, tailOf(result.stderr), `${command} failed (status ${result.status}): ${detail}`);
+  }
+  return result.stdout;
+}
+
+function machineErrorOf(error: GitStepError): MachineError {
+  return {
+    command: error.command,
+    step: error.step,
+    message: error.message,
+    stderr_tail: error.stderr_tail,
+  };
+}
+
+// ── Pure helpers ───────────────────────────────────────────────────────────────
+
+// Fail-closed re-validation of a test_cmd: a NON-EMPTY array of NON-EMPTY
+// control-free strings. findings-io already enforces this, but the engine never
+// spawns a malformed argv — defense in depth against an unvalidated injection.
+function isValidTestCmd(cmd: readonly string[]): boolean {
+  return (
+    Array.isArray(cmd) &&
+    cmd.length > 0 &&
+    cmd.every((arg) => typeof arg === 'string' && arg.length > 0 && !hasControlChar(arg))
+  );
+}
+
+// Parses `git status --porcelain -z --no-renames` into the EXACT set of dirty
+// repo-relative paths. With `-z` each record is `XY <path>` NUL-terminated (no
+// quoting), and `--no-renames` reports a rename as a delete + an untracked add —
+// two ordinary records — so there is never an extra NUL-separated original-path
+// field to misalign on. Untracked files (`?? path`) are INCLUDED, so an untracked
+// file outside the slice trips the scope gate.
+function parseDirtyPaths(out: string): string[] {
+  const paths: string[] = [];
+  const NUL = String.fromCharCode(0);
+  for (const record of out.split(NUL)) {
+    if (record === '') continue;
+    const p = record.slice(3); // skip the 2 status chars + the separating space
+    if (p !== '') paths.push(p);
+  }
+  return paths;
+}
+
+// The slice commit message: a deterministic subject derived ONLY from the
+// validated finding id (a slug, so no newline can break the layout), with the
+// trailer as the exact LAST line.
+function buildSliceMessage(finding: FindingRecord): string {
+  const subject = `deep-review: apply fixable-now slice ${finding.id}`;
+  return `${subject}\n\n${SLICE_TRAILER_KEY}: ${finding.id}`;
+}
+
+// ── The engine ─────────────────────────────────────────────────────────────────
+
+export function commitSlice(findingId: string, findingsPath: string, deps: SliceDeps): SliceResult {
+  // Step 1 — load + validate; mode gate; locate; eligibility gate. ALL of this
+  // runs BEFORE any spawn or git: a wrong-mode, missing, or ineligible finding is
+  // refused with no side effect on the repo.
+  const findings = deps.readFindings(findingsPath);
+  if (findings.mode !== 'review-and-refactor') return { exitCode: EXIT_WRONG_STATE };
+  const finding = findings.findings.find((f) => f.id === findingId);
+  if (finding === undefined) return { exitCode: EXIT_WRONG_STATE };
+  if (finding.classification !== 'fixable-now' || finding.status !== 'pending') {
+    return { exitCode: EXIT_WRONG_STATE };
+  }
+
+  // Step 2 — path-safety gate. Every path that could reach a git argv is checked
+  // BEFORE git runs. On an unsafe path the finding is marked "invalid", persisted,
+  // and refused with no git touched. (findings-io already downgrades unsafe-path
+  // findings to "invalid" on read — which the eligibility gate above also catches
+  // — so this is fail-closed defense in depth that re-asserts the invariant at the
+  // last moment before a path is handed to git.)
+  const slice = finding.slice_files;
+  try {
+    assertSafeRepoPath(finding.file);
+    for (const p of slice) assertSafeRepoPath(p);
+  } catch (error) {
+    if (error instanceof FindingsValidationError && error.rule === 'path-unsafe') {
+      finding.status = 'invalid';
+      deps.writeFindings(findingsPath, findings);
+      return { exitCode: EXIT_WRONG_STATE };
+    }
+    throw error;
+  }
+  // test_cmd fail-closed re-check: never spawn a malformed argv (status unchanged,
+  // no git, no write).
+  if (!isValidTestCmd(finding.test_cmd)) return { exitCode: EXIT_WRONG_STATE };
+
+  const sliceSet = new Set(slice);
+  try {
+    // Step 3 — deterministic scope gate. The worktree's dirty set MUST be a subset
+    // of the slice; any dirty path outside the slice means the change is not
+    // isolated, so we refuse with NO test run and NO git mutation. This replaces
+    // AI discipline with enforcement.
+    const dirty = parseDirtyPaths(runGit(deps, ['status', '--porcelain', '-z', '--no-renames'], 'status'));
+    for (const p of dirty) {
+      if (!sliceSet.has(p)) return { exitCode: EXIT_WRONG_STATE };
+    }
+
+    // Step 4 — run the finding's verification command (fixed argv, shell:false) in
+    // the worktree. A non-zero OR failed-to-spawn (null) status is NOT green.
+    const cmdFile = finding.test_cmd[0];
+    if (cmdFile === undefined) return { exitCode: EXIT_WRONG_STATE };
+    const test = deps.spawn(cmdFile, finding.test_cmd.slice(1), { cwd: deps.cwd });
+
+    if (test.status === 0) {
+      // Step 5 — GREEN. Stage EXACTLY the slice paths (never `-A`/`.`), commit with
+      // the trailer as the last line, record the resulting sha.
+      runGit(deps, ['add', '--', ...slice], 'add');
+      runGit(deps, ['commit', '-m', buildSliceMessage(finding)], 'commit');
+      finding.sha = runGit(deps, ['rev-parse', 'HEAD'], 'rev-parse').trim();
+      finding.status = 'fixed';
+      deps.writeFindings(findingsPath, findings);
+      return { exitCode: EXIT_OK };
+    }
+
+    // Step 6 — RED. Revert ONLY the slice paths to HEAD; never carry a broken slice
+    // forward, never commit.
+    runGit(deps, ['checkout', 'HEAD', '--', ...slice], 'checkout');
+    finding.status = 'fix-failed';
+    deps.writeFindings(findingsPath, findings);
+    return { exitCode: EXIT_OK };
+  } catch (error) {
+    // Step 7 — any git error becomes EXIT_FAILURE + a §2.4 MachineError naming the
+    // failing step. Findings are NOT written on an error outcome.
+    if (error instanceof GitStepError) {
+      return { exitCode: EXIT_FAILURE, machineError: machineErrorOf(error) };
+    }
+    throw error;
+  }
+}

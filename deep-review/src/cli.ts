@@ -13,6 +13,7 @@ import { loadConfig } from './config.ts';
 import { buildNoTouchSet, isNoTouch } from './no-touch.ts';
 import { readFindings, writeFindings } from './findings-io.ts';
 import { classifyAll } from './classify.ts';
+import { commitSlice, realSliceDeps } from './slice.ts';
 
 export interface CliDeps {
   stdout: (text: string) => void;
@@ -125,10 +126,52 @@ function classify(rest: string[], deps: CliDeps): number {
   return EXIT_OK;
 }
 
+// Pulls the first positional operand (the `<finding-id>`) from argv, skipping the
+// `--findings <path>` flag (and its value) and any other `--flag`. Returns
+// undefined when no positional is present.
+function parseFindingId(rest: string[]): string | undefined {
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === undefined) continue;
+    if (arg === '--findings') {
+      i += 1; // skip the flag's value too
+      continue;
+    }
+    if (arg.startsWith('--')) continue;
+    return arg;
+  }
+  return undefined;
+}
+
+// `commit-slice <finding-id> --findings <path>` — the atomic slice engine (E3).
+// The §2.4 contract (mode/eligibility/path/scope gates, test->commit-with-trailer
+// | revert-and-fix-failed) lives in ./slice.ts; this handler only parses the
+// operands, resolves the worktree cwd from the env seam, and renders the
+// machine-readable error (when present) as the LAST line of stderr. EXIT codes
+// (OK / WRONG_STATE / FAILURE) come straight from the engine.
+function commitSliceCmd(rest: string[], deps: CliDeps): number {
+  const findingId = parseFindingId(rest);
+  if (findingId === undefined || findingId === '') {
+    deps.stderr('deep-review commit-slice: missing <finding-id> operand\n');
+    return EXIT_USAGE;
+  }
+  const findingsPath = parseFindingsFlag(rest);
+  if (findingsPath === undefined || findingsPath === '') {
+    deps.stderr('deep-review commit-slice: missing --findings <path>\n');
+    return EXIT_USAGE;
+  }
+  const env = resolveEnv(deps);
+  const result = commitSlice(findingId, findingsPath, realSliceDeps(env.cwd));
+  if (result.machineError !== undefined) {
+    deps.stderr(`${JSON.stringify({ error: result.machineError })}\n`);
+  }
+  return result.exitCode;
+}
+
 const DISPATCH: Record<Command, CommandHandler> = {
   'check-path': checkPath,
   classify,
-  'commit-slice': notImplemented('commit-slice'),
+  'commit-slice': commitSliceCmd,
   report: notImplemented('report'),
   'select-worktree': notImplemented('select-worktree'),
   handoff: notImplemented('handoff'),
