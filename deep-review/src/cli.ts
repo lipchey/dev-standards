@@ -6,11 +6,22 @@
 // Logic stays behind the injected `deps` seam (process streams) so it is testable
 // without touching the real process, mirroring the workflow CLI edge style.
 
-import { EXIT_USAGE } from './types.ts';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { EXIT_OK, EXIT_USAGE } from './types.ts';
+import { loadConfig } from './config.ts';
+import { buildNoTouchSet, isNoTouch } from './no-touch.ts';
 
 export interface CliDeps {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
+  // Environment seams (added in E1; reused by E2–E4). The entrypoint
+  // (deep-review-runner.ts) supplies only the stream sinks above; these default
+  // to the real process/fs when omitted, so the edge stays minimal. Tests inject
+  // all of them to keep command logic off the real process and disk.
+  cwd?: () => string;
+  readFile?: (filePath: string) => string;
+  warn?: (message: string) => void;
 }
 
 // The full command surface. Each lands in its own later task; all are stubbed now.
@@ -38,8 +49,33 @@ function notImplemented(command: Command): CommandHandler {
   };
 }
 
+// `check-path <path>` — classify a single repo-relative path as `no-touch` or
+// `editable` against the §2.5 floor (BASELINE ∪ the repo's project-facts
+// extensions). Pure matching lives in ./no-touch.ts; this handler only resolves
+// the manifest + ref and wires the injected env seams.
+function checkPath(rest: string[], deps: CliDeps): number {
+  const operand = rest[0];
+  if (operand === undefined) {
+    deps.stderr('deep-review check-path: missing <path> operand\n');
+    return EXIT_USAGE;
+  }
+  const cwd = (deps.cwd ?? (() => process.cwd()))();
+  const readFile = deps.readFile ?? ((p: string): string => readFileSync(p, 'utf8'));
+  const warn = deps.warn ?? ((message: string): void => deps.stderr(`${message}\n`));
+
+  const config = loadConfig(resolve(cwd, 'quality.json'));
+  const set = buildNoTouchSet({
+    noTouchGlobsRef: config.deepReview?.no_touch_globs_ref,
+    readFile: (p: string): string => readFile(resolve(cwd, p)),
+    warn,
+  });
+
+  deps.stdout(`${isNoTouch(operand, set) ? 'no-touch' : 'editable'}\n`);
+  return EXIT_OK;
+}
+
 const DISPATCH: Record<Command, CommandHandler> = {
-  'check-path': notImplemented('check-path'),
+  'check-path': checkPath,
   classify: notImplemented('classify'),
   'commit-slice': notImplemented('commit-slice'),
   report: notImplemented('report'),
