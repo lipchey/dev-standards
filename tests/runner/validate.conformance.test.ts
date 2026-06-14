@@ -64,6 +64,24 @@ function setWorkflow(manifest: Manifest, workflow: unknown): void {
   (manifest as unknown as Record<string, unknown>)['workflow'] = workflow;
 }
 
+// Full deep_review block (ADR-007); mutated per case. tokens:null exercises the
+// ["integer","null"] branch so Ajv and the hand validator must agree on it.
+function validDeepReview(): Record<string, unknown> {
+  return {
+    enabled: true,
+    trigger: 'manual-only',
+    modes: ['review-only', 'review-and-refactor'],
+    budget: { seconds: 1800, tokens: null },
+    verify_after_fix: '--fast',
+    no_touch_globs_ref: '.agents/project-facts.md#no-touch-zones',
+    guides_dir: '.agents/review-guides',
+  };
+}
+
+function setDeepReview(manifest: Manifest, deepReview: unknown): void {
+  (manifest as unknown as Record<string, unknown>)['deep_review'] = deepReview;
+}
+
 interface BatteryCase {
   label: string;
   mutate: (manifest: Manifest) => void;
@@ -198,6 +216,58 @@ const batteryCases: readonly BatteryCase[] = [
       const workflow = fullWorkflow();
       workflow['unexpected_key'] = true;
       setWorkflow(m, workflow);
+    },
+    expectValid: false,
+  },
+  {
+    label: 'deep_review-valid-block',
+    mutate: (m) => {
+      setDeepReview(m, validDeepReview());
+    },
+    expectValid: true,
+  },
+  {
+    label: 'deep_review-missing-enabled-invalid',
+    mutate: (m) => {
+      const deepReview = validDeepReview();
+      delete deepReview['enabled'];
+      setDeepReview(m, deepReview);
+    },
+    expectValid: false,
+  },
+  {
+    label: 'deep_review-enabled-wrong-type-invalid',
+    mutate: (m) => {
+      const deepReview = validDeepReview();
+      deepReview['enabled'] = 'yes';
+      setDeepReview(m, deepReview);
+    },
+    expectValid: false,
+  },
+  {
+    label: 'deep_review-extra-key-invalid',
+    mutate: (m) => {
+      const deepReview = validDeepReview();
+      deepReview['unexpected_key'] = true;
+      setDeepReview(m, deepReview);
+    },
+    expectValid: false,
+  },
+  {
+    label: 'deep_review-modes-out-of-enum-invalid',
+    mutate: (m) => {
+      const deepReview = validDeepReview();
+      deepReview['modes'] = ['review-only', 'rewrite-everything'];
+      setDeepReview(m, deepReview);
+    },
+    expectValid: false,
+  },
+  {
+    label: 'deep_review-budget-seconds-zero-invalid',
+    mutate: (m) => {
+      const deepReview = validDeepReview();
+      deepReview['budget'] = { seconds: 0 };
+      setDeepReview(m, deepReview);
     },
     expectValid: false,
   },
@@ -336,6 +406,7 @@ test('schema declares root properties in canonical order', () => {
     'filesets',
     'tiers',
     'workflow',
+    'deep_review',
   ]);
 });
 

@@ -54,7 +54,7 @@ const TOP_LEVEL_REQUIRED = [
   'filesets',
   'tiers',
 ] as const;
-const TOP_LEVEL_ALLOWED = [...TOP_LEVEL_REQUIRED, 'workflow'] as const;
+const TOP_LEVEL_ALLOWED = [...TOP_LEVEL_REQUIRED, 'workflow', 'deep_review'] as const;
 
 const BUDGET_KEYS = ['staged_seconds', 'fast_seconds', 'full_seconds', 'audit_seconds'] as const;
 const POLICY_KEYS = [
@@ -100,6 +100,25 @@ const WORKFLOW_NOTIFY_KEYS = ['webhook_env'] as const;
 const WORKFLOW_MODES = ['manual', 'auto'] as const;
 const REVIEWER_INDEPENDENCE = ['different-runtime', 'same-runtime'] as const;
 const WEBHOOK_ENV_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+
+// deep_review (ADR-007). Optional top-level block; `{ "enabled": false }` (or
+// absent) is valid. `enabled` is the only required key; other fields are
+// type/enum-checked only when present.
+const DEEP_REVIEW_REQUIRED = ['enabled'] as const;
+const DEEP_REVIEW_KEYS = [
+  'enabled',
+  'trigger',
+  'modes',
+  'budget',
+  'verify_after_fix',
+  'no_touch_globs_ref',
+  'guides_dir',
+] as const;
+const DEEP_REVIEW_TRIGGERS = ['manual-only'] as const;
+const DEEP_REVIEW_MODES = ['review-only', 'review-and-refactor'] as const;
+const DEEP_REVIEW_VERIFY = ['--fast', '--full'] as const;
+const DEEP_REVIEW_BUDGET_REQUIRED = ['seconds'] as const;
+const DEEP_REVIEW_BUDGET_KEYS = ['seconds', 'tokens'] as const;
 
 const FILES_TOKEN = /^\{files:([A-Za-z0-9_-]+)\}$/;
 // The schema dialect allows only `*`, `**`, and literals.
@@ -270,6 +289,7 @@ function validateStructure(root: Record<string, unknown>, errors: ValidationErro
   if (Object.hasOwn(root, 'filesets')) validateFilesets(root['filesets'], errors);
   if (Object.hasOwn(root, 'tiers')) validateTiers(root['tiers'], errors);
   if (Object.hasOwn(root, 'workflow')) validateWorkflow(root['workflow'], errors);
+  if (Object.hasOwn(root, 'deep_review')) validateDeepReview(root['deep_review'], errors);
 }
 
 function validateVersion(value: unknown, errors: ValidationError[]): void {
@@ -542,6 +562,60 @@ function validateWebhookEnv(value: unknown, path: string, errors: ValidationErro
       'must be an environment variable name matching ^[A-Z][A-Z0-9_]*$',
       value,
     );
+  }
+}
+
+// deep_review (ADR-007): present-but-disabled (or absent) is valid; only
+// `enabled` is required when the block is present. Optional fields are
+// type/enum/integer-checked when present, mirroring the schema. `modes` items
+// and `budget` are structural-only, so Ajv and this validator agree.
+function validateDeepReview(value: unknown, errors: ValidationError[]): void {
+  const deepReview = requireRecord(value, 'deep_review', errors);
+  if (deepReview === undefined) return;
+  requireKeys(deepReview, 'deep_review', DEEP_REVIEW_REQUIRED, errors);
+  rejectUnknownKeys(deepReview, 'deep_review', DEEP_REVIEW_KEYS, errors);
+  if (Object.hasOwn(deepReview, 'enabled')) {
+    validateBoolean(deepReview['enabled'], 'deep_review.enabled', errors);
+  }
+  if (Object.hasOwn(deepReview, 'trigger')) {
+    validateEnum(deepReview['trigger'], 'deep_review.trigger', DEEP_REVIEW_TRIGGERS, errors);
+  }
+  if (Object.hasOwn(deepReview, 'modes')) validateDeepReviewModes(deepReview['modes'], errors);
+  if (Object.hasOwn(deepReview, 'budget')) validateDeepReviewBudget(deepReview['budget'], errors);
+  if (Object.hasOwn(deepReview, 'verify_after_fix')) {
+    validateEnum(deepReview['verify_after_fix'], 'deep_review.verify_after_fix', DEEP_REVIEW_VERIFY, errors);
+  }
+  if (Object.hasOwn(deepReview, 'no_touch_globs_ref')) {
+    validateNonEmptyString(deepReview['no_touch_globs_ref'], 'deep_review.no_touch_globs_ref', errors);
+  }
+  if (Object.hasOwn(deepReview, 'guides_dir')) {
+    validateNonEmptyString(deepReview['guides_dir'], 'deep_review.guides_dir', errors);
+  }
+}
+
+function validateDeepReviewModes(value: unknown, errors: ValidationError[]): void {
+  if (!isUnknownArray(value)) {
+    addError(errors, 'deep_review.modes', 'type', `must be an array of modes, got ${describeValue(value)}`, value);
+    return;
+  }
+  value.forEach((item, index) => {
+    validateEnum(item, `deep_review.modes[${index}]`, DEEP_REVIEW_MODES, errors);
+  });
+}
+
+// tokens may be a positive integer or null (the schema's ["integer","null"] +
+// minimum:1; minimum does not constrain null). Treat null as valid so the
+// conformance battery cannot diverge from Ajv.
+function validateDeepReviewBudget(value: unknown, errors: ValidationError[]): void {
+  const budget = requireRecord(value, 'deep_review.budget', errors);
+  if (budget === undefined) return;
+  requireKeys(budget, 'deep_review.budget', DEEP_REVIEW_BUDGET_REQUIRED, errors);
+  rejectUnknownKeys(budget, 'deep_review.budget', DEEP_REVIEW_BUDGET_KEYS, errors);
+  if (Object.hasOwn(budget, 'seconds')) {
+    validatePositiveInteger(budget['seconds'], 'deep_review.budget.seconds', errors);
+  }
+  if (Object.hasOwn(budget, 'tokens') && budget['tokens'] !== null) {
+    validatePositiveInteger(budget['tokens'], 'deep_review.budget.tokens', errors);
   }
 }
 

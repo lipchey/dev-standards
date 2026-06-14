@@ -62,6 +62,15 @@ export interface Manifest {
     audit?: Check[];
   };
   workflow?: ManifestWorkflow;
+  deep_review?: {
+    enabled: boolean;
+    trigger?: 'manual-only';
+    modes?: Array<'review-only' | 'review-and-refactor'>;
+    budget?: { seconds: number; tokens?: number | null };
+    verify_after_fix?: '--fast' | '--full';
+    no_touch_globs_ref?: string;
+    guides_dir?: string;
+  };
 }
 
 // The workflow §2.8 config as it travels on the manifest (ADR-012). Declared

@@ -116,3 +116,84 @@ test('workflow.enabled true without the full shape fails with rule required', ()
   (manifest as unknown as { workflow: { enabled: boolean } }).workflow = { enabled: true };
   expectError(validate(manifest), { rule: 'required' });
 });
+
+function validDeepReview(): NonNullable<Manifest['deep_review']> {
+  return {
+    enabled: true,
+    trigger: 'manual-only',
+    modes: ['review-only', 'review-and-refactor'],
+    budget: { seconds: 1800, tokens: null },
+    verify_after_fix: '--fast',
+    no_touch_globs_ref: '.agents/project-facts.md#no-touch-zones',
+    guides_dir: '.agents/review-guides',
+  };
+}
+
+function setDeepReview(manifest: Manifest, value: unknown): void {
+  (manifest as unknown as Record<string, unknown>)['deep_review'] = value;
+}
+
+test('manifest with no deep_review still passes', () => {
+  const manifest = makeManifest();
+  delete (manifest as unknown as { deep_review?: unknown }).deep_review;
+  const result = validate(manifest);
+  assert.equal(
+    result.ok,
+    true,
+    `expected a manifest without deep_review to pass; received errors:\n${JSON.stringify(result.errors, null, 2)}`,
+  );
+});
+
+test('valid deep_review block passes', () => {
+  const manifest = makeManifest();
+  manifest.deep_review = validDeepReview();
+  const result = validate(manifest);
+  assert.equal(
+    result.ok,
+    true,
+    `expected a valid deep_review block to pass; received errors:\n${JSON.stringify(result.errors, null, 2)}`,
+  );
+});
+
+test('deep_review missing enabled fails at deep_review.enabled with rule required', () => {
+  const manifest = makeManifest();
+  const block = validDeepReview();
+  delete (block as { enabled?: boolean }).enabled;
+  setDeepReview(manifest, block);
+  expectError(validate(manifest), { path: 'deep_review.enabled', rule: 'required' });
+});
+
+test('deep_review.enabled with the wrong type fails with rule type', () => {
+  const manifest = makeManifest();
+  const block = validDeepReview();
+  (block as unknown as { enabled: string }).enabled = 'yes';
+  setDeepReview(manifest, block);
+  expectError(validate(manifest), { path: 'deep_review.enabled', rule: 'type' });
+});
+
+test('deep_review.modes with an unknown mode fails with rule enum', () => {
+  const manifest = makeManifest();
+  const block = validDeepReview();
+  (block as unknown as { modes: string[] }).modes = ['review-only', 'rewrite-everything'];
+  setDeepReview(manifest, block);
+  expectError(validate(manifest), { path: 'deep_review.modes[1]', rule: 'enum' });
+});
+
+test('deep_review with an additional property fails with rule additional-property', () => {
+  const manifest = makeManifest();
+  const block = validDeepReview();
+  (block as unknown as Record<string, unknown>)['unexpected_key'] = true;
+  setDeepReview(manifest, block);
+  expectError(validate(manifest), {
+    path: 'deep_review.unexpected_key',
+    rule: 'additional-property',
+  });
+});
+
+test('deep_review.budget.seconds <= 0 fails at deep_review.budget.seconds', () => {
+  const manifest = makeManifest();
+  const block = validDeepReview();
+  block.budget = { seconds: 0 };
+  setDeepReview(manifest, block);
+  expectError(validate(manifest), { path: 'deep_review.budget.seconds' });
+});

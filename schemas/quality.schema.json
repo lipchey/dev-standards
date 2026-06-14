@@ -85,7 +85,32 @@
         "audit": { "$ref": "#/$defs/checkArray" }
       }
     },
-    "workflow": { "$ref": "#/$defs/workflow" }
+    "workflow": { "$ref": "#/$defs/workflow" },
+    "deep_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "trigger": { "type": "string", "enum": ["manual-only"] },
+        "modes": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["review-only", "review-and-refactor"] }
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["seconds"],
+          "properties": {
+            "seconds": { "type": "integer", "minimum": 1 },
+            "tokens": { "type": ["integer", "null"], "minimum": 1 }
+          }
+        },
+        "verify_after_fix": { "type": "string", "enum": ["--fast", "--full"] },
+        "no_touch_globs_ref": { "type": "string", "minLength": 1 },
+        "guides_dir": { "type": "string", "minLength": 1 }
+      }
+    }
   },
   "$defs": {
     "checkArray": {
