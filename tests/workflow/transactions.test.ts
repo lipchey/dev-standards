@@ -517,6 +517,63 @@ test('concurrent-complete-vs-request-changes-serialized', () => {
   }
 });
 
+// §5 Concurrency: concurrent `start`. `start` is a mutating verb that takes the
+// same worktree mutex (withLock) as complete/request-changes, so two racers
+// cannot both claim a phase. A held live lock blocks the racer (LOCK_BUSY, zero
+// mutation); on release exactly one `start` claims the seat (attempts -> 1).
+test('concurrent-start-serialized-one-claims-seat', () => {
+  const dir = initRepo();
+  try {
+    const planningPath = seed(dir);
+    const before = commitCount(dir);
+
+    // Another holder of the worktree mutex: a live-PID lockfile.
+    fs.writeFileSync(
+      lockPathFor(dir),
+      JSON.stringify({ pid: process.pid, hostname: os.hostname(), acquired_at: T0 }),
+    );
+
+    // Fast-failing seams: clock jumps past the retry budget, holder PID alive
+    // (never stolen), sleep is a no-op -> deterministic LOCK_BUSY in zero time.
+    const busySeams = (): LockSeams => {
+      let t = Date.parse(T0);
+      return {
+        now: () => {
+          const v = t;
+          t += 10_000;
+          return v;
+        },
+        sleep: () => {},
+        isPidAlive: () => true,
+        pid: process.pid,
+        hostname: os.hostname(),
+        warn: () => {},
+      };
+    };
+
+    // The racing `start` is serialized behind the held lock -> LOCK_BUSY.
+    assert.throws(
+      () => start('plan', txDeps(dir, planningPath, { claimedBy: REVIEWER, lockSeams: busySeams() })),
+      /LOCK_BUSY|could not acquire/,
+      'a second start is blocked while the lock is held',
+    );
+    assert.equal(commitCount(dir), before, 'the blocked start mutated nothing');
+    assert.equal(readFm(planningPath).state, 'created', 'state untouched while serialized out');
+    assert.equal(readFm(planningPath).claimed_by, '', 'no seat claimed while blocked');
+
+    // Release the lock: exactly one start now proceeds and claims the seat.
+    fs.unlinkSync(lockPathFor(dir));
+    const res = start('plan', txDeps(dir, planningPath, { claimedBy: PRODUCER }));
+    assert.equal(res.exitCode, EXIT_OK);
+    const fm = readFm(planningPath);
+    assert.equal(fm.state, 'plan-inprogress');
+    assert.equal(fm.claimed_by, PRODUCER, 'the winning start claims the seat');
+    assert.equal(fm.phases.plan?.attempts, 1, 'attempts incremented exactly once');
+  } finally {
+    cleanup(dir);
+  }
+});
+
 // ── 10. the divergence invariant (robustness, beyond the pinned set) ─────────
 
 test('happy-path-never-diverges', () => {

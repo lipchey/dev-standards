@@ -78,6 +78,32 @@ test('pr-view-json-includes-state-mergedat-headref', () => {
   ]);
 });
 
+// §5 PR cycle: bounded CI wait. The CI wait is delegated to `gh pr checks
+// --watch`, which blocks until checks settle, run under the adapter's bounded
+// spawn timeout (the wall-clock bound). Pin the fixed argv and that the bound is
+// applied; parse the settled result.
+test('watch-checks-delegates-to-bounded-watch', () => {
+  const fx = spawnFixture([
+    { status: 0, stdout: '[{"name":"verify","state":"COMPLETED","bucket":"pass","conclusion":"success"}]' },
+  ]);
+  const gh = createGhAdapter({ spawn: fx.spawn, timeoutMs: 1234 });
+
+  const checks = gh.watchChecks(42);
+
+  assert.deepEqual(checks, [{ name: 'verify', state: 'COMPLETED', bucket: 'pass', conclusion: 'success' }]);
+  assert.equal(fx.calls.length, 1, 'one gh call, no silent retries');
+  assert.equal(fx.calls[0]?.file, 'gh');
+  assert.deepEqual(fx.calls[0]?.args, [
+    'pr',
+    'checks',
+    '42',
+    '--watch',
+    '--json',
+    'name,state,bucket,conclusion',
+  ]);
+  assert.deepEqual(fx.calls[0]?.options, { shell: false, encoding: 'utf8', timeout: 1234 }, 'the watch runs under the bounded spawn timeout');
+});
+
 test('nonzero-gh-exit-machine-readable-error', () => {
   const fx = spawnFixture([{ status: 1, stderr: 'network down\ntry again later\n' }]);
   const gh = createGhAdapter({ spawn: fx.spawn });
