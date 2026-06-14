@@ -27,6 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { EXIT_OK, EXIT_FAILURE, EXIT_WRONG_STATE } from './types.ts';
 import type { FindingRecord, FindingsFile, MachineError } from './types.ts';
 import { assertSafeRepoPath, FindingsValidationError, readFindings, writeFindings } from './findings-io.ts';
+import { isNoTouch } from './no-touch.ts';
 
 // The git-commit trailer key (pinned so call sites read by name and never drift).
 // The slice commit message's LAST line is exactly `Deep-Review-Slice: <id>`, the
@@ -63,6 +64,12 @@ export interface SpawnResult {
 // through the validating findings-io boundary by default.
 export interface SliceDeps {
   cwd: string;
+  // The §2.5 no-touch set (BASELINE ∪ the repo's project-facts extensions). The
+  // findings file is UNTRUSTED, so the engine re-enforces the no-touch floor here
+  // rather than trusting the recorded classification/status: a slice may name a
+  // no-touch path even when finding.file is editable. The CLI builds this with the
+  // SAME wiring as check-path/classify.
+  noTouchSet: readonly string[];
   spawn: (file: string, args: readonly string[], options: { cwd: string }) => SpawnResult;
   readFindings: (path: string) => FindingsFile;
   writeFindings: (path: string, file: FindingsFile) => void;
@@ -95,9 +102,10 @@ const defaultSpawn: SliceDeps['spawn'] = (file, args, options) => {
 
 // The production deps: git + test spawn at the real edge, findings through the
 // validating findings-io boundary. `cwd` is the worktree the slice lives in.
-export function realSliceDeps(cwd: string): SliceDeps {
+export function realSliceDeps(cwd: string, noTouchSet: readonly string[] = []): SliceDeps {
   return {
     cwd,
+    noTouchSet,
     spawn: defaultSpawn,
     readFindings: (path) => readFindings(path),
     writeFindings: (path, file) => {
@@ -153,6 +161,15 @@ function machineErrorOf(error: GitStepError): MachineError {
   };
 }
 
+// True iff `relPath` is tracked in HEAD (so `git checkout HEAD -- <path>` can
+// restore it). Implemented via `git cat-file -e HEAD:<path>`, whose exit code is 0
+// when a blob exists at that tree path and non-zero otherwise. Run through the
+// spawn seam DIRECTLY (not runGit) because a non-zero exit is the expected ANSWER
+// ("not in HEAD"), not a git error to surface.
+function existsInHead(deps: SliceDeps, relPath: string): boolean {
+  return deps.spawn('git', ['cat-file', '-e', `HEAD:${relPath}`], { cwd: deps.cwd }).status === 0;
+}
+
 // ── Pure helpers ───────────────────────────────────────────────────────────────
 
 // Fail-closed re-validation of a test_cmd: a NON-EMPTY array of NON-EMPTY
@@ -166,12 +183,14 @@ function isValidTestCmd(cmd: readonly string[]): boolean {
   );
 }
 
-// Parses `git status --porcelain -z --no-renames` into the EXACT set of dirty
-// repo-relative paths. With `-z` each record is `XY <path>` NUL-terminated (no
-// quoting), and `--no-renames` reports a rename as a delete + an untracked add —
-// two ordinary records — so there is never an extra NUL-separated original-path
-// field to misalign on. Untracked files (`?? path`) are INCLUDED, so an untracked
-// file outside the slice trips the scope gate.
+// Parses `git status --porcelain -z --no-renames --untracked-files=all` into the
+// EXACT set of dirty repo-relative paths. With `-z` each record is `XY <path>`
+// NUL-terminated (no quoting), and `--no-renames` reports a rename as a delete +
+// an untracked add — two ordinary records — so there is never an extra
+// NUL-separated original-path field to misalign on. `--untracked-files=all` lists
+// every untracked file INDIVIDUALLY (a file in a brand-new directory shows as
+// `dir/file`, never the collapsing `dir/` entry), so the scope gate compares real
+// file paths against the slice and a new-dir slice file is not false-refused.
 function parseDirtyPaths(out: string): string[] {
   const paths: string[] = [];
   const NUL = String.fromCharCode(0);
@@ -223,6 +242,20 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
     }
     throw error;
   }
+
+  // No-touch gate. The findings file is UNTRUSTED, so the recorded
+  // classification/status cannot be trusted and slice_files may name a no-touch
+  // path even when finding.file is editable. Re-enforce the §2.5 floor at the last
+  // moment before any git: if finding.file OR ANY slice path is no-touch, refuse
+  // with NO git and NO findings write. This is the ENFORCEMENT the classifier's
+  // routing only mirrors.
+  if (
+    isNoTouch(finding.file, deps.noTouchSet) ||
+    slice.some((p) => isNoTouch(p, deps.noTouchSet))
+  ) {
+    return { exitCode: EXIT_WRONG_STATE };
+  }
+
   // test_cmd fail-closed re-check: never spawn a malformed argv (status unchanged,
   // no git, no write).
   if (!isValidTestCmd(finding.test_cmd)) return { exitCode: EXIT_WRONG_STATE };
@@ -233,7 +266,9 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
     // of the slice; any dirty path outside the slice means the change is not
     // isolated, so we refuse with NO test run and NO git mutation. This replaces
     // AI discipline with enforcement.
-    const dirty = parseDirtyPaths(runGit(deps, ['status', '--porcelain', '-z', '--no-renames'], 'status'));
+    const dirty = parseDirtyPaths(
+      runGit(deps, ['status', '--porcelain', '-z', '--no-renames', '--untracked-files=all'], 'status'),
+    );
     for (const p of dirty) {
       if (!sliceSet.has(p)) return { exitCode: EXIT_WRONG_STATE };
     }
@@ -246,8 +281,10 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
 
     if (test.status === 0) {
       // Step 5 — GREEN. Stage EXACTLY the slice paths (never `-A`/`.`), commit with
-      // the trailer as the last line, record the resulting sha.
-      runGit(deps, ['add', '--', ...slice], 'add');
+      // the trailer as the last line, record the resulting sha. `--literal-pathspecs`
+      // forbids git from interpreting any magic/glob in a path operand even if one
+      // slipped past assertSafeRepoPath.
+      runGit(deps, ['--literal-pathspecs', 'add', '--', ...slice], 'add');
       runGit(deps, ['commit', '-m', buildSliceMessage(finding)], 'commit');
       finding.sha = runGit(deps, ['rev-parse', 'HEAD'], 'rev-parse').trim();
       finding.status = 'fixed';
@@ -255,9 +292,36 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
       return { exitCode: EXIT_OK };
     }
 
-    // Step 6 — RED. Revert ONLY the slice paths to HEAD; never carry a broken slice
-    // forward, never commit.
-    runGit(deps, ['checkout', 'HEAD', '--', ...slice], 'checkout');
+    // Step 6 — RED. Revert ONLY the slice paths, handling each by tracked-ness so a
+    // newly-CREATED slice file is never left on disk: a path tracked-in-HEAD is
+    // restored with `git checkout HEAD -- <paths>`; a path NOT in HEAD (created by
+    // the attempted fix, never `git add`ed on the red path so still unstaged) cannot
+    // be reverted by checkout — its pathspec is not in HEAD and would abort the whole
+    // checkout — so it is REMOVED from the worktree with `git clean -f`. Never carry a
+    // broken slice forward, never commit. Membership is tested per path via cat-file.
+    const trackedInHead: string[] = [];
+    const untracked: string[] = [];
+    for (const p of slice) {
+      if (existsInHead(deps, p)) trackedInHead.push(p);
+      else untracked.push(p);
+    }
+    if (trackedInHead.length > 0) {
+      runGit(deps, ['--literal-pathspecs', 'checkout', 'HEAD', '--', ...trackedInHead], 'checkout');
+    }
+    if (untracked.length > 0) {
+      runGit(deps, ['--literal-pathspecs', 'clean', '-f', '--', ...untracked], 'clean');
+    }
+    // Assert the revert left NO slice path dirty. A residual dirty slice path means
+    // the broken change was not fully undone, so surface it as a git error rather
+    // than falsely recording a clean fix-failed.
+    const residual = parseDirtyPaths(
+      runGit(deps, ['status', '--porcelain', '-z', '--no-renames', '--untracked-files=all'], 'status'),
+    );
+    for (const p of residual) {
+      if (sliceSet.has(p)) {
+        throw new GitStepError('revert', 'git revert (slice)', '', `slice path "${p}" still dirty after revert`);
+      }
+    }
     finding.status = 'fix-failed';
     deps.writeFindings(findingsPath, findings);
     return { exitCode: EXIT_OK };

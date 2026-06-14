@@ -23,7 +23,11 @@ export function classifyFinding(
   finding: FindingRecord,
   isNoTouchFn: (relPath: string) => boolean,
 ): { classification: Classification; status: FindingStatus } {
-  if (isNoTouchFn(finding.file)) {
+  // No-touch wins when finding.file OR ANY slice_files entry is no-touch, so this
+  // routing matches the commit-slice enforcement gate (which refuses a slice that
+  // touches a no-touch path even when finding.file is editable). Defense in depth:
+  // a finding that would be REFUSED at commit time is never routed as fixable-now.
+  if (isNoTouchFn(finding.file) || finding.slice_files.some((p) => isNoTouchFn(p))) {
     return { classification: 'no-touch', status: 'no-touch' };
   }
   if (finding.needs_plan === true) {

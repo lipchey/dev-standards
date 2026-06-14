@@ -87,7 +87,28 @@ test('no-touch WINS over needs_plan: needs_plan: true in a no-touch file -> "no-
   assert.deepEqual(result, { classification: 'no-touch', status: 'no-touch' });
 });
 
+test('defense-in-depth: an editable file with a NO-TOUCH slice_files entry -> classification "no-touch" (routing mirrors commit-slice enforcement)', () => {
+  const finding = validFinding({
+    file: 'src/app.ts',
+    slice_files: ['src/app.ts', 'tools/danger.sh'],
+    needs_plan: false,
+  });
+  const result = classifyFinding(finding, (p) => p === 'tools/danger.sh');
+  assert.deepEqual(result, { classification: 'no-touch', status: 'no-touch' });
+});
+
 // ── classifyAll (over a file, incl. an already-invalid finding) ──────────────
+
+test('classifyAll: an editable file with a no-touch slice_files entry classifies as "no-touch"', () => {
+  const file = validFile([
+    validFinding({ id: 'f-x', file: 'src/app.ts', slice_files: ['src/app.ts', 'tools/danger.sh'], needs_plan: false }),
+  ]);
+  const out = classifyAll(file, ['tools/**']);
+  assert.deepEqual(
+    [out.findings[0]?.classification, out.findings[0]?.status],
+    ['no-touch', 'no-touch'],
+  );
+});
 
 test('an "invalid"-path finding (from findings-io) is left status "invalid", classification untouched', () => {
   // needs_plan: true would otherwise classify to needs-plan; the invalid status

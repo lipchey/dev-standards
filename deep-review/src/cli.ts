@@ -8,10 +8,11 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { EXIT_OK, EXIT_USAGE } from './types.ts';
+import { EXIT_OK, EXIT_USAGE, EXIT_FAILURE } from './types.ts';
+import type { MachineError } from './types.ts';
 import { loadConfig } from './config.ts';
 import { buildNoTouchSet, isNoTouch } from './no-touch.ts';
-import { readFindings, writeFindings } from './findings-io.ts';
+import { readFindings, writeFindings, FindingsValidationError } from './findings-io.ts';
 import { classifyAll } from './classify.ts';
 import { commitSlice, realSliceDeps } from './slice.ts';
 import { writeReport, realReportDeps } from './report.ts';
@@ -162,7 +163,12 @@ function commitSliceCmd(rest: string[], deps: CliDeps): number {
     return EXIT_USAGE;
   }
   const env = resolveEnv(deps);
-  const result = commitSlice(findingId, findingsPath, realSliceDeps(env.cwd));
+  // Build the §2.5 no-touch set with the SAME wiring as check-path/classify and
+  // hand it to the engine, which re-enforces the floor against the untrusted
+  // findings file (a slice may name a no-touch path even when finding.file is
+  // editable).
+  const noTouchSet = buildSet(env);
+  const result = commitSlice(findingId, findingsPath, realSliceDeps(env.cwd, noTouchSet));
   if (result.machineError !== undefined) {
     deps.stderr(`${JSON.stringify({ error: result.machineError })}\n`);
   }
@@ -215,6 +221,27 @@ function isCommand(value: string): value is Command {
   return Object.hasOwn(DISPATCH, value);
 }
 
+// Builds a §2.4 machine-readable error for an UNCAUGHT io/validation failure
+// (untrusted findings file, missing/invalid quality.json). A FindingsValidationError
+// carries its rule + JSON path into the message so the cause is legible; `step` is
+// omitted (no failing sub-step) and `stderr_tail` is empty (no captured child
+// stderr at this layer). Mirrors the slice/report machine-error emission pattern.
+function toMachineError(subcommand: string, error: unknown): MachineError {
+  if (error instanceof FindingsValidationError) {
+    const where = error.path === '' ? '<root>' : error.path;
+    return {
+      command: `deep-review ${subcommand}`,
+      message: `findings validation failed (${error.rule}) at ${where}: ${error.message}`,
+      stderr_tail: '',
+    };
+  }
+  return {
+    command: `deep-review ${subcommand}`,
+    message: error instanceof Error ? error.message : String(error),
+    stderr_tail: '',
+  };
+}
+
 export function runCli(argv: string[], deps: CliDeps): number {
   const subcommand = argv[0];
   if (subcommand === undefined) {
@@ -225,5 +252,13 @@ export function runCli(argv: string[], deps: CliDeps): number {
     deps.stderr(`deep-review: unknown command "${subcommand}"\n${USAGE}`);
     return EXIT_USAGE;
   }
-  return DISPATCH[subcommand](argv.slice(1), deps);
+  // Fail-safe boundary (§2.4): an untrusted findings file or a missing/invalid
+  // quality.json must never escape as a raw stack trace. Any throw out of the
+  // handler becomes a §2.4 machine error as the LAST stderr line + EXIT_FAILURE.
+  try {
+    return DISPATCH[subcommand](argv.slice(1), deps);
+  } catch (error) {
+    deps.stderr(`${JSON.stringify({ error: toMachineError(subcommand, error) })}\n`);
+    return EXIT_FAILURE;
+  }
 }

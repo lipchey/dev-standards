@@ -64,6 +64,16 @@ function repoWithEditedSlice(): string {
   return repo;
 }
 
+// A committed repo with src/app.ts at ORIGINAL and a CLEAN worktree (no edits), so
+// a test controls exactly which slice paths are dirty.
+function cleanRepo(): string {
+  const repo = initRepo();
+  writeFileIn(repo, 'src/app.ts', ORIGINAL);
+  git(repo, ['add', '--', 'src/app.ts']);
+  git(repo, ['commit', '-q', '-m', 'init']);
+  return repo;
+}
+
 function head(repo: string): string {
   return git(repo, ['rev-parse', 'HEAD']).trim();
 }
@@ -108,7 +118,10 @@ function validFile(
 // findings-io validation so defense-in-depth gates are reachable), a spawn that
 // records + throws if ever reached (proving "refused before any git/test spawn"),
 // and a writeFindings that captures snapshots.
-function stubDeps(file: FindingsFile): {
+function stubDeps(
+  file: FindingsFile,
+  noTouchSet: readonly string[] = [],
+): {
   deps: SliceDeps;
   spawnCalls: string[];
   written: FindingsFile[];
@@ -117,6 +130,7 @@ function stubDeps(file: FindingsFile): {
   const written: FindingsFile[] = [];
   const deps: SliceDeps = {
     cwd: path.join(os.tmpdir(), 'dr-should-never-spawn'),
+    noTouchSet,
     spawn: (f, a) => {
       spawnCalls.push([f, ...a].join(' '));
       throw new Error('spawn must not be reached by a pure gate');
@@ -127,6 +141,18 @@ function stubDeps(file: FindingsFile): {
     },
   };
   return { deps, spawnCalls, written };
+}
+
+// A spawn seam that DELEGATES to real git (so the engine runs against a real repo)
+// while recording every git argv, used to assert pathspec hardening on the argv.
+function spyOverReal(): { spawn: SliceDeps['spawn']; gitCalls: string[][] } {
+  const gitCalls: string[][] = [];
+  const spawn: SliceDeps['spawn'] = (file, args, options) => {
+    if (file === 'git') gitCalls.push([...args]);
+    const r = spawnSync(file, args, { cwd: options.cwd, encoding: 'utf8', shell: false });
+    return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  return { spawn, gitCalls };
 }
 
 // ── Green / red / trailer (real git) ──────────────────────────────────────────
@@ -179,6 +205,124 @@ test('trailer correctness: the commit message last line is exactly "Deep-Review-
 
   assert.equal(commitSlice(id, fpath, realSliceDeps(repo)).exitCode, EXIT_OK);
   assert.equal(lastLine(git(repo, ['log', '-1', '--format=%B'])), `Deep-Review-Slice: ${id}`);
+});
+
+// ── Fix B: untracked-aware RED revert + -uall scope gate (real git) ───────────
+
+test('RED with a NEW untracked slice file -> the new file is REMOVED, status "fix-failed", EXIT_OK, no slice path dirty', () => {
+  const repo = cleanRepo();
+  const before = head(repo);
+  // A brand-new untracked file in an EXISTING tracked dir (src/), inside the slice.
+  writeFileIn(repo, 'src/new.ts', 'export const n = 1;\n');
+  const fpath = externalFindings();
+  writeFindings(
+    fpath,
+    validFile([
+      validFinding({ file: 'src/new.ts', slice_files: ['src/new.ts'], test_cmd: ['node', '-e', 'process.exit(1)'] }),
+    ]),
+  );
+
+  const result = commitSlice('f-001', fpath, realSliceDeps(repo));
+
+  assert.equal(result.exitCode, EXIT_OK);
+  assert.equal(head(repo), before, 'no commit');
+  assert.equal(fs.existsSync(path.join(repo, 'src/new.ts')), false, 'untracked slice file removed');
+  assert.equal(porcelain(repo), '', 'no slice path remains dirty');
+  assert.equal(readFindings(fpath).findings[0]?.status, 'fix-failed');
+});
+
+test('RED with a MIXED slice (tracked-modified + new untracked) -> tracked reverted to HEAD, untracked removed, status "fix-failed", EXIT_OK, clean', () => {
+  const repo = cleanRepo();
+  const before = head(repo);
+  fs.writeFileSync(path.join(repo, 'src/app.ts'), EDITED); // tracked, modified, in slice
+  writeFileIn(repo, 'src/added.ts', 'export const x = 1;\n'); // new untracked, in slice
+  const fpath = externalFindings();
+  writeFindings(
+    fpath,
+    validFile([
+      validFinding({
+        file: 'src/app.ts',
+        slice_files: ['src/app.ts', 'src/added.ts'],
+        test_cmd: ['node', '-e', 'process.exit(1)'],
+      }),
+    ]),
+  );
+
+  const result = commitSlice('f-001', fpath, realSliceDeps(repo));
+
+  assert.equal(result.exitCode, EXIT_OK);
+  assert.equal(head(repo), before, 'no commit');
+  assert.equal(fs.readFileSync(path.join(repo, 'src/app.ts'), 'utf8'), ORIGINAL, 'tracked path reverted to HEAD');
+  assert.equal(fs.existsSync(path.join(repo, 'src/added.ts')), false, 'untracked path removed');
+  assert.equal(porcelain(repo), '', 'no slice path remains dirty');
+  assert.equal(readFindings(fpath).findings[0]?.status, 'fix-failed');
+});
+
+test('GREEN with a new file in the slice -> it is added + committed (status "fixed")', () => {
+  const repo = cleanRepo();
+  writeFileIn(repo, 'src/added.ts', 'export const x = 1;\n'); // new untracked, in slice
+  const fpath = externalFindings();
+  writeFindings(
+    fpath,
+    validFile([
+      validFinding({ file: 'src/added.ts', slice_files: ['src/added.ts'], test_cmd: ['node', '-e', 'process.exit(0)'] }),
+    ]),
+  );
+
+  const result = commitSlice('f-001', fpath, realSliceDeps(repo));
+
+  assert.equal(result.exitCode, EXIT_OK);
+  const committed = git(repo, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']).trim().split('\n').filter(Boolean);
+  assert.deepEqual(committed, ['src/added.ts'], 'new file committed');
+  assert.equal(porcelain(repo), '', 'clean after commit');
+  assert.equal(readFindings(fpath).findings[0]?.status, 'fixed');
+});
+
+test('scope gate (-uall): a slice that creates a file in a BRAND-NEW directory now PASSES (file seen individually, not the collapsed dir)', () => {
+  const repo = cleanRepo();
+  // A new file in a brand-new directory: default `git status` collapses this to
+  // `brandnew/`, which is NOT in the slice (false-refuse); with -uall it is seen
+  // as `brandnew/x.ts` and matches the slice, so the slice proceeds to GREEN.
+  writeFileIn(repo, 'brandnew/x.ts', 'export const x = 1;\n');
+  const fpath = externalFindings();
+  writeFindings(
+    fpath,
+    validFile([
+      validFinding({ file: 'brandnew/x.ts', slice_files: ['brandnew/x.ts'], test_cmd: ['node', '-e', 'process.exit(0)'] }),
+    ]),
+  );
+
+  const result = commitSlice('f-001', fpath, realSliceDeps(repo));
+
+  assert.equal(result.exitCode, EXIT_OK, 'scope gate passed (file seen individually under -uall)');
+  const committed = git(repo, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']).trim().split('\n').filter(Boolean);
+  assert.deepEqual(committed, ['brandnew/x.ts']);
+});
+
+// ── Fix D: pathspec hardening (--literal-pathspecs on path-bearing git argv) ──
+
+test('pathspec hardening: the GREEN slice `add` argv and the RED slice `checkout` argv are prefixed with --literal-pathspecs', () => {
+  // GREEN -> records the `add` argv.
+  const repoG = repoWithEditedSlice();
+  const fG = externalFindings();
+  writeFindings(fG, validFile([validFinding()]));
+  const spyG = spyOverReal();
+  const depsG: SliceDeps = { ...realSliceDeps(repoG), spawn: spyG.spawn };
+  assert.equal(commitSlice('f-001', fG, depsG).exitCode, EXIT_OK);
+  const addCall = spyG.gitCalls.find((a) => a.includes('add'));
+  assert.ok(addCall, 'an `add` git call was made');
+  assert.equal(addCall[0], '--literal-pathspecs', 'add argv begins with --literal-pathspecs');
+
+  // RED -> records the `checkout` argv (a tracked slice path).
+  const repoR = repoWithEditedSlice();
+  const fR = externalFindings();
+  writeFindings(fR, validFile([validFinding({ test_cmd: ['node', '-e', 'process.exit(1)'] })]));
+  const spyR = spyOverReal();
+  const depsR: SliceDeps = { ...realSliceDeps(repoR), spawn: spyR.spawn };
+  assert.equal(commitSlice('f-001', fR, depsR).exitCode, EXIT_OK);
+  const checkoutCall = spyR.gitCalls.find((a) => a.includes('checkout'));
+  assert.ok(checkoutCall, 'a `checkout` git call was made');
+  assert.equal(checkoutCall[0], '--literal-pathspecs', 'checkout argv begins with --literal-pathspecs');
 });
 
 // ── Deterministic scope gate (real git) ───────────────────────────────────────
@@ -273,6 +417,47 @@ test('path-safety: an unsafe file/slice_files path -> refused before any git arg
   assert.equal(commitSlice('f-001', 'findings.json', deps).exitCode, EXIT_WRONG_STATE);
   assert.deepEqual(spawnCalls, [], 'no spawn before path gate');
   assert.equal(written.at(-1)?.findings[0]?.status, 'invalid', 'persisted invalid');
+});
+
+// ── Fix A: no-touch enforcement in commit-slice (the only mutating command) ───
+
+test('no-touch (real git): an EDITABLE finding.file but a no-touch slice_files entry -> EXIT_WRONG_STATE, NO commit, worktree unchanged, findings not mutated', () => {
+  // src/app.ts (the in-slice dirty file) is editable; the slice ALSO names a
+  // no-touch path (tools/**). Without the no-touch gate the scope gate would pass
+  // (dirty set ⊆ slice) and the green path would attempt `git add -- tools/...`
+  // (EXIT_FAILURE) — so EXIT_WRONG_STATE here is attributable ONLY to the gate.
+  const repo = repoWithEditedSlice();
+  const before = head(repo);
+  const fpath = externalFindings();
+  writeFindings(
+    fpath,
+    validFile([validFinding({ file: 'src/app.ts', slice_files: ['tools/danger.sh', 'src/app.ts'] })]),
+  );
+
+  const result = commitSlice('f-001', fpath, realSliceDeps(repo, ['tools/**']));
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.equal(head(repo), before, 'no commit');
+  assert.equal(git(repo, ['diff', '--cached', '--name-only']).trim(), '', 'nothing staged');
+  assert.equal(fs.readFileSync(path.join(repo, 'src/app.ts'), 'utf8'), EDITED, 'worktree unchanged (no revert)');
+  assert.equal(readFindings(fpath).findings[0]?.status, 'pending', 'findings not mutated');
+});
+
+test('no-touch (pure): a finding whose file is no-touch (classification pre-set fixable-now) -> EXIT_WRONG_STATE before any git/spawn, no write', () => {
+  const { deps, spawnCalls, written } = stubDeps(
+    validFile([
+      validFinding({
+        file: 'tools/secret.sh',
+        slice_files: ['tools/secret.sh'],
+        classification: 'fixable-now',
+        status: 'pending',
+      }),
+    ]),
+    ['tools/**'],
+  );
+  assert.equal(commitSlice('f-001', 'findings.json', deps).exitCode, EXIT_WRONG_STATE);
+  assert.deepEqual(spawnCalls, [], 'refused before any git/spawn');
+  assert.deepEqual(written, [], 'findings not mutated');
 });
 
 test('test_cmd-safety: empty / non-array / control-char test_cmd -> EXIT_WRONG_STATE, no git, status unchanged', () => {

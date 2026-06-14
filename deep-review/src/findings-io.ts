@@ -220,25 +220,59 @@ function requireStringArray(value: unknown, path: string): string[] {
   });
 }
 
+// True if the string carries a git glob metacharacter: `*` (0x2A), `?` (0x3F),
+// `[` (0x5B), or `]` (0x5D). Detected by codepoint (NOT a regex literal) so the
+// source carries no glob bytes, mirroring the engine's codepoint scans.
+function hasGlobMeta(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 0x2a || code === 0x3f || code === 0x5b || code === 0x5d) return true;
+  }
+  return false;
+}
+
 // ── Path safety (exported; E3 reuses it) ─────────────────────────────────────
 
-// Rejects, with rule `path-unsafe`, any repo-relative path that could escape the
-// repo or be misread as a CLI flag: a `..` path segment, a leading `-`, an
-// absolute path (leading `/`, leading `\`, or a Windows drive prefix), or a
-// control/NUL character. Pure and dependency-free; the slice engine (E3) calls
-// it before handing a path to git or a writer.
+// Rejects, with rule `path-unsafe`, any repo-relative string that is not a plain
+// in-repo file path — i.e. anything that could escape the repo, be misread as a
+// CLI flag, or be interpreted by git as a non-file pathspec (magic or glob):
+//   - a control/NUL character;
+//   - the EMPTY string;
+//   - a leading `-` (could be read as a CLI flag);
+//   - a leading `:` (a git magic pathspec, e.g. `:(exclude)…`, `:/…`);
+//   - a glob metacharacter `* ? [ ]` (git would expand it as a pattern);
+//   - an absolute path (leading `/`, leading `\`, or a Windows drive prefix);
+//   - an empty or `.` path SEGMENT (so `.`, `./`, `a/./b`, `foo//bar`, a trailing
+//     slash) or a `..` segment.
+// Pure and dependency-free; the slice engine (E3) calls it before handing a path
+// to git or a writer, and every path-bearing git argv additionally runs under
+// `--literal-pathspecs` as belt-and-suspenders.
 export function assertSafeRepoPath(p: string): void {
   if (CONTROL_CHAR_RE.test(p)) {
     fail('path-unsafe', p, 'path contains a control or NUL character');
   }
+  if (p === '') {
+    fail('path-unsafe', p, 'path is empty');
+  }
   if (p.startsWith('-')) {
     fail('path-unsafe', p, 'path has a leading "-" (could be read as a CLI flag)');
+  }
+  if (p.startsWith(':')) {
+    fail('path-unsafe', p, 'path has a leading ":" (a git magic pathspec)');
+  }
+  if (hasGlobMeta(p)) {
+    fail('path-unsafe', p, 'path contains a glob metacharacter (* ? [ ])');
   }
   if (p.startsWith('/') || p.startsWith('\\') || WINDOWS_DRIVE_RE.test(p)) {
     fail('path-unsafe', p, 'path is absolute');
   }
-  if (p.split(/[/\\]/).includes('..')) {
-    fail('path-unsafe', p, 'path contains a ".." segment');
+  for (const segment of p.split(/[/\\]/)) {
+    if (segment === '' || segment === '.') {
+      fail('path-unsafe', p, 'path contains an empty or "." segment');
+    }
+    if (segment === '..') {
+      fail('path-unsafe', p, 'path contains a ".." segment');
+    }
   }
 }
 

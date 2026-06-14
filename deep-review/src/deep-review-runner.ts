@@ -7,6 +7,7 @@
 
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { EXIT_FAILURE } from './types.ts';
 import { runCli } from './cli.ts';
 import type { CliDeps } from './cli.ts';
 
@@ -35,7 +36,17 @@ const realDeps: CliDeps = {
 };
 
 export function main(argv: string[]): number {
-  return runCli(argv, realDeps);
+  // Top-level backstop (mirrors workflow/src/workflow-runner.ts's fatal handler):
+  // runCli already converts handler throws into a §2.4 machine error, so this only
+  // catches a pathological escape (e.g. a sink itself throwing) and still emits a
+  // machine-error JSON line rather than a raw stack trace before exiting FAILURE.
+  try {
+    return runCli(argv, realDeps);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    realDeps.stderr(`${JSON.stringify({ error: { command: 'deep-review', message, stderr_tail: '' } })}\n`);
+    return EXIT_FAILURE;
+  }
 }
 
 // Keep imports test-safe: only run (and exit) when invoked as the entrypoint.

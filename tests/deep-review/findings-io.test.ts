@@ -164,6 +164,54 @@ test('rejects a finding whose file OR slice_files entry has a ".." segment / lea
   }
 });
 
+test('rejects git pathspec-magic + glob metachars as path-unsafe (empty / "." / "./" / "a/./b" / "foo//bar" / leading ":" / glob "* ? [ ]") and still accepts a normal path', () => {
+  // Glob metacharacters are built by codepoint so this source stays free of glob
+  // bytes (mirrors the engine's codepoint scans).
+  const STAR = String.fromCharCode(0x2a); // *
+  const QUESTION = String.fromCharCode(0x3f); // ?
+  const LBRACKET = String.fromCharCode(0x5b); // [
+  const RBRACKET = String.fromCharCode(0x5d); // ]
+  const unsafe = [
+    '',
+    '.',
+    './',
+    'a/./b',
+    'foo//bar',
+    ':/',
+    ':(exclude)x',
+    `src/${STAR}.ts`,
+    `glob${QUESTION}.ts`,
+    `a${LBRACKET}b${RBRACKET}.ts`,
+  ];
+  for (const candidate of unsafe) {
+    assertRule(() => assertSafeRepoPath(candidate), 'path-unsafe');
+  }
+  // A normal repo-relative path must NOT be over-rejected.
+  assert.doesNotThrow(() => assertSafeRepoPath('runner/src/glob.ts'));
+  assert.doesNotThrow(() => assertSafeRepoPath('src/nested/app.ts'));
+
+  // In a findings file the violation is localized to the finding: status "invalid".
+  const localized = [':(exclude)x', `src/${STAR}.ts`, '.', './'];
+  for (const bad of localized) {
+    const viaFile = memFs({
+      '/f.json': rawFile(validFile([validFinding({ file: bad, slice_files: ['src/app.ts'] })])),
+    });
+    assert.equal(
+      readFindings('/f.json', viaFile.deps).findings[0]?.status,
+      'invalid',
+      `file=${JSON.stringify(bad)} should mark status invalid`,
+    );
+    const viaSlice = memFs({
+      '/s.json': rawFile(validFile([validFinding({ file: 'src/app.ts', slice_files: [bad] })])),
+    });
+    assert.equal(
+      readFindings('/s.json', viaSlice.deps).findings[0]?.status,
+      'invalid',
+      `slice_files=${JSON.stringify(bad)} should mark status invalid`,
+    );
+  }
+});
+
 test('rejects a non-integer line or a missing required field (rule: type / required)', () => {
   const { deps } = memFs({
     '/line.json': rawFile(validFile([{ ...validFinding(), line: 1.5 } as unknown as FindingRecord])),
