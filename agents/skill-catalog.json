@@ -1,0 +1,67 @@
+{
+  "sources": [
+    {
+      "id": "ramziddin/solid-skills",
+      "url": "https://github.com/ramziddin/solid-skills",
+      "license": "MIT",
+      "pinned_ref": "<verify-at-pin>",
+      "feeds_guides": ["refactoring-checklist.md", "clean-architecture.md"],
+      "applicability": "strong:class-heavy-ts; light:script-ts; none:bash-n8n",
+      "decision": "adapt-excerpts-only; do not import blindly (overfits NestJS/class-heavy)"
+    },
+    {
+      "id": "mattpocock/skills",
+      "url": "https://github.com/mattpocock/skills",
+      "license": "<verify-at-pin>",
+      "pinned_ref": "<verify-at-pin>",
+      "feeds_guides": ["architecture-deepening.md"],
+      "applicability": "strong:ts-services-and-shared-modules; light:one-off-scripts",
+      "decision": "adapt-excerpts from improve-codebase-architecture (shallow modules, deletion test, locality, leverage)"
+    },
+    {
+      "id": "awesome-skills/code-review-skill",
+      "url": "<verify-at-pin>",
+      "license": "<verify-at-pin>",
+      "pinned_ref": "<verify-at-pin>",
+      "feeds_guides": ["language-review-sources.md"],
+      "applicability": "load only the language section matching the repo",
+      "decision": "adapt-excerpts; per-language dispatch only"
+    },
+    {
+      "id": "wshobson/commands",
+      "url": "https://github.com/wshobson/commands",
+      "license": "<verify-at-pin>",
+      "pinned_ref": "<verify-at-pin>",
+      "feeds_guides": ["refactoring-checklist.md"],
+      "applicability": "reviewer/workflow candidate, not a gate",
+      "decision": "evaluate refactor-clean + tech-debt; reviewer-only"
+    },
+    {
+      "id": "playmoreai/golbin-agent-skills",
+      "url": "<verify-at-pin>",
+      "license": "<verify-at-pin>",
+      "pinned_ref": "<verify-at-pin>",
+      "feeds_guides": ["review-output-format.md"],
+      "applicability": "plan-compliance review",
+      "decision": "adapt-excerpts from review-implementation"
+    },
+    {
+      "id": "clean-hexagonal-architecture-community",
+      "url": "<verify-at-pin>",
+      "license": "<verify-at-pin>",
+      "pinned_ref": "<verify-at-pin>",
+      "feeds_guides": ["clean-architecture.md"],
+      "applicability": "reject if too generic or framework-mismatched",
+      "decision": "reject-or-adapt; evaluate per source"
+    },
+    {
+      "id": "codex-security-skills",
+      "url": "<verify-at-pin>",
+      "license": "<verify-at-pin>",
+      "pinned_ref": "<verify-at-pin>",
+      "feeds_guides": ["security-review.md"],
+      "applicability": "security reviews only",
+      "decision": "adapt-excerpts; security scope only"
+    }
+  ]
+}
