@@ -430,3 +430,143 @@ test('standards-sync: --generate-skills with a missing generator bundle exits 12
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- S19 D4 + D5: the 7th body (deep-review-refactor) end-to-end -----------
+// The body already ships in agents/skill-sources, so the generator auto-discovers
+// it by directory scan. These cases are regression guards: immediate green is the
+// expected, correct outcome (not red-first TDD).
+
+test('standards-sync: the deep-review-refactor body generates both runtime wrappers pointing at the canonical source', () => {
+  const dir = makeFixtureRepo();
+  try {
+    const gen = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(gen.status, 0, `generate should exit 0; got ${gen.status}: ${combined(gen)}`);
+
+    const codexWrapper = path.join(dir, '.agents', 'skills', 'deep-review-refactor', 'SKILL.md');
+    const claudeWrapper = path.join(dir, '.claude', 'skills', 'deep-review-refactor', 'SKILL.md');
+    assert.ok(fs.existsSync(codexWrapper), 'expected the codex deep-review wrapper at .agents/skills/deep-review-refactor/SKILL.md');
+    assert.ok(fs.existsSync(claudeWrapper), 'expected the claude deep-review wrapper at .claude/skills/deep-review-refactor/SKILL.md');
+
+    for (const wrapperPath of [codexWrapper, claudeWrapper]) {
+      const wrapper = fs.readFileSync(wrapperPath, 'utf8');
+      assert.ok(
+        wrapper.includes('canonical_source: agents/skill-sources/deep-review-refactor.md'),
+        `${wrapperPath} must point at the canonical deep-review source`,
+      );
+      // Deep-Review-Slice lives only in the canonical body; a thin wrapper must not duplicate it.
+      assert.ok(
+        !wrapper.includes('Deep-Review-Slice'),
+        `${wrapperPath} must NOT duplicate the canonical body (found Deep-Review-Slice)`,
+      );
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: the deep-review-refactor wrapper round-trips byte-identically through --check', () => {
+  const dir = makeFixtureRepo();
+  try {
+    const gen = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(gen.status, 0, `generate should exit 0; got ${gen.status}: ${combined(gen)}`);
+
+    const codexWrapper = path.join(dir, '.agents', 'skills', 'deep-review-refactor', 'SKILL.md');
+    assert.ok(fs.existsSync(codexWrapper), 'the deep-review wrapper must exist before --check');
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    // --check regenerates and byte-compares, so exit 0 IS the byte-identity proof.
+    assert.equal(check.status, 0, `--check after a clean generate should exit 0; got ${combined(check)}`);
+    assert.match(combined(check), /skill wrappers in sync/, 'expected the in-sync phrase');
+    assert.match(combined(check), /standards-sync check passed/, 'expected overall success');
+    assert.ok(fs.existsSync(codexWrapper), 'the deep-review wrapper must still exist at check time');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: a drifted deep-review-refactor codex wrapper fails --check and is named', () => {
+  const dir = makeFixtureRepo();
+  try {
+    spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], { cwd: dir, encoding: 'utf8' });
+
+    // Mutate the generated codex deep-review wrapper to introduce drift.
+    const relWrapper = '.agents/skills/deep-review-refactor/SKILL.md';
+    const mutated = path.join(dir, '.agents', 'skills', 'deep-review-refactor', 'SKILL.md');
+    fs.appendFileSync(mutated, '\nhand-edited drift line\n');
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.notEqual(check.status, 0, 'a drifted deep-review wrapper must fail --check');
+    assert.match(check.stderr ?? '', /drift/i, `expected a drift message; got ${JSON.stringify(check.stderr)}`);
+    assert.ok(
+      (check.stderr ?? '').includes(relWrapper),
+      `the drift message should name ${relWrapper}; got ${JSON.stringify(check.stderr)}`,
+    );
+    assert.doesNotMatch(combined(check), /standards-sync check passed/, 'must not report success on drift');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standards-sync: --check on a source repo validates the deep-review-refactor body and skips wrapper drift', () => {
+  const dir = makeFixtureRepo();
+  try {
+    // The fixture carries the deep-review body but hosts no generated skills tree.
+    assert.ok(
+      fs.existsSync(path.join(dir, sourcesRel, 'deep-review-refactor.md')),
+      'fixture must carry the deep-review-refactor canonical body',
+    );
+    assert.ok(!fs.existsSync(path.join(dir, '.agents', 'skills')), 'fixture must not host .agents/skills');
+    assert.ok(!fs.existsSync(path.join(dir, '.claude', 'skills')), 'fixture must not host .claude/skills');
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(check.status, 0, `--check on a source repo must exit 0; got ${check.status}: ${combined(check)}`);
+    const blob = combined(check);
+    assert.match(blob, /valid quality manifest/, 'the manifest validator must still run');
+    assert.match(blob, /wrapper drift check skipped/, 'wrapper-drift must report it was skipped');
+    assert.match(blob, /standards-sync check passed/, 'overall check must still pass');
+    // No drift comparison ran, so it must not claim wrappers are in sync.
+    assert.doesNotMatch(blob, /skill wrappers in sync/, 'must not claim in-sync when no wrappers exist');
+
+    // Prove the deep-review body is actually VALIDATED on a source repo (not just
+    // that wrapper-drift is skipped): corrupt its frontmatter (drop the closing
+    // "---") and --check must fail, naming the deep-review-refactor body. This makes
+    // the "validates the body" claim self-evidencing rather than leaning on the
+    // generic malformed-body test, which corrupts a different (alphabetically first) body.
+    const bodyPath = path.join(dir, sourcesRel, 'deep-review-refactor.md');
+    const raw = fs.readFileSync(bodyPath, 'utf8');
+    const broken = raw.replace(/^---\n([\s\S]*?)\n---\n/, '---\n$1\n');
+    assert.notEqual(broken, raw, 'sanity: the closing --- should have been removed');
+    fs.writeFileSync(bodyPath, broken);
+
+    const recheck = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    assert.equal(
+      recheck.status,
+      1,
+      `a malformed deep-review body must fail --check; got ${recheck.status}: ${combined(recheck)}`,
+    );
+    assert.match(recheck.stderr ?? '', /frontmatter/i, 'expected a frontmatter error on stderr');
+    assert.match(recheck.stderr ?? '', /deep-review-refactor/, 'the error should name the deep-review-refactor body');
+    assert.doesNotMatch(combined(recheck), /standards-sync check passed/, 'must not report success on a malformed body');
+    assert.doesNotMatch(recheck.stderr ?? '', /at Object\.|node:internal/, 'must be a clean error, not a stack trace');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
