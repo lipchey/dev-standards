@@ -104,17 +104,19 @@ function parseSlugFlag(rest: string[]): string | undefined {
   return undefined;
 }
 
-// Pulls the value of a `--scope <--fast|--full>` / `--scope=<…>` flag from argv, or
-// undefined when absent (or the flag is the trailing token). Mirrors parseSlugFlag;
-// the value is resolved against the config default and validated by verifyCmd.
-function parseScopeFlag(rest: string[]): string | undefined {
+// Parses a `--scope <--fast|--full>` / `--scope=<…>` flag, returning whether the
+// flag was PRESENT and its value. verifyCmd uses `present` to distinguish an ABSENT
+// flag (fall back to the config default) from a PRESENT-but-valueless one (a trailing
+// `--scope`, or `--scope=`), which is a malformed invocation -> EXIT_USAGE per §2.2 —
+// NOT a request for the default. Mirrors parseSlugFlag's scan.
+function parseScopeFlag(rest: string[]): { present: boolean; value: string | undefined } {
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
     if (arg === undefined) continue;
-    if (arg === '--scope') return rest[i + 1];
-    if (arg.startsWith('--scope=')) return arg.slice('--scope='.length);
+    if (arg === '--scope') return { present: true, value: rest[i + 1] };
+    if (arg.startsWith('--scope=')) return { present: true, value: arg.slice('--scope='.length) };
   }
-  return undefined;
+  return { present: false, value: undefined };
 }
 
 // `check-path <path>` — classify a single repo-relative path as `no-touch` or
@@ -299,8 +301,16 @@ function handoffCmd(rest: string[], deps: CliDeps): number {
 // a one-line status is printed to stdout.
 function verifyCmd(rest: string[], deps: CliDeps): number {
   const env = resolveEnv(deps);
+  const scopeFlag = parseScopeFlag(rest);
+  // A PRESENT but valueless --scope (a trailing `--scope`, or `--scope=`) is a bad
+  // operand, NOT a request for the default -> EXIT_USAGE before loading config or
+  // spawning verify (§2.2). An ABSENT flag falls back to the config default below.
+  if (scopeFlag.present && (scopeFlag.value === undefined || scopeFlag.value === '')) {
+    deps.stderr('deep-review verify: --scope requires a value (--fast or --full)\n');
+    return EXIT_USAGE;
+  }
   const config = loadConfig(resolve(env.cwd, 'quality.json'));
-  const scope = parseScopeFlag(rest) ?? config.deepReview?.verify_after_fix ?? '--fast';
+  const scope = scopeFlag.value ?? config.deepReview?.verify_after_fix ?? '--fast';
   if (scope !== '--fast' && scope !== '--full') {
     deps.stderr(
       `deep-review verify: invalid --scope operand ${JSON.stringify(scope)} (expected --fast or --full)\n`,

@@ -176,3 +176,24 @@ test('invalid scope: --scope --bogus -> EXIT_USAGE before any spawn', () => {
   assert.match(cap.err(), /invalid --scope/);
   assert.equal(fs.existsSync(recordPath), false, 'the verify shim is never spawned on an invalid scope');
 });
+
+test('valueless --scope: a trailing `--scope` or `--scope=` is a bad operand -> EXIT_USAGE, NOT a silent default, before config load / spawn (Codex S22 P2)', () => {
+  // (a) a trailing `--scope` (space form) must NOT silently fall back to --fast.
+  const dirA = dirWithQuality('--fast');
+  const recordA = writeRecordingShim(dirA);
+  const capA = capture(dirA);
+  assert.equal(runCli(['verify', '--scope'], capA.deps), EXIT_USAGE);
+  assert.match(capA.err(), /--scope requires a value/);
+  assert.equal(fs.existsSync(recordA), false, 'verify shim never spawned for a valueless --scope');
+
+  // (b) the `=` form with an empty value is likewise a bad operand.
+  const dirB = dirWithQuality('--fast');
+  const recordB = writeRecordingShim(dirB);
+  assert.equal(runCli(['verify', '--scope='], capture(dirB).deps), EXIT_USAGE);
+  assert.equal(fs.existsSync(recordB), false, 'verify shim never spawned for an empty --scope=');
+
+  // (c) the refusal happens BEFORE loadConfig: a cwd with NO quality.json still
+  // returns EXIT_USAGE (a regressed fall-through would loadConfig-throw -> EXIT_FAILURE).
+  const dirC = tmpDir(); // no quality.json written
+  assert.equal(runCli(['verify', '--scope'], capture(dirC).deps), EXIT_USAGE);
+});
