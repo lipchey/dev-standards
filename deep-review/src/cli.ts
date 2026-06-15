@@ -17,6 +17,7 @@ import { classifyAll } from './classify.ts';
 import { commitSlice, realSliceDeps } from './slice.ts';
 import { writeReport, realReportDeps } from './report.ts';
 import { selectWorktree, realWorktreeDeps } from './worktree.ts';
+import { decideHandoff, realHandoffDeps } from './handoff.ts';
 import { SlugError } from '../../workflow/src/new-feature.ts';
 
 export interface CliDeps {
@@ -257,13 +258,38 @@ function selectWorktreeCmd(rest: string[], deps: CliDeps): number {
   }
 }
 
+// `handoff --findings <path>` — emit the ADR-012 ship/cleanup landing instruction
+// (E6). The engine is a context-detect + instruction emitter ONLY: it lands
+// nothing, names no merge verb, and never suggests the automated ship cycle in the
+// standalone case. The §2.3 mode gate means a `review-only` findings file returns
+// EXIT_WRONG_STATE. handoff reads NO config — only cwd + the (untrusted) findings
+// file, which goes through readFindings (real-fs default; a FindingsValidationError
+// flows through runCli's toMachineError path). The chosen instruction is printed to
+// stdout; on a branch-read failure the §2.4 machine error is the LAST stderr line.
+function handoffCmd(rest: string[], deps: CliDeps): number {
+  const findingsPath = parseFindingsFlag(rest);
+  if (findingsPath === undefined || findingsPath === '') {
+    deps.stderr('deep-review handoff: missing --findings <path>\n');
+    return EXIT_USAGE;
+  }
+  const env = resolveEnv(deps);
+  const findingsFile = readFindings(findingsPath);
+  const result = decideHandoff(findingsFile, realHandoffDeps(env.cwd));
+  if (result.machineError !== undefined) {
+    deps.stderr(`${JSON.stringify({ error: result.machineError })}\n`);
+  } else if (result.instruction !== undefined) {
+    deps.stdout(`${result.instruction}\n`);
+  }
+  return result.exitCode;
+}
+
 const DISPATCH: Record<Command, CommandHandler> = {
   'check-path': checkPath,
   classify,
   'commit-slice': commitSliceCmd,
   report,
   'select-worktree': selectWorktreeCmd,
-  handoff: notImplemented('handoff'),
+  handoff: handoffCmd,
   verify: notImplemented('verify'),
 };
 
