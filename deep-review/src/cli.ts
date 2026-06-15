@@ -16,6 +16,8 @@ import { readFindings, writeFindings, FindingsValidationError } from './findings
 import { classifyAll } from './classify.ts';
 import { commitSlice, realSliceDeps } from './slice.ts';
 import { writeReport, realReportDeps } from './report.ts';
+import { selectWorktree, realWorktreeDeps } from './worktree.ts';
+import { SlugError } from '../../workflow/src/new-feature.ts';
 
 export interface CliDeps {
   stdout: (text: string) => void;
@@ -91,6 +93,19 @@ function parseFindingsFlag(rest: string[]): string | undefined {
     if (arg === undefined) continue;
     if (arg === '--findings') return rest[i + 1];
     if (arg.startsWith('--findings=')) return arg.slice('--findings='.length);
+  }
+  return undefined;
+}
+
+// Pulls the value of a `--slug <slug>` / `--slug=<slug>` flag from argv, or
+// undefined when absent (or the flag is the trailing token). Mirrors
+// parseFindingsFlag; the value is validated downstream by sanitizeFeatureSlug.
+function parseSlugFlag(rest: string[]): string | undefined {
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === undefined) continue;
+    if (arg === '--slug') return rest[i + 1];
+    if (arg.startsWith('--slug=')) return arg.slice('--slug='.length);
   }
   return undefined;
 }
@@ -207,12 +222,47 @@ function report(rest: string[], deps: CliDeps): number {
   return result.exitCode;
 }
 
+// `select-worktree --slug <slug>` — choose the landing worktree (E5): reuse the
+// active workflow worktree when its planning marker is present, else create an
+// engine-local `deep-review/<slug>` worktree. The §2 contract (sanitize gate,
+// base resolution, confinement guard, collision/idempotency gate) lives in
+// ./worktree.ts; this handler parses the flag, resolves the worktree cwd + config,
+// prints the chosen mode/worktree/branch, and maps a SlugError to EXIT_USAGE at the
+// argv edge (a git failure renders the §2.4 machine error as the LAST stderr line).
+function selectWorktreeCmd(rest: string[], deps: CliDeps): number {
+  const slug = parseSlugFlag(rest);
+  if (slug === undefined || slug === '') {
+    deps.stderr('deep-review select-worktree: missing --slug <slug>\n');
+    return EXIT_USAGE;
+  }
+  const env = resolveEnv(deps);
+  const config = loadConfig(resolve(env.cwd, 'quality.json'));
+  try {
+    const result = selectWorktree(slug, realWorktreeDeps(env.cwd, config));
+    if (result.machineError !== undefined) {
+      deps.stderr(`${JSON.stringify({ error: result.machineError })}\n`);
+    } else if (result.mode !== undefined && result.worktree !== undefined) {
+      const branch = result.branch !== undefined ? ` ${result.branch}` : '';
+      deps.stdout(`${result.mode} ${result.worktree}${branch}\n`);
+    }
+    return result.exitCode;
+  } catch (error) {
+    // An unsafe --slug operand is an argv-level usage error, not an io failure: map
+    // it to EXIT_USAGE before runCli's catch turns a throw into EXIT_FAILURE.
+    if (error instanceof SlugError) {
+      deps.stderr(`deep-review select-worktree: invalid --slug operand ${JSON.stringify(slug)}\n`);
+      return EXIT_USAGE;
+    }
+    throw error;
+  }
+}
+
 const DISPATCH: Record<Command, CommandHandler> = {
   'check-path': checkPath,
   classify,
   'commit-slice': commitSliceCmd,
   report,
-  'select-worktree': notImplemented('select-worktree'),
+  'select-worktree': selectWorktreeCmd,
   handoff: notImplemented('handoff'),
   verify: notImplemented('verify'),
 };
