@@ -18,6 +18,7 @@ import { commitSlice, realSliceDeps } from './slice.ts';
 import { writeReport, realReportDeps } from './report.ts';
 import { selectWorktree, realWorktreeDeps } from './worktree.ts';
 import { decideHandoff, realHandoffDeps } from './handoff.ts';
+import { runFinalVerify, realVerifyDeps } from './verify.ts';
 import { SlugError } from '../../workflow/src/new-feature.ts';
 
 export interface CliDeps {
@@ -48,14 +49,6 @@ type Command = (typeof COMMANDS)[number];
 type CommandHandler = (rest: string[], deps: CliDeps) => number;
 
 const USAGE = `usage: deep-review <command> [options]\ncommands: ${COMMANDS.join(', ')}\n`;
-
-// Placeholder handler: the command is recognized but its task has not landed yet.
-function notImplemented(command: Command): CommandHandler {
-  return (_rest, deps) => {
-    deps.stderr(`deep-review: "${command}" is not implemented yet\n`);
-    return EXIT_USAGE;
-  };
-}
 
 // The optional env seams, resolved to concrete functions.
 interface ResolvedEnv {
@@ -107,6 +100,19 @@ function parseSlugFlag(rest: string[]): string | undefined {
     if (arg === undefined) continue;
     if (arg === '--slug') return rest[i + 1];
     if (arg.startsWith('--slug=')) return arg.slice('--slug='.length);
+  }
+  return undefined;
+}
+
+// Pulls the value of a `--scope <--fast|--full>` / `--scope=<…>` flag from argv, or
+// undefined when absent (or the flag is the trailing token). Mirrors parseSlugFlag;
+// the value is resolved against the config default and validated by verifyCmd.
+function parseScopeFlag(rest: string[]): string | undefined {
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === undefined) continue;
+    if (arg === '--scope') return rest[i + 1];
+    if (arg.startsWith('--scope=')) return arg.slice('--scope='.length);
   }
   return undefined;
 }
@@ -283,6 +289,33 @@ function handoffCmd(rest: string[], deps: CliDeps): number {
   return result.exitCode;
 }
 
+// `verify [--scope <--fast|--full>]` — the final verify gate (E7). The deep-review
+// runtime calls this AFTER all slices and BEFORE handoff: a GREEN verify (exit 0)
+// clears the refactor to proceed; a RED verify is EXIT_NEEDS_HUMAN (13) and nothing
+// lands. Scope is `--scope` ?? deep_review.verify_after_fix ?? --fast, validated here
+// (an invalid operand is an argv-level usage error -> EXIT_USAGE before any spawn).
+// The §2 contract (absolute fixed-argv shim spawn, exit mapping) lives in
+// ./verify.ts; on a spawn failure the §2.4 machine error is the LAST stderr line, else
+// a one-line status is printed to stdout.
+function verifyCmd(rest: string[], deps: CliDeps): number {
+  const env = resolveEnv(deps);
+  const config = loadConfig(resolve(env.cwd, 'quality.json'));
+  const scope = parseScopeFlag(rest) ?? config.deepReview?.verify_after_fix ?? '--fast';
+  if (scope !== '--fast' && scope !== '--full') {
+    deps.stderr(
+      `deep-review verify: invalid --scope operand ${JSON.stringify(scope)} (expected --fast or --full)\n`,
+    );
+    return EXIT_USAGE;
+  }
+  const result = runFinalVerify(realVerifyDeps(env.cwd, scope));
+  if (result.machineError !== undefined) {
+    deps.stderr(`${JSON.stringify({ error: result.machineError })}\n`);
+  } else {
+    deps.stdout(`verify ${scope}: ${result.exitCode === EXIT_OK ? 'ok' : 'needs-human'}\n`);
+  }
+  return result.exitCode;
+}
+
 const DISPATCH: Record<Command, CommandHandler> = {
   'check-path': checkPath,
   classify,
@@ -290,7 +323,7 @@ const DISPATCH: Record<Command, CommandHandler> = {
   report,
   'select-worktree': selectWorktreeCmd,
   handoff: handoffCmd,
-  verify: notImplemented('verify'),
+  verify: verifyCmd,
 };
 
 function isCommand(value: string): value is Command {
