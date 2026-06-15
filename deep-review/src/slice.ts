@@ -304,10 +304,15 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
     // legitimate test_cmd that writes transient UNSTAGED artifacts (coverage, logs)
     // outside the slice is tolerated; only staged out-of-slice/no-touch changes are
     // refused. The diff command takes no path operands, so no --literal-pathspecs is
-    // needed here. This runs on BOTH the green and red branches: a smuggled stage is
-    // refused regardless of the test's exit code.
+    // needed here. `--no-renames` is REQUIRED: with rename detection on (the git
+    // default `diff.renames=true`), a test_cmd that renames a no-touch file INTO a
+    // slice path (`git mv .github/workflows/x src/x && git add -A`) would surface as a
+    // single rename naming only the in-slice destination, HIDING the staged no-touch
+    // deletion — so the gate must see the delete+add pair (mirrors the pre-test scope
+    // gate at step 3, which also passes --no-renames). This runs on BOTH the green and
+    // red branches: a smuggled stage is refused regardless of the test's exit code.
     const staged = parseStagedPaths(
-      runGit(deps, ['diff', '--cached', '--name-only', '-z'], 'status'),
+      runGit(deps, ['diff', '--cached', '--name-only', '-z', '--no-renames'], 'status'),
     );
     for (const p of staged) {
       if (!sliceSet.has(p) || isNoTouch(p, deps.noTouchSet)) {

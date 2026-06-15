@@ -117,6 +117,28 @@ function makeMutatingScript(): string {
   return script;
 }
 
+// Writes a throwaway node script that, run with cwd=<repo>, RENAMES the tracked
+// file argv[2] to argv[3] via `git mv` (which stages the rename as a delete of the
+// source + an add of the destination) and exits 0. Used to prove the post-test
+// staged re-gate must pass --no-renames: otherwise rename detection coalesces the
+// pair into a single rename naming only the in-slice destination, HIDING the
+// no-touch source deletion.
+function makeRenameScript(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dr-script-'));
+  const script = path.join(dir, 'rename.mjs');
+  fs.writeFileSync(
+    script,
+    [
+      "import { spawnSync } from 'node:child_process';",
+      'const src = process.argv[2];',
+      'const dst = process.argv[3];',
+      "const r = spawnSync('git', ['mv', src, dst], { cwd: process.cwd() });",
+      'process.exit(r.status === 0 ? 0 : 2);',
+    ].join('\n'),
+  );
+  return script;
+}
+
 // ── Findings builders ─────────────────────────────────────────────────────────
 
 function validFinding(over: Partial<FindingRecord> = {}): FindingRecord {
@@ -565,6 +587,47 @@ test('post-test re-gate: a test_cmd that writes an UNSTAGED out-of-slice transie
   assert.equal(readFindings(fpath).findings[0]?.status, 'fixed');
   // The transient remains in the worktree (untracked) — tolerated, not removed.
   assert.equal(fs.existsSync(path.join(repo, 'coverage/lcov.info')), true, 'transient left untouched');
+});
+
+test('post-test re-gate (--no-renames): a test_cmd that RENAMES a no-touch file INTO a slice path (git mv) and exits 0 -> EXIT_WRONG_STATE, NO commit, no-touch file still tracked at HEAD (rename-hiding closed, S21 residue P2)', () => {
+  const repo = initRepo();
+  // Force rename detection ON so that, absent --no-renames, `git diff --cached`
+  // coalesces the mv into a single rename naming only the in-slice destination and
+  // HIDES the no-touch deletion (the exact bug this guards).
+  git(repo, ['config', 'diff.renames', 'true']);
+  writeFileIn(repo, '.github/workflows/ci.yml', 'name: ci\n');
+  git(repo, ['add', '--', '.github/workflows/ci.yml']);
+  git(repo, ['commit', '-q', '-m', 'init no-touch']);
+  const before = head(repo);
+
+  const script = makeRenameScript();
+  const fpath = externalFindings();
+  // The slice is `renamed.ts` (root); the UNTRUSTED test_cmd renames the no-touch
+  // ci.yml onto it, smuggling the no-touch deletion behind a detected rename.
+  writeFindings(
+    fpath,
+    validFile([
+      validFinding({
+        file: 'renamed.ts',
+        slice_files: ['renamed.ts'],
+        test_cmd: ['node', script, '.github/workflows/ci.yml', 'renamed.ts'],
+      }),
+    ]),
+  );
+
+  const result = commitSlice('f-001', fpath, realSliceDeps(repo, ['.github/workflows/**']));
+
+  assert.equal(
+    result.exitCode,
+    EXIT_WRONG_STATE,
+    'staged no-touch deletion (hidden behind a rename) refused',
+  );
+  assert.equal(head(repo), before, 'no new commit (HEAD unmoved)');
+  // The no-touch source is still tracked at HEAD — its deletion was never committed.
+  const tracked = git(repo, ['ls-tree', '--name-only', '-r', 'HEAD']).trim().split('\n').filter(Boolean);
+  assert.ok(tracked.includes('.github/workflows/ci.yml'), 'no-touch file still tracked at HEAD');
+  assert.ok(!tracked.includes('renamed.ts'), 'slice destination never committed');
+  assert.equal(readFindings(fpath).findings[0]?.status, 'pending', 'status unchanged (surfaced)');
 });
 
 test('test_cmd-safety: empty / non-array / control-char test_cmd -> EXIT_WRONG_STATE, no git, status unchanged', () => {
