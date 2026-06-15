@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { EXIT_OK, EXIT_USAGE, EXIT_WRONG_STATE } from '../../deep-review/src/types.ts';
+import { EXIT_OK, EXIT_FAILURE, EXIT_USAGE, EXIT_WRONG_STATE } from '../../deep-review/src/types.ts';
 import {
   selectWorktree,
   isWorkflowWorktree,
@@ -75,6 +75,24 @@ const realSpawn: WorktreeDeps['spawn'] = (file, args, options): SpawnResult => {
   const r = spawnSync(file, [...args], { cwd: options.cwd, encoding: 'utf8', shell: false });
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
+
+// A spawn seam that DELEGATES to real git for the read-only validation steps
+// (rev-parse, worktree list) but forces the mutating `git worktree add` to a
+// non-zero exit, so a test can drive the §2.4 git-error surface deterministically
+// without depending on a host-specific way to make `worktree add` fail. Mirrors
+// spyOverReal's recording shape.
+function spawnFailingAdd(): { spawn: WorktreeDeps['spawn']; gitCalls: string[][] } {
+  const gitCalls: string[][] = [];
+  const spawn: WorktreeDeps['spawn'] = (file, args, options) => {
+    if (file === 'git') gitCalls.push([...args]);
+    if (file === 'git' && args.includes('add')) {
+      return { status: 1, stdout: '', stderr: 'fatal: simulated' };
+    }
+    const r = spawnSync(file, [...args], { cwd: options.cwd, encoding: 'utf8', shell: false });
+    return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  return { spawn, gitCalls };
+}
 
 function deps(
   cwd: string,
@@ -276,6 +294,88 @@ test('wrong-reuse (S21 collision): an existing worktree on feature/deep-review-<
   assert.equal(git(wtPath, ['rev-parse', '--abbrev-ref', 'HEAD']).trim(), 'feature/deep-review-foo');
   // The engine's branch was never created.
   assert.throws(() => git(repo, ['rev-parse', '--verify', 'refs/heads/deep-review/foo']));
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('wrong-reuse (foreign repo): a DIFFERENT repo owns a worktree at wtPath ON branch deep-review/<slug> -> step (a) passes but step (b) REFUSES (EXIT_WRONG_STATE), nothing created in THIS repo, foreign worktree untouched', () => {
+  // repoA is the primary repo; repoB is a foreign repo that owns a worktree sitting
+  // at the EXACT path repoA's fallback selector computes, checked out on a branch
+  // literally named `deep-review/foreign`. validateExistingWorktree step (a)
+  // (`git -C <wtPath> rev-parse --abbrev-ref HEAD === deep-review/foreign`) PASSES,
+  // so only step (b) (`git worktree list` over THIS repo) can refuse it.
+  const { base: baseA, repo: repoA } = makeBase();
+  const { base: baseB, repo: repoB } = makeBase();
+  const wtPath = fallbackWtPath(repoA, 'foreign');
+  // repoB owns a worktree at wtPath, on branch deep-review/foreign.
+  git(repoB, ['worktree', 'add', '-b', 'deep-review/foreign', wtPath, 'HEAD']);
+
+  const worktreesBefore = git(repoA, ['worktree', 'list', '--porcelain']);
+  const result = selectWorktree('foreign', deps(repoA));
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  // THIS repo created no branch and no worktree.
+  assert.throws(() => git(repoA, ['rev-parse', '--verify', 'refs/heads/deep-review/foreign']));
+  assert.equal(git(repoA, ['worktree', 'list', '--porcelain']), worktreesBefore, 'repoA worktree set unchanged');
+  // The foreign worktree is untouched: still repoB's, still on deep-review/foreign.
+  assert.equal(git(wtPath, ['rev-parse', '--abbrev-ref', 'HEAD']).trim(), 'deep-review/foreign');
+  fs.rmSync(baseA, { recursive: true, force: true });
+  fs.rmSync(baseB, { recursive: true, force: true });
+});
+
+// ── worktree-add git error (the §2.4 machine-error surface) ─────────────────────
+
+test('worktree-add failure: a non-zero `git worktree add` -> EXIT_FAILURE + machine error step "worktree-add" carrying the git command + stderr_tail', () => {
+  const { base, repo } = makeBase();
+  const spy = spawnFailingAdd();
+
+  const result = selectWorktree('addfail', deps(repo, { spawn: spy.spawn }));
+
+  assert.equal(result.exitCode, EXIT_FAILURE);
+  assert.ok(result.machineError, 'machine error present');
+  assert.equal(result.machineError?.step, 'worktree-add');
+  assert.match(result.machineError?.command ?? '', /worktree add\b/);
+  assert.equal(result.machineError?.stderr_tail, 'fatal: simulated');
+  // The add was attempted but no worktree dir landed (the add was forced to fail).
+  assert.ok(
+    spy.gitCalls.some((a) => a.includes('worktree') && a.includes('add')),
+    'a worktree add was attempted',
+  );
+  assert.equal(fs.existsSync(fallbackWtPath(repo, 'addfail')), false, 'no worktree dir created');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+// ── base injection (option-like base_branch) + the `--` argv defense ────────────
+
+test('base injection: a workflow base_branch beginning with "-" (e.g. --force) -> EXIT_WRONG_STATE, git `worktree add` NEVER attempted', () => {
+  const { base, repo } = makeBase();
+  const spy = spyOverReal();
+
+  const result = selectWorktree(
+    'victim',
+    deps(repo, { workflow: enabledWorkflow('../wts', '--force'), spawn: spy.spawn }),
+  );
+
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.ok(
+    !spy.gitCalls.some((a) => a.includes('worktree') && a.includes('add')),
+    'no worktree add attempted for an option-like base',
+  );
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('dedicated argv: the `git worktree add` argv inserts `--` immediately before the <path> <base> operands', () => {
+  const { base, repo } = makeBase();
+  const spy = spyOverReal();
+
+  const result = selectWorktree('hotel', deps(repo, { spawn: spy.spawn }));
+
+  assert.equal(result.exitCode, EXIT_OK);
+  const wtPath = fallbackWtPath(repo, 'hotel');
+  const addCall = spy.gitCalls.find((a) => a.includes('worktree') && a.includes('add'));
+  assert.ok(addCall, 'a worktree add happened');
+  // The `--` separator must sit immediately before the two positional operands so an
+  // option-like base can never be misparsed as a git option.
+  assert.deepEqual(addCall, ['worktree', 'add', '-b', 'deep-review/hotel', '--', wtPath, 'main']);
   fs.rmSync(base, { recursive: true, force: true });
 });
 

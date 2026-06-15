@@ -185,6 +185,22 @@ test('getBranch failure (stub throws) -> EXIT_FAILURE + machine error naming ste
   assert.equal(result.instruction, undefined);
 });
 
+test('getBranch fail-closed (real git, detached HEAD): the REAL defaultGetBranch refuses an unresolvable branch -> EXIT_FAILURE + machine error step "rev-parse"', () => {
+  // Exercises the real seam (not the stub): a detached HEAD makes
+  // `git rev-parse --abbrev-ref HEAD` resolve to the sentinel "HEAD", which
+  // defaultGetBranch's fail-closed guard rejects, surfacing the §2.4 git error.
+  const repo = initRepoOnMain();
+  git(repo, ['checkout', '--detach']);
+
+  const result = decideHandoff(mkFile([mkFinding({ status: 'fixed' })]), realHandoffDeps(repo));
+
+  assert.equal(result.exitCode, EXIT_FAILURE);
+  assert.ok(result.machineError, 'machine error present');
+  assert.equal(result.machineError?.step, 'rev-parse');
+  assert.equal(result.instruction, undefined);
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
 // ── static source + runtime text invariants ────────────────────────────────────
 
 test('static: the module SOURCE contains no "workflow merge"; the STANDALONE runtime output contains no "workflow ship"', () => {

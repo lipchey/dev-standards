@@ -314,6 +314,13 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
     const staged = parseStagedPaths(
       runGit(deps, ['diff', '--cached', '--name-only', '-z', '--no-renames'], 'status'),
     );
+    // The `!sliceSet.has(p)` disjunct is the live guard here (a test_cmd that stages
+    // an OUT-OF-SLICE path — including a no-touch one — is refused). The
+    // `isNoTouch(p)` disjunct is intentional belt-and-suspenders: any IN-slice
+    // no-touch path is already refused by the eligibility/no-touch gate above (step
+    // 2) before any spawn, so it cannot be the SOLE refusal cause today; it is kept
+    // so this gate stays correct even if a future change let an in-slice no-touch
+    // path reach the staged index post-test.
     for (const p of staged) {
       if (!sliceSet.has(p) || isNoTouch(p, deps.noTouchSet)) {
         return { exitCode: EXIT_WRONG_STATE };

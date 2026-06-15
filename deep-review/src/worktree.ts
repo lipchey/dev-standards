@@ -249,7 +249,13 @@ function validateExistingWorktree(deps: WorktreeDeps, wtPath: string, branch: st
 function resolveParentAndBase(deps: WorktreeDeps): { parent: string; base: string } | undefined {
   const wf = deps.workflow;
   if (wf?.enabled === true) {
-    return { parent: path.resolve(deps.cwd, wf.worktree_parent), base: wf.base_branch };
+    const base = wf.base_branch;
+    // Reject an option-like base (leading `-`) up front: the `--` separator in the
+    // worktree-add argv already neutralizes it, but `base_branch` is validated only
+    // as a non-empty string by the manifest validator, so a config value like
+    // `--force` would otherwise reach git. Fail closed with a clear context error.
+    if (base.startsWith('-')) return undefined;
+    return { parent: path.resolve(deps.cwd, wf.worktree_parent), base };
   }
   const head = deps.spawn('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: deps.cwd });
   if (head.status !== 0) return undefined;
@@ -294,10 +300,14 @@ export function selectWorktree(slug: string, deps: WorktreeDeps): WorktreeResult
     return validateExistingWorktree(deps, wtPath, branch);
   }
 
-  // 7. create the engine-local worktree. `--literal-pathspecs` hardens the path
-  // operand (mirrors slice.ts); any git error -> EXIT_FAILURE + a §2.4 machine error.
+  // 7. create the engine-local worktree. A `--` separates options from the two
+  // positional operands (`<path> <commit-ish>`) so an option-like `base` (e.g. a
+  // config `base_branch` beginning with `-`) can never be misparsed as a git option
+  // — `git worktree add`'s operands are NOT pathspecs, so `--literal-pathspecs`
+  // would give them no protection; the `--` does (base is also rejected up front in
+  // resolveParentAndBase). Any git error -> EXIT_FAILURE + a §2.4 machine error.
   try {
-    runGit(deps, ['--literal-pathspecs', 'worktree', 'add', '-b', branch, wtPath, base], 'worktree-add');
+    runGit(deps, ['worktree', 'add', '-b', branch, '--', wtPath, base], 'worktree-add');
     return { exitCode: EXIT_OK, mode: 'dedicated', worktree: wtPath, branch };
   } catch (error) {
     if (error instanceof GitStepError) {

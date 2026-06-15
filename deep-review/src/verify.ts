@@ -95,9 +95,12 @@ export function runFinalVerify(deps: VerifyDeps): VerifyResult {
   // Exit 0 -> the refactor is clear to proceed to handoff.
   if (result.status === 0) return { exitCode: EXIT_OK };
 
-  // A failed spawn (status null: missing / non-executable shim, ENOENT) is a TOOL
-  // failure, not a verify verdict -> fail closed with a §2.4 machine error naming
-  // step "verify".
+  // A null status (the shim never produced an exit code) is a TOOL failure, not a
+  // verify verdict -> fail closed with a §2.4 machine error naming step "verify".
+  // The cause is left unasserted: spawnSync returns a null status for a missing /
+  // non-executable shim (ENOENT/EACCES) AND for a shim that ran then was killed by a
+  // signal or exceeded its output buffer — naming only "missing shim" would
+  // mislabel the latter. `stderr_tail` carries whatever diagnostic git/the OS gave.
   if (result.status === null) {
     const command = `${entry} ${deps.scope}`;
     return {
@@ -105,7 +108,7 @@ export function runFinalVerify(deps: VerifyDeps): VerifyResult {
       machineError: {
         command,
         step: 'verify',
-        message: `${command} failed to spawn (missing or non-executable verify shim)`,
+        message: `${command} did not return an exit code (verify shim missing or non-executable, or the process was killed by a signal / exceeded its output buffer)`,
         stderr_tail: tailOf(result.stderr),
       },
     };
