@@ -1,20 +1,33 @@
-// The real secret-scan adapter behind the frozen `scanPrBody: (body) => string | null`
-// seam (null = clean, non-null = a hit description). deep-review's report path
-// (report.ts) uses it to scan a PR body before that body is emitted.
+// The real secret-scan adapter behind the `scanPrBody: (body) => SecretScanResult` seam.
+// deep-review's report path (report.ts) uses it to scan a PR body before that body is emitted.
 //
 // OWNER DECISION (S15): the scanner is wired by CONVENTION on the adopting repo's
 // pinned gitleaks wrapper at `<root>/tools/run-gitleaks` — resolved at CALL time, so
-// each invocation resolves its own repo/worktree root. Where no wrapper exists
-// (dev-standards itself, every fixture repo) the scanner resolves to a NO-OP —
-// treated as clean. There is no doctor probe in deep-review; a missing wrapper is
-// simply a silent no-op-clean.
+// each invocation resolves its own repo/worktree root.
+//
+// Exit-code classification (Phase 5 §0, DR-12) — three honest states, no fail-open/collapse:
+//   - wrapper absent or non-executable         -> `unavailable` (WAS fail-OPEN null = clean);
+//   - wrapper exit 0                            -> `clean`;
+//   - wrapper exit 1 (gitleaks "leaks found")  -> `hit`;
+//   - anything else (spawn ENOENT / 126 / 127 / kill / timeout / any other exit code)
+//                                              -> `unavailable` with a reason (WAS collapsed into
+//                                                 `hit` for every non-zero status).
+// `unavailable` is fail-CLOSED upstream: report.ts refuses to emit a report it could not scan.
+// Only an affirmative `clean` lets content through; only `hit` names an actual leak.
 //
 // Spawn convention: a default real spawnSync wrapper with shell:false and a FIXED
-// argv, injectable for tests, with a bounded timeout.
+// argv, injectable for tests, with a bounded timeout (the 30s cap, tightened to the run
+// deadline's remaining budget when one is threaded in).
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
+import type { Deadline } from './deadline.ts';
+// SecretScanResult (§0) is declared as a serialization boundary in types.ts (the producer here and
+// the consumers in report.ts/W4 agree on ONE shape); re-exported so callers can keep importing it
+// from the producer module.
+import type { SecretScanResult } from './types.ts';
+export type { SecretScanResult };
 
 // Bounded wrapper timeout. The scanned content is small (a PR body / an archive
 // entry), so 30s is generous headroom.
@@ -87,6 +100,10 @@ export interface SecretScannerDeps {
   fileExists?: (filePath: string) => boolean;
   statMode?: (filePath: string) => number | null;
   timeoutMs?: number;
+  // The run deadline (§0), when threaded in: the spawn timeout is tightened to
+  // `min(timeoutMs cap, deadline.remainingMs())`, and an already-spent budget short-circuits to
+  // `unavailable` with no spawn. Omitted -> the fixed cap applies (the review-only path).
+  deadline?: Deadline;
 }
 
 export interface ScannerResolution {
@@ -140,12 +157,13 @@ function tail(text: string): string {
   return trimmed.length > OUTPUT_TAIL_MAX ? trimmed.slice(-OUTPUT_TAIL_MAX) : trimmed;
 }
 
-// Builds the frozen seam closure `(body) => string | null`. Resolution happens at
-// CALL time; deps are injectable for tests.
-export function createSecretScanner(deps: SecretScannerDeps = {}): (body: string) => string | null {
+// Builds the seam closure `(body) => SecretScanResult`. Resolution happens at CALL time; deps are
+// injectable for tests.
+export function createSecretScanner(deps: SecretScannerDeps = {}): (body: string) => SecretScanResult {
   const spawn = deps.spawn ?? realSecretScanSpawn;
   const cwd = deps.cwd ?? (() => process.cwd());
-  const timeout = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const cap = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = deps.deadline;
   // Hold the fs probes as one resolved deps object instead of unpacking then
   // re-packing them at each call site (behavior-preserving tidy, FIX 4).
   const fsDeps = {
@@ -153,12 +171,25 @@ export function createSecretScanner(deps: SecretScannerDeps = {}): (body: string
     statMode: deps.statMode ?? defaultStatMode,
   };
 
-  return (body: string): string | null => {
+  return (body: string): SecretScanResult => {
     const root = cwd();
     const resolution = resolveScanner(root, fsDeps);
-    // No wrapper wired (dev-standards / every fixture repo), or a present-but-non-
-    // executable file: resolve to a NO-OP (treated as clean).
-    if (!resolution.present || !resolution.executable) return null;
+    // No wrapper wired, or a present-but-non-executable file: the scan cannot run, so the
+    // verdict is `unavailable` (fail-CLOSED) — NOT the old fail-open "clean".
+    if (!resolution.present || !resolution.executable) {
+      return {
+        status: 'unavailable',
+        reason: `gitleaks wrapper ${resolution.present ? 'is not executable' : 'not found'} at ${resolution.path}`,
+      };
+    }
+
+    // Tighten the spawn timeout to the run deadline when one is threaded in; a spent budget
+    // short-circuits to `unavailable` with no spawn (a positive timeout is required — spawnSync
+    // treats 0 as "no timeout").
+    if (deadline !== undefined && deadline.remainingMs() <= 0) {
+      return { status: 'unavailable', reason: 'deadline exceeded before secret scan' };
+    }
+    const timeout = deadline === undefined ? cap : Math.min(cap, deadline.remainingMs());
 
     // FIX 3: spawn at `cwd: root` and, if the adopting repo ships a custom
     // `<root>/.gitleaks.toml`, pass it explicitly via `-c` so its rules apply to
@@ -174,19 +205,24 @@ export function createSecretScanner(deps: SecretScannerDeps = {}): (body: string
       cwd: root,
     });
 
-    // FAIL-CLOSED interpretation: only a clean exit 0 is a "pass" (null). A spawn
-    // error (ENOENT / timeout) OR any non-zero status is treated as a HIT. The pinned
-    // wrapper itself exits non-zero on version-mismatch / missing-binary as well as on
-    // a real finding, so "every non-zero == hit" is deliberate — blocking a ship (and
-    // skipping an archive) is the safe default; only an affirmative clean signal lets
-    // content through.
+    // A spawn fault (ENOENT / timeout / EACCES) means the scan never produced a verdict:
+    // `unavailable`, never a hit.
     if (result.error !== undefined) {
-      return `secret scan could not run (fail-closed): ${result.error.message}`;
+      return { status: 'unavailable', reason: `secret scan could not run: ${result.error.message}` };
     }
-    if (result.status !== 0) {
+    // exit 0 = clean; exit 1 = the ONLY hit signal (gitleaks "leaks found"). A null status (signal
+    // kill) or ANY other exit code (2 / 126 / 127 / version-mismatch / missing binary) is
+    // operational -> `unavailable`, no longer silently treated as a hit.
+    if (result.status === 0) return { status: 'clean' };
+    if (result.status === 1) {
       const detail = tail(result.stderr) || tail(result.stdout);
-      return `gitleaks flagged the PR content (exit ${result.status})${detail === '' ? '' : `: ${detail}`}`;
+      return { status: 'hit', findings: detail === '' ? 'gitleaks reported a leak (exit 1)' : detail };
     }
-    return null;
+    const detail = tail(result.stderr) || tail(result.stdout);
+    const code = result.status === null ? 'killed (no exit code)' : `exit ${result.status}`;
+    return {
+      status: 'unavailable',
+      reason: `secret scan did not produce a verdict (${code})${detail === '' ? '' : `: ${detail}`}`,
+    };
   };
 }

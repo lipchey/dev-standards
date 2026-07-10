@@ -9,12 +9,17 @@
 // not "downgraded" to needs-plan. This precedence is deliberate; do not simplify
 // it away.
 //
-// Pure: `classifyFinding` is a total function of (finding, isNoTouchFn);
-// `classifyAll` builds the no-touch predicate from the engine's set and maps it
-// over the file, skipping any finding findings-io already marked `invalid`.
+// `classifyFinding` is a total function of (finding, isNoTouchFn). `classifyAll`
+// re-derives every NON-protected finding idempotently and resets `infra-blocked`
+// to `pending` (the retry path); a PROTECTED status (a landed fix, a red-test
+// failure, an unsafe-path rejection) is a verdict and is never re-derived.
+// `classifyAndBind` wraps classify + the unbound→bound transition in ONE CAS write.
 
-import type { Classification, FindingRecord, FindingStatus, FindingsFile } from './types.ts';
+import type { Classification, FindingRecord, FindingStatus, FindingsFileV2 } from './types.ts';
+import { PROTECTED_STATUSES } from './types.ts';
 import { isNoTouch } from './no-touch.ts';
+import { mutateFindings } from './findings-io.ts';
+import type { MutateFindingsDeps } from './findings-io.ts';
 
 // Routes a single finding. Precedence: no-touch (wins, even over needs_plan) →
 // needs-plan → fixable-now. The `isNoTouchFn` seam is the only effectful input,
@@ -36,16 +41,57 @@ export function classifyFinding(
   return { classification: 'fixable-now', status: 'pending' };
 }
 
-// Classifies every finding in the file against the §2.5 no-touch `set`. A finding
-// already `status: "invalid"` (an unsafe path localized by findings-io) is left
-// untouched — its `status` and `classification` carry that verdict forward. All
-// other fields are preserved; a new file object is returned (input not mutated).
-export function classifyAll(findingsFile: FindingsFile, set: string[]): FindingsFile {
+// Classifies every finding against the §2.5 no-touch `set`. A PROTECTED status
+// (`fixed`/`fix-failed`/`invalid`) is a verdict and is carried forward untouched;
+// every other finding is re-derived idempotently, which also resets an
+// `infra-blocked` finding back to `pending` (a retry) and drops its stale
+// `infra_error`. A new file object is returned (input not mutated).
+export function classifyAll(findingsFile: FindingsFileV2, set: string[]): FindingsFileV2 {
   const isNoTouchFn = (relPath: string): boolean => isNoTouch(relPath, set);
   const findings = findingsFile.findings.map((finding): FindingRecord => {
-    if (finding.status === 'invalid') return finding;
+    if (PROTECTED_STATUSES.includes(finding.status)) return finding;
     const { classification, status } = classifyFinding(finding, isNoTouchFn);
-    return { ...finding, classification, status };
+    // A re-derived finding (incl. a reset infra-blocked) leaves infra-blocked, so
+    // its infra_error no longer applies — drop it.
+    const { infra_error: _cleared, ...rest } = finding;
+    return { ...rest, classification, status };
   });
   return { ...findingsFile, findings };
+}
+
+// The confinement root + the run descriptor the classify verb needs. A structural
+// subset of the vertical's DeepReviewContext (W2), so the CLI can pass that ctx
+// straight through.
+export interface ClassifyContext {
+  reportsRootAbs: string;
+  descriptor: { run_id: string; base_sha: string } | null;
+}
+
+// Classifies AND binds in one CAS write (the sole findings mutator). When the file
+// is an unbound draft (`run_id === null`) and cwd is a run worktree (a descriptor
+// is present), the run_id + base_sha are pinned in the SAME write — closing the
+// gap where an unbound file had no path to a verified run. review-only (no
+// descriptor) stays unbound.
+export function classifyAndBind(
+  findingsPath: string,
+  ctx: ClassifyContext,
+  set: string[],
+  deps?: MutateFindingsDeps,
+): FindingsFileV2 {
+  return mutateFindings(
+    findingsPath,
+    ctx,
+    (file) => {
+      const classified = classifyAll(file, set);
+      if (classified.run_id === null && ctx.descriptor !== null) {
+        return {
+          ...classified,
+          run_id: ctx.descriptor.run_id,
+          base_sha: ctx.descriptor.base_sha,
+        };
+      }
+      return classified;
+    },
+    deps,
+  );
 }

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { expandArgv, runCheck } from '../../runner/src/exec.ts';
+import { expandArgv, runCheck, runProcess } from '../../runner/src/exec.ts';
 import type { RunCheckInput } from '../../runner/src/exec.ts';
 import { isBlockingResult } from '../../runner/src/verify-runner.ts';
 import type { Check } from '../../runner/src/types.ts';
@@ -205,6 +205,74 @@ test('control: the grandchild marker really writes when the check is not killed 
     assert.equal(result.status, 'pass');
     await delay(200);
     assert.equal(fs.existsSync(marker), true, 'grandchild should have written its marker when not killed');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── runProcess (§0): the generic deadline-bounded executor the deep-review verbs consume ──
+// Shares spawnGroup's detached-group + SIGKILL + reap mechanic with runCheck, but captures
+// stdout/stderr and classifies into ok/red/operational (operational must NEVER read as red).
+
+test('runProcess: a clean exit 0 is kind "ok" with exitCode 0 and captured stdout', () => {
+  const result = runProcess({ argv: [process.execPath, stub('ok.mjs')], cwd: process.cwd(), timeoutMs: 30_000 });
+  assert.equal(result.kind, 'ok');
+  assert.equal(result.exitCode, 0);
+});
+
+test('runProcess: a non-zero exit is kind "red" (a genuine failure), exitCode preserved', () => {
+  const result = runProcess({ argv: [process.execPath, stub('fail.mjs')], cwd: process.cwd(), timeoutMs: 30_000 });
+  assert.equal(result.kind, 'red');
+  assert.equal(result.exitCode, 1);
+});
+
+test('runProcess: timeoutMs <= 0 is "operational" WITHOUT spawning (pre-spawn checkpoint)', () => {
+  // A brand-new file the process WOULD create if it ran; its absence proves no spawn happened.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-runproc-'));
+  try {
+    const marker = path.join(dir, 'ran');
+    const script = path.join(dir, 'write.mjs');
+    fs.writeFileSync(script, `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(marker)}, 'x');\n`);
+    const result = runProcess({ argv: [process.execPath, script], cwd: process.cwd(), timeoutMs: 0 });
+    assert.equal(result.kind, 'operational');
+    assert.equal(result.exitCode, null);
+    assert.equal(fs.existsSync(marker), false, 'a spent budget must NOT spawn the process');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runProcess: a timeout is "operational" (never "red"), exitCode null', () => {
+  const result = runProcess({
+    argv: [process.execPath, stub('sleep.mjs'), '5'],
+    cwd: process.cwd(),
+    timeoutMs: 200,
+  });
+  assert.equal(result.kind, 'operational');
+  assert.notEqual(result.kind, 'red');
+  assert.equal(result.exitCode, null);
+});
+
+test('runProcess: a spawn fault (ENOENT) is "operational" (a missing tool never reads as a red test)', () => {
+  const result = runProcess({ argv: ['this-binary-does-not-exist-xyz'], cwd: process.cwd(), timeoutMs: 30_000 });
+  assert.equal(result.kind, 'operational');
+  assert.equal(result.exitCode, null);
+  assert.ok(result.stderrTail.length > 0, 'operational result carries a reason tail');
+});
+
+test('runProcess: a timeout SIGKILLs the whole detached group — no grandchild survives (RUN-01)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-runproc-kill-'));
+  try {
+    const marker = path.join(dir, 'marker');
+    // Grandchild would write at ~2s; runProcess kills at 1s; child hangs 60s ignoring SIGTERM.
+    const result = runProcess({
+      argv: [process.execPath, writeGroupStub(dir), marker, '2000', '60000'],
+      cwd: process.cwd(),
+      timeoutMs: 1000,
+    });
+    assert.equal(result.kind, 'operational');
+    await delay(2000);
+    assert.equal(fs.existsSync(marker), false, 'grandchild survived — process group was not reaped');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

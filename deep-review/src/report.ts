@@ -10,20 +10,16 @@
 // (findings-io validates path safety + structure, but does NOT strip newlines
 // from free-text title/impact). The secret scan is a best-effort SECOND layer.
 //
-// `writeReport` renders the body, then runs an injected secret scanner over the
-// rendered string; a hit ABORTS (EXIT_FAILURE + a §2.4 MachineError naming step
-// "secret-scan") and the file is NOT written. Only on a clean scan is the file
-// written, via the injected write seam, to <reportsDir>/deep-review-<date>.md.
-// All effects (now/scanner/fs-write) live behind injected deps; the renderer is
-// pure. The default scanner is `createSecretScanner` (./secret-scan.ts), which is
-// a NO-OP returning clean where no `<root>/tools/run-gitleaks` wrapper exists —
-// true of dev-standards and every fixture repo.
+// The secret scan is run by the CLI edge (W4) over the rendered body and INJECTED
+// here as a SecretScanResult; `writeReport` does not run it. `unavailable` aborts
+// fail-closed (EXIT_SCANNER_UNAVAILABLE, file NOT written), `hit` aborts as a
+// finding (EXIT_FAILURE, file NOT written), `clean` writes the report via the
+// confined atomic writer to <reportsDir>/deep-review-<date>.md.
 
-import path from 'node:path';
-import { writeFileSync } from 'node:fs';
-import { EXIT_OK, EXIT_FAILURE } from './types.ts';
-import type { FindingRecord, FindingsFile, FindingStatus, MachineError } from './types.ts';
-import { createSecretScanner } from './secret-scan.ts';
+import { EXIT_OK, EXIT_FAILURE, EXIT_SCANNER_UNAVAILABLE } from './types.ts';
+import type { FindingRecord, FindingsFileV2, FindingStatus, MachineError, SecretScanResult } from './types.ts';
+import { HANDOFF_BLOCKING_STATUSES } from './types.ts';
+import { writeConfined } from '../../runner/src/report.ts';
 
 // ── Metadata-only field rendering ────────────────────────────────────────────
 
@@ -83,43 +79,51 @@ function byStatus(findings: FindingRecord[], status: FindingStatus): FindingReco
 }
 
 // Builds the deep-review markdown report from finding METADATA ONLY. Pure: no
-// effects, deterministic for a given findings file. Groups findings into Fixed
-// (with SHAs) and the three rejected buckets — No-touch, Needs-plan, Fix-failed —
-// whose one-line plan IS the title/impact bullet. Empty / all-rejected files
-// still render a valid (non-crashing) report.
-export function renderReport(findingsFile: FindingsFile): string {
+// effects, deterministic for a given findings file. Every lifecycle bucket renders
+// its own section (Fixed carries SHAs; the rest carry their one-line title/impact
+// plan). When any finding is still in a HANDOFF_BLOCKING status (pending /
+// infra-blocked) the report opens with an INCOMPLETE marker naming the count.
+export function renderReport(findingsFile: FindingsFileV2): string {
   const { findings } = findingsFile;
-  const sections = [
+  const blocking = findings.filter((f) => HANDOFF_BLOCKING_STATUSES.includes(f.status)).length;
+
+  const parts: string[] = [];
+  if (blocking > 0) {
+    parts.push(`> INCOMPLETE: ${blocking} findings not terminal`);
+  }
+  parts.push(
     `# Deep-Review Report`,
     `- Mode: ${collapseToSingleLine(findingsFile.mode)}`,
     `- Generated: ${collapseToSingleLine(findingsFile.generated_at)}`,
     section('Fixed', byStatus(findings, 'fixed'), true),
+    section('Pending', byStatus(findings, 'pending'), false),
+    section('Infra-blocked', byStatus(findings, 'infra-blocked'), false),
+    section('Fix-failed', byStatus(findings, 'fix-failed'), false),
     section('No-touch', byStatus(findings, 'no-touch'), false),
     section('Needs-plan', byStatus(findings, 'needs-plan'), false),
-    section('Fix-failed', byStatus(findings, 'fix-failed'), false),
-  ];
-  return `${sections.join('\n\n')}\n`;
+    section('Invalid', byStatus(findings, 'invalid'), false),
+  );
+  return `${parts.join('\n\n')}\n`;
 }
 
 // ── Write seam ───────────────────────────────────────────────────────────────
 
 // The injected effects for `writeReport`. `reportsDir` is the manifest's
-// `paths.reports` (the CLI resolves it against the repo root); `writeFile` is the
-// fs-write seam; `now` (default `() => new Date()`) yields the report date; `scan`
-// (default `createSecretScanner()`, a no-op-clean where no tools/run-gitleaks
-// wrapper exists) is the best-effort second-layer secret scanner over the
-// rendered body. `now`/`scan` are OPTIONAL (defaulted) so a caller can wire only
-// the destination + writer; the CLI overrides `scan` to pin the repo-root cwd.
+// `paths.reports` (the CLI resolves it against the repo root). `scanResult` is the
+// secret scan of the rendered body, already run by the CLI edge. `now` (default
+// `() => new Date()`) yields the report date; `write` (default `writeConfined`)
+// performs the confined atomic write and returns the absolute path.
 export interface WriteReportDeps {
   reportsDir: string;
-  writeFile: (filePath: string, content: string) => void;
+  scanResult: SecretScanResult;
   now?: () => Date;
-  scan?: (body: string) => string | null;
+  write?: (rootDir: string, relPath: string, content: string) => string;
 }
 
 // What `writeReport` returns at the command edge: an exit code, plus EITHER the
-// written path (success) OR a §2.4 MachineError (a secret-scan hit). Both are
-// OMITTED (never undefined) under exactOptionalPropertyTypes when not applicable.
+// written path (success) OR a §2.4 MachineError (a secret-scan hit or an
+// unavailable scanner). Both are OMITTED (never undefined) under
+// exactOptionalPropertyTypes when not applicable.
 export interface ReportResult {
   exitCode: number;
   machineError?: MachineError;
@@ -133,43 +137,36 @@ function reportDate(now: () => Date): string {
   return now().toISOString().slice(0, 10);
 }
 
-// Renders the report, secret-scans the rendered body, and writes it on a clean
-// scan. A scan HIT aborts: the file is NOT written and a §2.4 MachineError naming
-// step "secret-scan" is returned with EXIT_FAILURE. The metadata-only renderer is
-// the primary guarantee; this scan is the best-effort second layer.
-export function writeReport(findingsFile: FindingsFile, deps: WriteReportDeps): ReportResult {
+// Guards the injected scan result, then writes the metadata-only report on a clean
+// scan. `unavailable` → EXIT_SCANNER_UNAVAILABLE (fail-closed: a scanner that could
+// not run must NOT let content through). `hit` → EXIT_FAILURE. Both abort BEFORE
+// any write. `clean` → render + confined atomic write to
+// <reportsDir>/deep-review-<date>.md, returning the written path.
+export function writeReport(findingsFile: FindingsFileV2, deps: WriteReportDeps): ReportResult {
   const now = deps.now ?? (() => new Date());
-  const scan = deps.scan ?? createSecretScanner();
+  const write = deps.write ?? writeConfined;
+  const { scanResult } = deps;
 
-  const body = renderReport(findingsFile);
-  const filePath = path.join(deps.reportsDir, `deep-review-${reportDate(now)}.md`);
-
-  const hit = scan(body);
-  if (hit !== null) {
+  if (scanResult.status === 'unavailable') {
+    const machineError: MachineError = {
+      command: 'deep-review report',
+      step: 'secret-scan',
+      message: 'secret scanner unavailable; refusing to write report (fail-closed)',
+      stderr_tail: scanResult.reason,
+    };
+    return { exitCode: EXIT_SCANNER_UNAVAILABLE, machineError };
+  }
+  if (scanResult.status === 'hit') {
     const machineError: MachineError = {
       command: 'deep-review report',
       step: 'secret-scan',
       message: 'secret scan flagged the rendered report; refusing to write',
-      stderr_tail: hit,
+      stderr_tail: scanResult.findings,
     };
     return { exitCode: EXIT_FAILURE, machineError };
   }
 
-  deps.writeFile(filePath, body);
+  const body = renderReport(findingsFile);
+  const filePath = write(deps.reportsDir, `deep-review-${reportDate(now)}.md`, body);
   return { exitCode: EXIT_OK, path: filePath };
-}
-
-// The production deps: the report date from the real clock, the secret scanner
-// pinned to the repo-root `cwd` (so it resolves `<root>/tools/run-gitleaks` and a
-// custom `<root>/.gitleaks.toml` deterministically — no-op-clean where neither
-// exists), and a real fs write. Mirrors slice.ts `realSliceDeps`.
-export function realReportDeps(cwd: string, reportsDir: string): WriteReportDeps {
-  return {
-    reportsDir,
-    now: () => new Date(),
-    scan: createSecretScanner({ cwd: () => cwd }),
-    writeFile: (filePath, content) => {
-      writeFileSync(filePath, content);
-    },
-  };
 }

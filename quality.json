@@ -67,6 +67,11 @@
         "name": "runner-build",
         "argv": ["npm", "run", "build"],
         "timeout_seconds": 60
+      },
+      {
+        "name": "deep-review-e2e",
+        "argv": ["npm", "run", "test:e2e"],
+        "timeout_seconds": 45
       }
     ],
     "audit": []

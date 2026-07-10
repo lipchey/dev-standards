@@ -5,6 +5,8 @@ import {
   parseNoTouchAdditions,
   buildNoTouchSet,
   isNoTouch,
+  NoTouchSourceError,
+  selfProtectedPaths,
 } from '../../deep-review/src/no-touch.ts';
 
 // ── Test doubles ─────────────────────────────────────────────────────────────
@@ -125,4 +127,218 @@ Sensitive globs like \`secret/**\` and \`private/**\` must never be auto-edited.
 - \`.agents/**\`
 `;
   assert.deepEqual(parseNoTouchAdditions(withProse), ['.agents/**']);
+});
+
+// ── mode + repoRootAbs confinement (fix-mode hardening) ─────────────────────
+
+const REPO_ROOT = '/repo';
+const identityRealpath = (p: string): string => p;
+
+test('fix mode + missing no_touch_globs_ref -> throws NoTouchSourceError (never warns)', () => {
+  const h = harness({}); // empty store -> readFile throws ENOENT
+  assert.throws(
+    () =>
+      buildNoTouchSet({
+        readFile: h.readFile,
+        warn: h.warn,
+        mode: 'fix',
+        repoRootAbs: REPO_ROOT,
+        realpath: identityRealpath,
+      }),
+    NoTouchSourceError,
+  );
+  assert.deepEqual(h.warnings, [], 'fix mode must throw instead of warning');
+});
+
+test('fix mode + unparseable no_touch_globs_ref (readFile throws a non-ENOENT read error) -> throws NoTouchSourceError', () => {
+  const warnings: string[] = [];
+  const readFile = (_p: string): string => {
+    throw new Error('invalid encoding: not valid UTF-8');
+  };
+  assert.throws(
+    () =>
+      buildNoTouchSet({
+        readFile,
+        warn: (m) => warnings.push(m),
+        mode: 'fix',
+        repoRootAbs: REPO_ROOT,
+        realpath: identityRealpath,
+      }),
+    NoTouchSourceError,
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test('review-only mode (explicit) + missing no_touch_globs_ref -> baseline, warns, never throws', () => {
+  const h = harness({});
+  let set: string[] = [];
+  assert.doesNotThrow(() => {
+    set = buildNoTouchSet({
+      readFile: h.readFile,
+      warn: h.warn,
+      mode: 'review-only',
+      repoRootAbs: REPO_ROOT,
+      realpath: identityRealpath,
+    });
+  });
+  assert.deepEqual(set, [...NO_TOUCH_BASELINE]);
+  assert.equal(h.warnings.length, 1);
+});
+
+test('a no_touch_globs_ref that resolves outside repoRootAbs -> throws NoTouchSourceError in EITHER mode', () => {
+  const h = harness({ [DEFAULT_REF]: PROJECT_FACTS });
+  const escapingRealpath = (_p: string): string => '/outside/etc/passwd';
+
+  for (const mode of ['review-only', 'fix'] as const) {
+    assert.throws(
+      () =>
+        buildNoTouchSet({
+          readFile: h.readFile,
+          warn: h.warn,
+          mode,
+          repoRootAbs: REPO_ROOT,
+          realpath: escapingRealpath,
+        }),
+      NoTouchSourceError,
+      `mode ${mode} must throw on escape`,
+    );
+  }
+});
+
+test('a realpath dep that throws (ref target does not exist) is NOT treated as an escape -- falls through to missing/unreadable handling', () => {
+  const h = harness({}); // empty store -> readFile also throws
+  const throwingRealpath = (_p: string): string => {
+    throw new Error('ENOENT: no such file or directory');
+  };
+  let set: string[] = [];
+  assert.doesNotThrow(() => {
+    set = buildNoTouchSet({
+      readFile: h.readFile,
+      warn: h.warn,
+      mode: 'review-only',
+      repoRootAbs: REPO_ROOT,
+      realpath: throwingRealpath,
+    });
+  });
+  assert.deepEqual(set, [...NO_TOUCH_BASELINE]);
+});
+
+// ── §G7 lexical escape precedes realpath; symlinked-ancestor escape ──────────────
+
+test('G7: a lexical ../ escape with a NONEXISTENT target throws NoTouchSourceError in BOTH modes (existence-independent)', () => {
+  const h = harness({}); // empty store: the target does not exist
+  const missingRealpath = (_p: string): string => {
+    throw new Error('ENOENT: no such file or directory');
+  };
+  for (const mode of ['review-only', 'fix'] as const) {
+    assert.throws(
+      () =>
+        buildNoTouchSet({
+          noTouchGlobsRef: '../escape.md',
+          readFile: h.readFile,
+          warn: h.warn,
+          mode,
+          repoRootAbs: REPO_ROOT,
+          realpath: missingRealpath,
+        }),
+      NoTouchSourceError,
+      `mode ${mode} must reject a lexical ../ escape even when the target is missing`,
+    );
+  }
+  assert.deepEqual(h.warnings, [], 'a lexical escape throws, never warns');
+});
+
+test('G7: a ref whose deepest EXISTING ancestor realpaths OUTSIDE the repo (symlinked dir) throws, even with a missing leaf', () => {
+  const h = harness({}); // the leaf itself does not exist
+  // The leaf is missing (realpath throws), but its parent `.agents` is a symlink resolving out of
+  // the repo; the deepest-existing-ancestor realpath must catch the escape.
+  const realpath = (p: string): string => {
+    if (p === REPO_ROOT) return REPO_ROOT;
+    if (p === `${REPO_ROOT}/.agents`) return '/outside/agents';
+    throw new Error('ENOENT');
+  };
+  assert.throws(
+    () =>
+      buildNoTouchSet({
+        noTouchGlobsRef: '.agents/project-facts.md',
+        readFile: h.readFile,
+        warn: h.warn,
+        mode: 'review-only',
+        repoRootAbs: REPO_ROOT,
+        realpath,
+      }),
+    NoTouchSourceError,
+  );
+});
+
+test('G7: a legitimate MISSING in-root ref (no escape) falls through to the mode-gated fallback (warn / throw could-not-read)', () => {
+  const h = harness({}); // in-root ref, but the file is missing
+  const realpath = (p: string): string => {
+    if (p === REPO_ROOT) return REPO_ROOT; // the root resolves; the leaf and `.agents` do not
+    throw new Error('ENOENT');
+  };
+  // review-only: warn + baseline (never throws for a missing in-root ref).
+  let set: string[] = [];
+  assert.doesNotThrow(() => {
+    set = buildNoTouchSet({
+      readFile: h.readFile,
+      warn: h.warn,
+      mode: 'review-only',
+      repoRootAbs: REPO_ROOT,
+      realpath,
+    });
+  });
+  assert.deepEqual(set, [...NO_TOUCH_BASELINE]);
+  assert.equal(h.warnings.length, 1);
+  // fix: the same missing in-root ref throws could-not-read (NOT an escape).
+  assert.throws(
+    () =>
+      buildNoTouchSet({
+        readFile: h.readFile,
+        warn: h.warn,
+        mode: 'fix',
+        repoRootAbs: REPO_ROOT,
+        realpath,
+      }),
+    NoTouchSourceError,
+  );
+});
+
+test('omitting repoRootAbs/realpath (legacy call site) skips confinement entirely -- unchanged pre-existing behavior', () => {
+  const h = harness({ [DEFAULT_REF]: PROJECT_FACTS });
+  const set = buildNoTouchSet({ readFile: h.readFile, warn: h.warn });
+  assert.equal(isNoTouch('.agents/x', set), true);
+});
+
+test('fix mode WITHOUT repoRootAbs/realpath -> throws NoTouchSourceError (confinement is mandatory when failing closed)', () => {
+  const h = harness({ [DEFAULT_REF]: PROJECT_FACTS });
+  assert.throws(
+    () => buildNoTouchSet({ readFile: h.readFile, warn: h.warn, mode: 'fix' }),
+    NoTouchSourceError,
+  );
+  assert.deepEqual(h.warnings, [], 'must throw, not warn');
+});
+
+// ── §F4 self-protected policy inputs (quality.json + the no-touch source file) ──
+
+test('F4: selfProtectedPaths returns quality.json + the resolved no-touch source (default / custom / fragment-stripped)', () => {
+  assert.deepEqual(selfProtectedPaths(), ['quality.json', DEFAULT_REF]);
+  assert.deepEqual(selfProtectedPaths(''), ['quality.json', DEFAULT_REF]);
+  assert.deepEqual(selfProtectedPaths('docs/facts.md'), ['quality.json', 'docs/facts.md']);
+  assert.deepEqual(selfProtectedPaths('docs/facts.md#no-touch-zones'), ['quality.json', 'docs/facts.md']);
+});
+
+test('G2: selfProtectedPaths canonicalizes the ref (./ and docs/../ spellings) so it matches the canonical slice path', () => {
+  assert.deepEqual(selfProtectedPaths('./.agents/project-facts.md'), ['quality.json', DEFAULT_REF]);
+  assert.deepEqual(selfProtectedPaths('docs/../.agents/project-facts.md'), ['quality.json', DEFAULT_REF]);
+  assert.deepEqual(selfProtectedPaths('./.agents/project-facts.md#no-touch-zones'), ['quality.json', DEFAULT_REF]);
+  // The canonicalized ref actually matches a slice targeting it (a literal `./…` would not).
+  const set = [...NO_TOUCH_BASELINE, ...selfProtectedPaths('./.agents/project-facts.md')];
+  assert.equal(isNoTouch('.agents/project-facts.md', set), true, 'canonical ref matches the canonical slice path');
+});
+
+test('F4: the self-protected paths match as no-touch (a fix slice can never target quality.json or the project-facts source)', () => {
+  const set = [...NO_TOUCH_BASELINE, ...selfProtectedPaths()];
+  assert.equal(isNoTouch('quality.json', set), true, 'the manifest is no-touch in fix mode');
+  assert.equal(isNoTouch('.agents/project-facts.md', set), true, 'the no-touch source file is no-touch in fix mode');
 });

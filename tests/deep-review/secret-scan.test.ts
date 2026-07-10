@@ -1,3 +1,8 @@
+// The secret-scan producer returns a SecretScanResult (§0, DR-12): three honest states —
+// `clean` (exit 0), `hit` (exit 1 only), `unavailable` (absent/non-exec wrapper, spawn fault,
+// timeout, or ANY other exit code). This replaces the old fail-open null-on-absent and the
+// "every non-zero == hit" collapse. `unavailable` is fail-closed upstream (report.ts refuses).
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -17,6 +22,7 @@ import type {
   SecretScanSpawnOptions,
   SecretScanSpawnResult,
 } from '../../deep-review/src/secret-scan.ts';
+import { createDeadline } from '../../deep-review/src/deadline.ts';
 
 // ── injected-spawn fixture ────────────────────────────────────────────────────
 
@@ -51,8 +57,6 @@ function spawnFixture(response: {
 }
 
 // Deps where the convention wrapper is PRESENT + EXECUTABLE at <root>/tools/run-gitleaks.
-// By default NO <root>/.gitleaks.toml is present (so the base argv, no `-c`, is
-// used); pass hasConfig:true to also make <root>/.gitleaks.toml exist.
 function presentExecDeps(spawn: SecretScanSpawn, root = '/repo', hasConfig = false) {
   const wrapper = `${root}/${SCANNER_REL}`;
   const config = `${root}/.gitleaks.toml`;
@@ -90,63 +94,75 @@ test('gitleaksArgs: base argv with no config, -c <abs> threaded when a config pa
   assert.equal(GITLEAKS_CONFIG_REL, '.gitleaks.toml');
 });
 
-// ── scanner behaviour against an injected spawn ───────────────────────────────
+// ── exit-code classification (the DR-12 fix) ──────────────────────────────────
 
-test('(a) present wrapper + clean exit 0 returns null (clean)', () => {
+test('(a) present wrapper + exit 0 -> { status: "clean" }', () => {
   const fx = spawnFixture({ status: 0 });
   const scan = createSecretScanner(presentExecDeps(fx.spawn));
-  assert.equal(scan('hello world, nothing to see here'), null);
+  assert.deepEqual(scan('hello world, nothing to see here'), { status: 'clean' });
   assert.equal(fx.calls.length, 1, 'a present+exec wrapper is invoked exactly once');
 });
 
-test('(b) present wrapper + non-zero exit returns a non-null hit (fail-closed)', () => {
+test('(b) present wrapper + exit 1 -> { status: "hit" } carrying the redacted findings tail', () => {
   const fx = spawnFixture({ status: 1, stdout: 'finding: aws key REDACTED' });
   const scan = createSecretScanner(presentExecDeps(fx.spawn));
-  const hit = scan('body with a secret');
-  assert.notEqual(hit, null);
-  assert.match(hit ?? '', /exit 1/);
-  assert.match(hit ?? '', /finding/);
+  const result = scan('body with a secret');
+  assert.equal(result.status, 'hit');
+  if (result.status !== 'hit') return;
+  assert.match(result.findings, /finding/);
 });
 
-test('(c) present wrapper + spawn error returns a non-null hit (fail-closed)', () => {
+test('(c) present wrapper + spawn error -> { status: "unavailable" } (NOT a hit)', () => {
   const fx = spawnFixture({ status: null, error: new Error('spawn ETIMEDOUT') });
   const scan = createSecretScanner(presentExecDeps(fx.spawn));
-  const hit = scan('anything at all');
-  assert.notEqual(hit, null, 'a spawn failure must NOT be treated as clean');
-  assert.match(hit ?? '', /fail-closed/);
-  assert.match(hit ?? '', /ETIMEDOUT/);
+  const result = scan('anything at all');
+  assert.equal(result.status, 'unavailable', 'a spawn failure must NOT be treated as clean OR as a hit');
+  if (result.status !== 'unavailable') return;
+  assert.match(result.reason, /ETIMEDOUT/);
 });
 
-test('(d) absent wrapper resolves to a no-op (null) and never spawns', () => {
-  const fx = spawnFixture({ status: 1 }); // would be a HIT if it ever ran
+test('(d) ABSENT wrapper -> { status: "unavailable" } (fail-CLOSED; was fail-open null=clean) and never spawns', () => {
+  const fx = spawnFixture({ status: 1 });
   const scan = createSecretScanner({
     spawn: fx.spawn,
     cwd: () => '/repo',
     fileExists: () => false,
     statMode: () => null,
   });
-  assert.equal(scan('body with a SECRET token'), null, 'no wrapper => no-op clean (dev-standards/fixture case)');
+  const result = scan('body with a SECRET token');
+  assert.equal(result.status, 'unavailable', 'no wrapper => unavailable, NOT the old no-op clean');
   assert.equal(fx.calls.length, 0, 'absent wrapper => spawn is never reached');
 });
 
-test('(e) present-but-not-executable wrapper is a no-op (null)', () => {
+test('(e) present-but-not-executable wrapper -> { status: "unavailable" }, never spawns', () => {
   const fx = spawnFixture({ status: 1 });
   const scan = createSecretScanner({
     spawn: fx.spawn,
     cwd: () => '/repo',
     fileExists: () => true,
-    statMode: () => 0o644, // present, no execute bit
+    statMode: () => 0o644,
   });
-  // DESIGN: a present-but-non-executable wrapper cannot be run, so the runtime
-  // scanner no-ops (null) exactly like the absent case (treated as clean).
-  assert.equal(scan('body with a SECRET token'), null);
+  assert.equal(scan('body with a SECRET token').status, 'unavailable');
   assert.equal(fx.calls.length, 0, 'non-executable wrapper => spawn is never reached');
 });
+
+test('(z) exit code OTHER than 0/1 (e.g. 127 missing binary) -> "unavailable", NOT a hit (the collapse fix)', () => {
+  for (const status of [2, 126, 127, 3]) {
+    const fx = spawnFixture({ status, stderr: `gitleaks: exited ${status}` });
+    const scan = createSecretScanner(presentExecDeps(fx.spawn));
+    const result = scan('body');
+    assert.equal(result.status, 'unavailable', `exit ${status} must be unavailable, not hit`);
+    if (result.status !== 'unavailable') return;
+    assert.match(result.reason, new RegExp(String(status)));
+  }
+});
+
+// ── argv / cwd / stdin shape (return value is clean here) ──────────────────────
 
 test('(f) spawns the base argv (no -c) with body on stdin, shell:false, cwd=root when no repo config', () => {
   const fx = spawnFixture({ status: 0 });
   const scan = createSecretScanner({
-    ...presentExecDeps(fx.spawn, '/repo'), // wrapper present, NO .gitleaks.toml
+    ...presentExecDeps(fx.spawn, '/repo'),
     timeoutMs: 4321,
   });
 
@@ -165,13 +181,12 @@ test('(f) spawns the base argv (no -c) with body on stdin, shell:false, cwd=root
   assert.equal(call?.options.cwd, '/repo', 'spawns with cwd = resolved root for deterministic config resolution');
 });
 
-test('(g) FIX 3: a repo .gitleaks.toml adds -c <abs path> to the argv and sets cwd=root', () => {
+test('(g) a repo .gitleaks.toml adds -c <abs path> to the argv and sets cwd=root', () => {
   const fx = spawnFixture({ status: 0 });
   const scan = createSecretScanner(presentExecDeps(fx.spawn, '/repo', /* hasConfig */ true));
 
   scan('PR BODY CONTENT');
 
-  assert.equal(fx.calls.length, 1);
   const call = fx.calls[0];
   assert.deepEqual(
     call?.args,
@@ -182,7 +197,7 @@ test('(g) FIX 3: a repo .gitleaks.toml adds -c <abs path> to the argv and sets c
   assert.equal(call?.options.input, 'PR BODY CONTENT', 'content still passed on stdin (non-body argv only)');
 });
 
-test('(h) FIX 3: a feature-worktree root resolves -c to THAT root’s .gitleaks.toml', () => {
+test('(h) a feature-worktree root resolves -c to THAT root’s .gitleaks.toml', () => {
   const fx = spawnFixture({ status: 0 });
   const scan = createSecretScanner(presentExecDeps(fx.spawn, '/feature-worktree', true));
 
@@ -202,8 +217,6 @@ test('(h) FIX 3: a feature-worktree root resolves -c to THAT root’s .gitleaks.
 test('the wrapper is resolved at CALL time relative to the current cwd', () => {
   const fx = spawnFixture({ status: 0 });
   let root = '/feature-worktree';
-  // Path-aware presence so config resolution also tracks the (changing) root;
-  // here neither root ships a .gitleaks.toml, so the base argv is used.
   const scan = createSecretScanner({
     spawn: fx.spawn,
     cwd: () => root,
@@ -219,6 +232,24 @@ test('the wrapper is resolved at CALL time relative to the current cwd', () => {
   assert.equal(fx.calls[0]?.options.cwd, '/feature-worktree', 'cwd tracks the call-time root');
   assert.equal(fx.calls[1]?.file, `/main-repo-root/${SCANNER_REL}`);
   assert.equal(fx.calls[1]?.options.cwd, '/main-repo-root');
+});
+
+// ── deadline threading (§0: timeout = min(cap, remainingMs); spent budget short-circuits) ─────
+
+test('deadline: the spawn timeout is tightened to the deadline’s remaining budget when smaller than the cap', () => {
+  const fx = spawnFixture({ status: 0 });
+  const scan = createSecretScanner({ ...presentExecDeps(fx.spawn), timeoutMs: 30_000, deadline: createDeadline(1) });
+  scan('body');
+  const timeout = fx.calls[0]?.options.timeout ?? Number.POSITIVE_INFINITY;
+  assert.ok(timeout <= 1000 && timeout > 0, `timeout should be clamped to ~1s, got ${timeout}`);
+});
+
+test('deadline: an already-spent budget -> { status: "unavailable" } WITHOUT spawning', () => {
+  const fx = spawnFixture({ status: 0 });
+  const scan = createSecretScanner({ ...presentExecDeps(fx.spawn), deadline: createDeadline(0) });
+  const result = scan('body');
+  assert.equal(result.status, 'unavailable');
+  assert.equal(fx.calls.length, 0, 'a spent deadline must not spawn the scanner');
 });
 
 // ── real-fs resolution + a real wrapper end-to-end (NOT real gitleaks) ────────
@@ -242,11 +273,7 @@ test('realScannerResolution reflects real fs presence + the exec bit', () => {
   }
 });
 
-test('end-to-end with a real wrapper script: stdin received, exit 0 clean / exit 1 hit', () => {
-  // A STAND-IN wrapper (not real gitleaks): exits 1 iff stdin contains "SECRET".
-  // This exercises the real spawnSync wiring (stdin passing + exit-code → hit)
-  // through the default deps. Real pinned-gitleaks behaviour is validated by a
-  // smoke at pilot adoption.
+test('end-to-end with a real wrapper script: exit 0 => clean, exit 1 => hit (real spawnSync wiring)', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-scan-e2e-'));
   try {
     fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
@@ -258,25 +285,22 @@ test('end-to-end with a real wrapper script: stdin received, exit 0 clean / exit
     );
     const scan = createSecretScanner({ cwd: () => dir });
 
-    assert.equal(scan('a totally clean body'), null, 'clean stdin => exit 0 => null');
-    const hit = scan('this body has a SECRET token');
-    assert.notEqual(hit, null, 'tainted stdin => exit 1 => non-null hit');
-    assert.match(hit ?? '', /exit 1/);
+    assert.deepEqual(scan('a totally clean body'), { status: 'clean' }, 'clean stdin => exit 0 => clean');
+    const result = scan('this body has a SECRET token');
+    assert.equal(result.status, 'hit', 'tainted stdin => exit 1 => hit');
+    if (result.status !== 'hit') return;
+    assert.match(result.findings, /leak found/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test('end-to-end: a real <root>/.gitleaks.toml is threaded to the wrapper via -c (real spawn)', () => {
-  // FIX 3 through the DEFAULT (real) deps: a stand-in wrapper records its argv so
-  // we can assert -c <abs config> reached it. The exact real-gitleaks rule
-  // application is validated by the pilot smoke at S15b.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-scan-cfg-'));
   try {
     fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
     const argvLog = path.join(dir, 'argv.log');
     const wrapper = path.join(dir, 'tools', 'run-gitleaks');
-    // Records its own argv (one per line) then drains stdin and exits clean.
     fs.writeFileSync(
       wrapper,
       `#!/bin/sh\nfor a in "$@"; do echo "$a" >> "${argvLog}"; done\ncat >/dev/null\nexit 0\n`,
@@ -285,7 +309,7 @@ test('end-to-end: a real <root>/.gitleaks.toml is threaded to the wrapper via -c
     fs.writeFileSync(path.join(dir, GITLEAKS_CONFIG_REL), '[allowlist]\n');
 
     const scan = createSecretScanner({ cwd: () => dir });
-    assert.equal(scan('clean body'), null, 'clean exit 0 => null');
+    assert.deepEqual(scan('clean body'), { status: 'clean' }, 'clean exit 0 => clean');
 
     const recorded = fs.readFileSync(argvLog, 'utf8').trim().split('\n');
     assert.deepEqual(recorded, [

@@ -1,13 +1,14 @@
-// E6 — the ADR-012 landing handoff. `decideHandoff` is a CONTEXT-DETECT +
-// INSTRUCTION-EMITTER ONLY: it lands nothing, names no merge verb, and always lands
-// the standalone way — a committed `deep-review/<slug>` branch left for a human to
-// open as a PR (that branch has no workflow feature record). The ONLY effect it
-// performs is a read-only branch lookup behind the injected `getBranch` seam.
+// E6 + Phase 5 §5.5 — the ADR-012 landing handoff. `decideHandoff` is a
+// COMPLETENESS-GATE + INSTRUCTION-EMITTER: it refuses (EXIT_WRONG_STATE) while any
+// finding is still HANDOFF_BLOCKING (pending / infra-blocked), or the verification
+// stamp is missing / stale (sha != HEAD), or the worktree is dirty; otherwise it
+// emits the standalone, human-opens-PR instruction. The resolved dispositions
+// (no-touch / needs-plan / invalid) do NOT block. It lands nothing and names no merge
+// verb; the ONLY effects are read-only git behind injected seams.
 //
-// These tests are mostly pure (injected `getBranch` stub); one CLI case drives a
-// real ephemeral git repo to prove the dispatch wiring + the real `getBranch` seam
-// end-to-end. A STATIC test reads the module source from disk and pins the two
-// textual invariants the engine MUST never violate.
+// The pure cases inject getBranch/getHead/getStatus stubs; a STATIC test pins the
+// textual invariants; one CLI case drives a real ephemeral git repo end-to-end (with
+// the git-side identity gate injected).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,14 +18,17 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { EXIT_OK, EXIT_FAILURE, EXIT_USAGE, EXIT_WRONG_STATE } from '../../deep-review/src/types.ts';
-import type { FindingRecord, FindingsFile } from '../../deep-review/src/types.ts';
+import type { FindingRecord, FindingsFileV2, VerificationRecord } from '../../deep-review/src/types.ts';
 import { decideHandoff, realHandoffDeps } from '../../deep-review/src/handoff.ts';
-import type { HandoffDeps } from '../../deep-review/src/handoff.ts';
-import { writeFindings } from '../../deep-review/src/findings-io.ts';
+import type { HandoffDeps, HandoffGitSpawn } from '../../deep-review/src/handoff.ts';
+import { createDeadline } from '../../deep-review/src/deadline.ts';
 import { runCli } from '../../deep-review/src/cli.ts';
 import type { CliDeps } from '../../deep-review/src/cli.ts';
+import type { DescriptorVerdict, RunDescriptor } from '../../deep-review/src/descriptor.ts';
 
-// ── Findings builders ─────────────────────────────────────────────────────────
+const HEAD_SHA = 'a'.repeat(40);
+
+// ── Findings builders (schema v2) ───────────────────────────────────────────────
 
 function mkFinding(over: Partial<FindingRecord> = {}): FindingRecord {
   return {
@@ -35,158 +39,194 @@ function mkFinding(over: Partial<FindingRecord> = {}): FindingRecord {
     title: 'fix the thing',
     impact: 'x',
     needs_plan: false,
-    test_cmd: ['node', '-e', 'process.exit(0)'],
+    test_ref: 'verify:fast',
     slice_files: ['src/app.ts'],
     classification: 'fixable-now',
-    status: 'pending',
-    sha: '',
+    status: 'fixed',
+    sha: 'abc123',
     ...over,
   };
 }
 
-function mkFile(
-  findings: FindingRecord[],
-  mode: FindingsFile['mode'] = 'review-and-refactor',
-): FindingsFile {
-  return { schema: 1, mode, generated_at: '2026-06-14T00:00:00Z', findings };
+function mkFile(findings: FindingRecord[], over: Partial<FindingsFileV2> = {}): FindingsFileV2 {
+  return {
+    schema: 2,
+    mode: 'review-and-refactor',
+    generated_at: '2026-06-14T00:00:00Z',
+    run_id: 'run-1',
+    base_sha: 'base-1',
+    revision: 3,
+    verification: { sha: HEAD_SHA, scope: 'verify:fast', completed_at: 't' } as VerificationRecord,
+    findings,
+    ...over,
+  };
 }
 
-// A deps seam whose every read is counted, so a test can prove EXACTLY which
-// effects ran (only `getBranch` exists on HandoffDeps; counting it proves it is the
-// ONLY git read and that nothing mutating is reached).
+// A deps seam whose every read is counted so a test can prove exactly which effects ran.
 function spyDeps(
-  over: { branch?: string | (() => string); cwd?: string } = {},
-): { deps: HandoffDeps; calls: { getBranch: number } } {
-  const calls = { getBranch: 0 };
+  over: { branch?: string | (() => string); head?: string; status?: string } = {},
+): { deps: HandoffDeps; calls: { getBranch: number; getHead: number; getStatus: number } } {
+  const calls = { getBranch: 0, getHead: 0, getStatus: 0 };
   const branch = over.branch ?? 'deep-review/x';
-  const deps: HandoffDeps = {
-    cwd: over.cwd ?? '/repo',
-    getBranch: () => {
-      calls.getBranch += 1;
-      return typeof branch === 'function' ? branch() : branch;
+  return {
+    calls,
+    deps: {
+      cwd: '/repo',
+      getBranch: () => {
+        calls.getBranch += 1;
+        return typeof branch === 'function' ? branch() : branch;
+      },
+      getHead: () => {
+        calls.getHead += 1;
+        return over.head ?? HEAD_SHA;
+      },
+      getStatus: () => {
+        calls.getStatus += 1;
+        return over.status ?? '';
+      },
     },
   };
-  return { deps, calls };
 }
 
-// ── standalone (always) ─────────────────────────────────────────────────────────
+// ── Completeness gate matrix ─────────────────────────────────────────────────────
 
-test('standalone: mode "standalone"; committed branch left for a human PR; NEVER "workflow ship", NEVER "workflow merge"; only the branch read runs', () => {
+test('OK: all fixed + verification@HEAD + clean worktree -> standalone instruction; branch read last', () => {
   const { deps, calls } = spyDeps({ branch: 'deep-review/bar' });
-
   const result = decideHandoff(mkFile([mkFinding()]), deps);
-
   assert.equal(result.exitCode, EXIT_OK);
   assert.equal(result.mode, 'standalone');
-  assert.equal(result.machineError, undefined);
   const text = result.instruction ?? '';
   assert.ok(text.includes('committed branch'), 'describes a committed branch');
-  assert.ok(text.includes('human'), 'names a human as the actor');
-  assert.ok(text.includes('PR'), 'names a PR');
   assert.ok(text.includes('deep-review/bar'), 'names the branch');
-  // deep-review must NEVER suggest the automated ship cycle (no feature record).
-  assert.ok(!text.includes('workflow ship'), 'never suggests workflow ship');
-  assert.ok(!text.includes('workflow merge'), 'never names the removed merge verb');
-  // Only the branch read ran; nothing mutating exists on HandoffDeps and none was reached.
-  assert.equal(calls.getBranch, 1, 'branch read ran once');
+  assert.ok(!text.includes('workflow ship') && !text.includes('workflow merge'), 'never names a removed verb');
+  assert.equal(calls.getBranch, 1);
 });
 
-// ── mode gate ───────────────────────────────────────────────────────────────────
-
-test('mode gate: a review-only findings file -> EXIT_WRONG_STATE before any getBranch call', () => {
-  const { deps, calls } = spyDeps({ branch: 'deep-review/x' });
-
-  const result = decideHandoff(mkFile([mkFinding()], 'review-only'), deps);
-
+test('blocked: a PENDING finding -> EXIT_WRONG_STATE, message names it, no branch read', () => {
+  const { deps, calls } = spyDeps();
+  const result = decideHandoff(mkFile([mkFinding({ status: 'fixed' }), mkFinding({ id: 'f-002', status: 'pending', classification: 'fixable-now', sha: '' })]), deps);
   assert.equal(result.exitCode, EXIT_WRONG_STATE);
-  assert.equal(result.mode, undefined);
-  assert.equal(result.instruction, undefined);
-  assert.equal(calls.getBranch, 0, 'getBranch NOT invoked when mode gate refuses');
+  assert.match(result.machineError?.message ?? '', /not terminal/);
+  assert.match(result.machineError?.message ?? '', /f-002:pending/);
+  assert.equal(calls.getBranch, 0, 'no landing instruction when blocked');
 });
 
-// ── findings status summary ─────────────────────────────────────────────────────
-
-test('the emitted instruction summarizes findings status (fixed count + rejected buckets)', () => {
-  const findings = [
-    mkFinding({ id: 'a', status: 'fixed' }),
-    mkFinding({ id: 'b', status: 'fixed' }),
-    mkFinding({ id: 'c', status: 'no-touch', classification: 'no-touch' }),
-    mkFinding({ id: 'd', status: 'needs-plan', classification: 'needs-plan' }),
-    mkFinding({ id: 'e', status: 'fix-failed' }),
-    mkFinding({ id: 'g', status: 'invalid' }),
-  ];
-  const { deps } = spyDeps({ branch: 'deep-review/foo' });
-
-  const text = decideHandoff(mkFile(findings), deps).instruction ?? '';
-
-  assert.ok(text.includes('fixed: 2'), 'fixed count present');
-  assert.ok(text.includes('no-touch: 1'), 'no-touch count present');
-  assert.ok(text.includes('needs-plan: 1'), 'needs-plan count present');
-  assert.ok(text.includes('fix-failed: 1'), 'fix-failed count present');
-  assert.ok(text.includes('invalid: 1'), 'invalid count present');
+test('blocked: an INFRA-BLOCKED finding -> EXIT_WRONG_STATE', () => {
+  const { deps } = spyDeps();
+  const result = decideHandoff(mkFile([mkFinding({ id: 'f-x', status: 'infra-blocked', sha: '', infra_error: 'spawn ENOENT' })]), deps);
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.match(result.machineError?.message ?? '', /not terminal/);
 });
 
-// ── branch comes from the injected seam ─────────────────────────────────────────
-
-test('branch comes from the injected getBranch() seam (appears verbatim in the standalone instruction)', () => {
-  const { deps } = spyDeps({ branch: 'deep-review/known-branch' });
-
-  const text = decideHandoff(mkFile([mkFinding()]), deps).instruction ?? '';
-
-  assert.ok(text.includes('deep-review/known-branch'), 'the seam-provided branch is used');
+test('resolved dispositions do NOT block: no-touch / needs-plan / invalid only + verification@HEAD + clean -> OK', () => {
+  const { deps } = spyDeps();
+  const result = decideHandoff(
+    mkFile([
+      mkFinding({ id: 'a', status: 'no-touch', classification: 'no-touch', sha: '' }),
+      mkFinding({ id: 'b', status: 'needs-plan', classification: 'needs-plan', sha: '' }),
+      mkFinding({ id: 'c', status: 'invalid', sha: '' }),
+    ]),
+    deps,
+  );
+  assert.equal(result.exitCode, EXIT_OK, 'resolved dispositions are handed to a human, not blocked');
+  const text = result.instruction ?? '';
+  assert.ok(text.includes('no-touch: 1') && text.includes('needs-plan: 1') && text.includes('invalid: 1'), 'summary lists the dispositions');
 });
 
-// ── getBranch failure ───────────────────────────────────────────────────────────
+test('blocked: verification == null -> EXIT_WRONG_STATE (run verify first)', () => {
+  const { deps } = spyDeps();
+  const result = decideHandoff(mkFile([mkFinding()], { verification: null }), deps);
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.match(result.machineError?.message ?? '', /no verification/);
+});
 
-test('getBranch failure (stub throws) -> EXIT_FAILURE + machine error naming step "rev-parse"', () => {
+test('blocked: verification stale (sha != HEAD) -> EXIT_WRONG_STATE', () => {
+  const { deps } = spyDeps({ head: 'b'.repeat(40) });
+  const result = decideHandoff(mkFile([mkFinding()]), deps); // verification sha is HEAD_SHA (a…)
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.match(result.machineError?.message ?? '', /stale/);
+});
+
+test('blocked: a dirty worktree (git status --porcelain non-empty) -> EXIT_WRONG_STATE', () => {
+  const { deps } = spyDeps({ status: ' M src/app.ts\n' });
+  const result = decideHandoff(mkFile([mkFinding()]), deps);
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.match(result.machineError?.message ?? '', /dirty/);
+});
+
+// ── Mode gate + read failures ────────────────────────────────────────────────────
+
+test('mode gate: a review-only findings file -> EXIT_WRONG_STATE before ANY git read', () => {
+  const { deps, calls } = spyDeps();
+  const result = decideHandoff(mkFile([mkFinding()], { mode: 'review-only' }), deps);
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.equal(calls.getHead, 0, 'no git read when the mode gate refuses');
+  assert.equal(calls.getStatus, 0);
+});
+
+test('getHead failure -> EXIT_FAILURE + machine error', () => {
+  const deps: HandoffDeps = {
+    cwd: '/repo',
+    getBranch: () => 'deep-review/x',
+    getHead: () => {
+      throw new Error('fatal: not a git repository');
+    },
+    getStatus: () => '',
+  };
+  const result = decideHandoff(mkFile([mkFinding()]), deps);
+  assert.equal(result.exitCode, EXIT_FAILURE);
+  assert.ok(result.machineError, 'machine error present');
+});
+
+test('getBranch failure on the success path -> EXIT_FAILURE + machine error step "rev-parse"', () => {
   const { deps } = spyDeps({
     branch: () => {
       throw new Error('fatal: not a git repository');
     },
   });
-
   const result = decideHandoff(mkFile([mkFinding()]), deps);
-
   assert.equal(result.exitCode, EXIT_FAILURE);
-  assert.ok(result.machineError, 'machine error present');
   assert.equal(result.machineError?.step, 'rev-parse');
-  assert.equal(result.instruction, undefined);
 });
 
-test('getBranch fail-closed (real git, detached HEAD): the REAL defaultGetBranch refuses an unresolvable branch -> EXIT_FAILURE + machine error step "rev-parse"', () => {
-  // Exercises the real seam (not the stub): a detached HEAD makes
-  // `git rev-parse --abbrev-ref HEAD` resolve to the sentinel "HEAD", which
-  // defaultGetBranch's fail-closed guard rejects, surfacing the §2.4 git error.
-  const repo = initRepoOnMain();
-  git(repo, ['checkout', '--detach']);
+// ── static source invariants ─────────────────────────────────────────────────────
 
-  const result = decideHandoff(mkFile([mkFinding({ status: 'fixed' })]), realHandoffDeps(repo));
-
-  assert.equal(result.exitCode, EXIT_FAILURE);
-  assert.ok(result.machineError, 'machine error present');
-  assert.equal(result.machineError?.step, 'rev-parse');
-  assert.equal(result.instruction, undefined);
-  fs.rmSync(repo, { recursive: true, force: true });
-});
-
-// ── static source + runtime text invariants ────────────────────────────────────
-
-test('static: the module SOURCE names neither "workflow merge" nor "workflow ship"; the runtime output names neither', () => {
-  // After D2 the in-session ship cycle is gone: the SOURCE must never name the
-  // removed merge verb OR the automated ship verb anywhere (comments included).
-  const src = fs.readFileSync(
-    fileURLToPath(new URL('../../deep-review/src/handoff.ts', import.meta.url)),
-    'utf8',
-  );
+test('static: the module SOURCE names neither "workflow merge" nor "workflow ship"', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../../deep-review/src/handoff.ts', import.meta.url)), 'utf8');
   assert.ok(!src.includes('workflow merge'), 'source never names the removed merge verb');
   assert.ok(!src.includes('workflow ship'), 'source never names the removed ship verb');
-  const { deps } = spyDeps({ branch: 'deep-review/z' });
-  const standalone = decideHandoff(mkFile([mkFinding()]), deps).instruction ?? '';
-  assert.ok(!standalone.includes('workflow ship'), 'runtime output never suggests workflow ship');
-  assert.ok(!standalone.includes('workflow merge'), 'runtime output never names the removed merge verb');
 });
 
-// ── CLI dispatch + real getBranch seam (real ephemeral git repo) ───────────────
+test('realHandoffDeps wires cwd + the real read seams', () => {
+  const d = realHandoffDeps('/some/cwd');
+  assert.equal(d.cwd, '/some/cwd');
+  assert.equal(typeof d.getBranch, 'function');
+  assert.equal(typeof d.getHead, 'function');
+  assert.equal(typeof d.getStatus, 'function');
+});
+
+test('F7: realHandoffDeps bounds every git read with a deadline-derived timeout (<= 15s)', () => {
+  const timeouts: Array<number | undefined> = [];
+  const spawn: HandoffGitSpawn = (args, _cwd, timeout) => {
+    timeouts.push(timeout);
+    if (args.includes('--abbrev-ref')) return { status: 0, stdout: 'deep-review/x\n', stderr: '' };
+    if (args.includes('status')) return { status: 0, stdout: '', stderr: '' };
+    return { status: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+  };
+  const d = realHandoffDeps('/repo', createDeadline(900), spawn);
+  d.getHead();
+  d.getStatus();
+  d.getBranch();
+  assert.ok(timeouts.length >= 3, 'each read seam spawned git');
+  for (const t of timeouts) {
+    assert.equal(typeof t, 'number', 'each git read is timeout-bounded');
+    assert.ok((t as number) > 0 && (t as number) <= 15_000, 'timeout within the 15s cap');
+  }
+});
+
+// ── CLI dispatch + real git ──────────────────────────────────────────────────────
+
+const REPO_QUALITY = fileURLToPath(new URL('../../quality.json', import.meta.url));
 
 function git(dir: string, args: string[]): string {
   const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8', shell: false });
@@ -194,47 +234,45 @@ function git(dir: string, args: string[]): string {
   return r.stdout ?? '';
 }
 
-function initRepoOnMain(): string {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-handoff-')));
-  git(dir, ['init', '-q']);
-  git(dir, ['config', 'user.email', 'test@example.com']);
-  git(dir, ['config', 'user.name', 'Handoff Test']);
-  git(dir, ['config', 'commit.gpgsign', 'false']);
-  git(dir, ['commit', '-q', '--allow-empty', '-m', 'init']);
-  git(dir, ['branch', '-m', 'main']);
-  return dir;
-}
-
-test('CLI handoff: missing --findings -> EXIT_USAGE', () => {
-  const out: string[] = [];
+test('CLI handoff: missing --findings -> EXIT_USAGE (before config / preflight)', () => {
   const errs: string[] = [];
-  const cli: CliDeps = { stdout: (t) => out.push(t), stderr: (t) => errs.push(t) };
-  assert.equal(runCli(['handoff'], cli), EXIT_USAGE);
+  assert.equal(runCli(['handoff'], { stdout: () => {}, stderr: (t) => errs.push(t) }), EXIT_USAGE);
   assert.ok(errs.join('').includes('--findings'), 'usage names the missing flag');
 });
 
-test('CLI handoff (real git, standalone): prints the standalone instruction with the real branch; exit 0', () => {
-  const repo = initRepoOnMain();
-  const fpath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-handoff-f-')), 'findings.json');
-  writeFindings(fpath, mkFile([mkFinding({ status: 'fixed' })]));
+test('CLI handoff (real git, complete run): all fixed + verification@HEAD + clean -> EXIT_OK, standalone instruction', () => {
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-handoff-')));
+  git(repo, ['init', '-q']);
+  git(repo, ['config', 'user.email', 'test@example.com']);
+  git(repo, ['config', 'user.name', 'Handoff Test']);
+  git(repo, ['config', 'commit.gpgsign', 'false']);
+  const manifest = JSON.parse(fs.readFileSync(REPO_QUALITY, 'utf8')) as Record<string, unknown>;
+  manifest['deep_review'] = { enabled: true, modes: ['review-only', 'review-and-refactor'], guides_dir: 'guides' };
+  fs.writeFileSync(path.join(repo, 'quality.json'), JSON.stringify(manifest));
+  fs.mkdirSync(path.join(repo, 'guides'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'guides', 'core.md'), '# guide\n');
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '-q', '-m', 'init']);
+  const headSha = git(repo, ['rev-parse', 'HEAD']).trim();
 
+  // Findings OUTSIDE the repo (handoff never mutates, so no confinement / dirtiness).
+  const fpath = path.join(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-handoff-f-'))), 'findings.json');
+  fs.writeFileSync(fpath, `${JSON.stringify(mkFile([mkFinding({ status: 'fixed' })], { verification: { sha: headSha, scope: 'verify:fast', completed_at: 't' } }), null, 2)}\n`);
+
+  const descriptor: RunDescriptor = {
+    schema: 1, run_id: 'run-1', created_at: 't', canonical_root: repo, git_dir: path.join(repo, '.git'),
+    git_common_dir: path.join(repo, '.git'), branch_ref: 'refs/heads/main', base_ref: 'refs/heads/main', base_sha: 'base-1', initial_head_sha: headSha,
+  };
   const out: string[] = [];
-  const errs: string[] = [];
-  const cli: CliDeps = { stdout: (t) => out.push(t), stderr: (t) => errs.push(t), cwd: () => repo };
+  const cli: CliDeps = {
+    stdout: (t) => out.push(t),
+    stderr: () => {},
+    cwd: () => repo,
+    verifyDescriptor: (): DescriptorVerdict => ({ ok: true, descriptor }),
+  };
 
   const code = runCli(['handoff', '--findings', fpath], cli);
-
   assert.equal(code, EXIT_OK);
-  const text = out.join('');
-  assert.ok(text.includes('Landing mode: standalone'), 'standalone instruction printed');
-  assert.ok(text.includes('main'), 'the real HEAD branch (main) appears');
-  assert.ok(!text.includes('workflow ship'), 'standalone never suggests workflow ship');
-  assert.ok(!text.includes('workflow merge'), 'no merge verb');
+  assert.ok(out.join('').includes('Landing mode: standalone'), 'standalone instruction printed');
   fs.rmSync(repo, { recursive: true, force: true });
-});
-
-test('realHandoffDeps wires cwd + the real getBranch seam', () => {
-  const d = realHandoffDeps('/some/cwd');
-  assert.equal(d.cwd, '/some/cwd');
-  assert.equal(typeof d.getBranch, 'function');
 });

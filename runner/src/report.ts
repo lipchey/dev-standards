@@ -16,18 +16,31 @@ export interface RunnerReport {
  * followed.
  */
 export function writeReport(report: RunnerReport, root: string, reportsPath: string): string {
-  const realRoot = fs.realpathSync(root);
-  const target = path.resolve(root, reportsPath);
+  const relPath = path.join(reportsPath, `verify-${report.scope}.json`);
+  return writeConfined(root, relPath, JSON.stringify(report, null, 2) + '\n');
+}
 
-  assertWithinRoot(root, target, reportsPath);
-  assertWithinRoot(realRoot, realpathOfDeepestExisting(target), reportsPath);
+/**
+ * Confine `relPath` under `rootDir` (repo-controlled path): a lexical containment
+ * check, then a realpath check on the deepest existing ancestor of the parent, a
+ * `mkdir -p`, and a post-mkdir realpath check; the leaf is replaced via
+ * temp+rename so a symlinked leaf is never followed. Returns the absolute path
+ * written. Shared by the runner report writer and the deep-review findings/report
+ * writers so all repo-controlled writes route through one confinement.
+ */
+export function writeConfined(rootDir: string, relPath: string, content: string): string {
+  const realRoot = fs.realpathSync(rootDir);
+  const target = path.resolve(rootDir, relPath);
+  const dir = path.dirname(target);
 
-  fs.mkdirSync(target, { recursive: true });
-  assertWithinRoot(realRoot, fs.realpathSync(target), reportsPath);
+  assertWithinRoot(rootDir, target, relPath);
+  assertWithinRoot(realRoot, realpathOfDeepestExisting(dir), relPath);
 
-  const filePath = path.join(target, `verify-${report.scope}.json`);
-  writeFileReplacingLeaf(target, filePath, JSON.stringify(report, null, 2) + '\n');
-  return filePath;
+  fs.mkdirSync(dir, { recursive: true });
+  assertWithinRoot(realRoot, fs.realpathSync(dir), relPath);
+
+  writeFileReplacingLeaf(dir, target, content);
+  return target;
 }
 
 // Atomic leaf replacement inside an already-confined directory.

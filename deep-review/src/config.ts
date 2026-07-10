@@ -6,12 +6,23 @@
 // needs.
 
 import { loadManifest } from '../../runner/src/manifest.ts';
-import type { Manifest } from '../../runner/src/types.ts';
 
-// The engine view of the manifest. `deep_review` is optional on the manifest, so
-// its projected type includes `undefined` (no block present).
+// The default run budget when the manifest omits `deep_review.budget` (§0: deadline defaults to
+// 900s). Applied here so downstream (cli deadline creation) reads a single always-present value.
+const DEFAULT_BUDGET_SECONDS = 900;
+
+// The engine view of the manifest: the `deep_review` fields the runtime actually uses, projected
+// off the validated manifest (schema-validated but previously dropped — 5.0). `enabled`/`modes`
+// gate preflight; `budget` seeds the deadline; `guidesDir` is the preflight availability check;
+// `noTouchGlobsRef`/`verifyAfterFix` feed the no-touch set and verify scope. `tiers` stay dropped
+// (no named-check resolver in this phase — YAGNI while there is one consumer).
 export interface DeepReviewConfig {
-  deepReview: Manifest['deep_review'];
+  enabled: boolean;
+  modes: Array<'review-only' | 'review-and-refactor'>;
+  budget: { seconds: number; tokens?: number | null };
+  guidesDir: string | undefined;
+  noTouchGlobsRef: string | undefined;
+  verifyAfterFix: '--fast' | '--full' | undefined;
   reportsDir: string;
 }
 
@@ -21,9 +32,14 @@ export function loadConfig(filePath: string): DeepReviewConfig {
     const detail = result.errors.map((error) => `${error.path || '<root>'}: ${error.message}`).join('; ');
     throw new Error(`manifest at ${filePath} is invalid: ${detail}`);
   }
-  const { manifest } = result;
+  const deepReview = result.manifest.deep_review;
   return {
-    deepReview: manifest.deep_review,
-    reportsDir: manifest.paths.reports,
+    enabled: deepReview?.enabled ?? false,
+    modes: deepReview?.modes ?? [],
+    budget: deepReview?.budget ?? { seconds: DEFAULT_BUDGET_SECONDS },
+    guidesDir: deepReview?.guides_dir,
+    noTouchGlobsRef: deepReview?.no_touch_globs_ref,
+    verifyAfterFix: deepReview?.verify_after_fix,
+    reportsDir: result.manifest.paths.reports,
   };
 }

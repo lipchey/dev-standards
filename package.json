@@ -14,6 +14,7 @@
     "build:deep-review": "esbuild deep-review/src/deep-review-runner.ts --bundle --platform=node --target=node20 --format=esm --sourcemap=external --outdir=deep-review/dist --out-extension:.js=.mjs",
     "typecheck": "tsc --noEmit",
     "test": "DS_TELEMETRY_PATH=off tsx --test tests/runner/*.test.ts tests/deep-review/*.test.ts tests/tools/*.test.ts",
+    "test:e2e": "DS_TELEMETRY_PATH=off tsx --test tests/deep-review-e2e/*.test.ts",
     "test:runner": "DS_TELEMETRY_PATH=off tsx --test tests/runner/*.test.ts",
     "test:file": "DS_TELEMETRY_PATH=off tsx --test",
     "validate:manifest": "node runner/dist/validate-quality-manifest.mjs --manifest quality.json",

@@ -31,8 +31,8 @@ is this skill's job, on request only.
 
 Produce findings; change nothing. The runtime is six steps, in order:
 
-1. Context. Read `project-facts.md` (layer DAG, domain terms, sensitive and
-   no-touch zones, known false positives), then `AGENTS.md` and `CLAUDE.md`.
+1. Context. Read `.agents/project-facts.md` (layer DAG, domain terms, sensitive
+   and no-touch zones, known false positives), then `AGENTS.md` and `CLAUDE.md`.
 2. Deterministic first. Run or inspect the existing deterministic reports -
    `./verify --fast` or `reports/quality/` - and never repeat a finding ESLint,
    `tsc`, Knip, dependency-cruiser, or gitleaks already owns. This skill is
@@ -54,29 +54,41 @@ Produce findings; change nothing. The runtime is six steps, in order:
 ## Mode: review-and-refactor (explicit ask)
 
 One command, run inside a git worktree: an internal review (phase 1, the
-`review-only` steps above) followed by a fix phase (phase 2).
+`review-only` steps above) followed by a fix phase (phase 2), driven by the
+engine's own CLI verbs, in this order:
 
-Worktree selection. The skill creates a dedicated `deep-review/<slug>` worktree
-from the current base, commits there, and leaves it for human review.
+`select-worktree -> classify -> commit-slice -> verify -> report -> handoff`
 
-Classify each finding into `fixable-now`, `no-touch`, or `needs-plan`.
+Every verb after `select-worktree` takes `--findings <path>`, a findings JSON
+file under `reports/quality/` that carries the running state (id,
+classification, status, sha) across the whole run.
 
-Slice by slice (atomic), fixable-now only:
-
-1. Make one smallest behavior-preserving slice.
-2. Run focused tests for the touched area.
-3. Green: commit that slice alone, carrying a `Deep-Review-Slice: <finding-id>`
-   trailer.
-4. Red: revert that slice only, mark the finding `fix-failed`, and move it to the
-   plan. Never carry a broken slice forward.
-
-Final verification. Run `./verify --fast` across the applied slices in the
-worktree - the skill's own changes only, no base integration. Red means the whole
-refactor is `needs-human`; nothing is merged.
-
-Report to `reports/quality/deep-review-<date>.md`, metadata-only and
-secret-scanned: the fixed slices with their SHAs, the rejected buckets (no-touch,
-needs-plan, fix-failed), and the plan for the latter two.
+1. `select-worktree` creates a dedicated `deep-review/<slug>` worktree from the
+   current base and prints it; every later verb runs inside that worktree.
+2. `classify` assigns each finding a classification (`fixable-now`, `no-touch`,
+   `needs-plan`) against the §2.5 no-touch floor and writes it back to the
+   findings file. **Fail-closed**: in fix mode, a missing, unreadable, or
+   unparseable `.agents/project-facts.md` makes the engine refuse outright
+   instead of silently classifying against the baseline floor alone - a false
+   "editable" verdict here would risk auto-editing a path the repo meant to
+   protect.
+3. `commit-slice <finding-id>` runs the atomic fix loop, `fixable-now` findings
+   only:
+   - Make one smallest behavior-preserving slice.
+   - Run focused tests for the touched area.
+   - Green: commit that slice alone, carrying a
+     `Deep-Review-Slice: <finding-id>` trailer.
+   - Red: revert that slice only, mark the finding `fix-failed`, and move it to
+     the plan. Never carry a broken slice forward.
+4. `verify` runs the final `./verify --fast`/`--full` gate across the applied
+   slices in the worktree - the skill's own changes only, no base integration.
+   Red means the whole refactor is `needs-human`; nothing proceeds to handoff.
+5. `report` writes `reports/quality/deep-review-<date>.md`, metadata-only and
+   secret-scanned: the fixed slices with their SHAs, the rejected buckets
+   (no-touch, needs-plan, fix-failed), and the plan for the latter two.
+6. `handoff` emits the ADR-012 landing instruction once verify is green and no
+   blocking findings remain - it lands nothing itself (see below); a human
+   opens the PR from there.
 
 ## No-touch set
 
@@ -86,10 +98,10 @@ The no-touch set is the UNION of two parts:
    `.githooks/`, `.github/workflows/`, `./verify`, `tools/`, `auth/**`, and
    `credentials/**`.
 2. The repo's own additions, listed in the `## No-Touch Zones` section of
-   `project-facts.md`.
+   `.agents/project-facts.md`.
 
 A path in either set is never edited - it is emitted as a plan instead.
-`project-facts.md` can only extend the baseline, never shrink it.
+`.agents/project-facts.md` can only extend the baseline, never shrink it.
 
 ## Landing is not the skill's job (ADR-012)
 
