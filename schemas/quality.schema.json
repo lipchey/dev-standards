@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dev-standards.local/quality.schema.json",
   "title": "quality.json — self-maintaining quality-system manifest (v1)",
-  "description": "Per-repo manifest consumed by verify-runner. `version` is the MAJOR schema version (integer). This schema expresses structure, types, enums, and required keys; cross-field semantic rules (timeout-budget sums, fileset-reference integrity, argv shape, workflow reviewer-independence seat rule) are enforced by the runner's hand-written validator and listed in the design spec §6.",
+  "description": "Per-repo manifest consumed by verify-runner. `version` is the MAJOR schema version (integer). This schema expresses structure, types, enums, and required keys; cross-field semantic rules (timeout-budget sums, fileset-reference integrity, argv shape) are enforced by the runner's hand-written validator and listed in the design spec §6.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "repo", "stack", "scheduler_class", "budgets", "policy", "paths", "generated", "workspaces", "filesets", "tiers"],
@@ -85,7 +85,6 @@
         "audit": { "$ref": "#/$defs/checkArray" }
       }
     },
-    "workflow": { "$ref": "#/$defs/workflow" },
     "deep_review": {
       "type": "object",
       "additionalProperties": false,
@@ -127,90 +126,6 @@
           "baseline": { "type": "string", "description": "Committed baseline path (baseline-diff semantics are out of pre-flight scope)." },
           "bypassable": { "type": "boolean", "default": false, "description": "Whether QUALITY_BYPASS_REASON may relax this check. Secret/credential checks must keep this false. Enforcement is out of pre-flight scope." }
         }
-      }
-    },
-    "workflow": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Optional semi-automatic workflow layer (ADR-012). Absent, or `{\"enabled\": false}`, is valid. When `enabled` is true the full shape below is required. The cross-field seat rule (reviewer_independence vs agents argv[0]) is enforced only by the hand validator.",
-      "required": ["enabled"],
-      "properties": {
-        "schema": { "const": 1, "description": "Workflow config schema version (integer 1)." },
-        "enabled": { "type": "boolean", "description": "When true, every key below is required." },
-        "base_branch": { "type": "string", "minLength": 1, "description": "Branch the workflow integrates into (e.g. main)." },
-        "worktree_parent": { "type": "string", "minLength": 1, "description": "Directory under which per-task worktrees are created." },
-        "cmux_mode": { "enum": ["manual", "auto"], "description": "Whether cmux orchestration runs manually or automatically." },
-        "loopback_mode": { "enum": ["manual", "auto"], "description": "Whether review loopback runs manually or automatically." },
-        "reviewer_independence": { "enum": ["different-runtime", "same-runtime"], "default": "different-runtime", "description": "different-runtime keeps the producer and reviewer on separate runtimes (ADR-008 seat split)." },
-        "required_review_guides": { "type": "array", "items": { "type": "string" }, "description": "Review guides that must be applied; may be empty." },
-        "commit_exclude": { "type": "array", "items": { "type": "string" }, "description": "Glob patterns excluded from workflow commits; may be empty." },
-        "archive": { "type": "boolean", "description": "Whether completed worktrees/reports are archived." },
-        "timeouts": {
-          "type": "object", "additionalProperties": false,
-          "required": ["default_wait_seconds", "default_work_seconds"],
-          "properties": {
-            "default_wait_seconds": { "type": "integer", "exclusiveMinimum": 0, "description": "Default seconds to wait for an external party." },
-            "default_work_seconds": { "type": "integer", "exclusiveMinimum": 0, "description": "Default seconds allotted to a work step." }
-          },
-          "description": "Default per-step timeouts."
-        },
-        "budget": {
-          "type": "object", "additionalProperties": false,
-          "required": ["workflow_total_seconds"],
-          "properties": {
-            "workflow_total_seconds": { "type": "integer", "exclusiveMinimum": 0, "description": "Hard wall-clock budget for an entire workflow run." }
-          },
-          "description": "Whole-workflow wall-clock budget."
-        },
-        "agents": {
-          "type": "object", "additionalProperties": false,
-          "required": ["claude", "codex"],
-          "properties": {
-            "claude": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "argv for the Claude seat; argv[0] is the executable." },
-            "codex": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "argv for the Codex seat; argv[0] is the executable." }
-          },
-          "description": "Per-seat agent invocations (argv). Under different-runtime, the two argv[0]s must differ (hand validator)."
-        },
-        "ship": {
-          "type": "object", "additionalProperties": false,
-          "required": ["ci_wait_seconds", "notify"],
-          "properties": {
-            "ci_wait_seconds": { "type": "integer", "exclusiveMinimum": 0, "description": "Seconds to wait for CI before shipping." },
-            "notify": { "type": "boolean", "description": "Whether to send a notification on ship." }
-          },
-          "description": "Ship-step settings."
-        },
-        "notify": {
-          "type": "object", "additionalProperties": false,
-          "required": ["webhook_env"],
-          "properties": {
-            "webhook_env": { "type": "string", "minLength": 1, "pattern": "^[A-Z][A-Z0-9_]*$", "description": "Name of the env var holding the notification webhook URL." }
-          },
-          "description": "Notification settings."
-        }
-      },
-      "if": {
-        "properties": { "enabled": { "const": true } },
-        "required": ["enabled"]
-      },
-      "then": {
-        "required": [
-          "schema",
-          "enabled",
-          "base_branch",
-          "worktree_parent",
-          "cmux_mode",
-          "loopback_mode",
-          "reviewer_independence",
-          "required_review_guides",
-          "commit_exclude",
-          "archive",
-          "timeouts",
-          "budget",
-          "agents",
-          "ship",
-          "notify"
-        ]
       }
     }
   }

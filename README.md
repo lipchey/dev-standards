@@ -2,12 +2,12 @@
 
 Shared quality-system runner, schema, fixtures, and generated-adapter checks.
 
-## Phase 1a Scope
+## Scope
 
-This release contains the core `./verify` runner and disabled-workflow manifest
-support. It does not implement the optional workflow helper, enabled workflow
-validation, red-main tracking, health digests, baseline-diff promotion, or repo
-adoption.
+This repo provides the core `./verify` runner (schema + hand validator, tiered
+checks, skill-wrapper generation) and the optional `deep-review` refactor engine.
+It does not implement red-main tracking, health digests, baseline-diff promotion,
+or automated repo adoption.
 
 ## Verification
 

@@ -110,12 +110,6 @@ test('unknown {files:name} token fails with rule files-token-reference', () => {
   expectError(validate(manifest), { rule: 'files-token-reference' });
 });
 
-test('workflow.enabled true without the full shape fails with rule required', () => {
-  const manifest = makeManifest();
-  (manifest as unknown as { workflow: { enabled: boolean } }).workflow = { enabled: true };
-  expectError(validate(manifest), { rule: 'required' });
-});
-
 function validDeepReview(): NonNullable<Manifest['deep_review']> {
   return {
     enabled: true,

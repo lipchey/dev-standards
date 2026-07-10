@@ -458,9 +458,9 @@ test('standards-sync: --generate-skills with a missing generator bundle exits 12
   }
 });
 
-// --- S19 D4 + D5: the 7th body (deep-review-refactor) end-to-end -----------
-// The body already ships in agents/skill-sources, so the generator auto-discovers
-// it by directory scan. These cases are regression guards: immediate green is the
+// --- deep-review-refactor body end-to-end (the sole remaining skill source) --
+// The body ships in agents/skill-sources, so the generator auto-discovers it by
+// directory scan. These cases are regression guards: immediate green is the
 // expected, correct outcome (not red-first TDD).
 
 test('standards-sync: the deep-review-refactor body generates both runtime wrappers pointing at the canonical source', () => {

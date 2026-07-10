@@ -61,7 +61,6 @@ export interface Manifest {
     full: Check[];
     audit?: Check[];
   };
-  workflow?: ManifestWorkflow;
   deep_review?: {
     enabled: boolean;
     trigger?: 'manual-only';
@@ -72,31 +71,6 @@ export interface Manifest {
     guides_dir?: string;
   };
 }
-
-// The workflow §2.8 config as it travels on the manifest (ADR-012). Declared
-// inline here, independent of the Phase-3 `workflow/` module: the config is a
-// serialization boundary each side owns separately (the Phase-1 runner must not
-// depend on the workflow module). A present-but-disabled block needs only
-// `enabled: false`; an enabled block carries the full §2.8 shape.
-export type ManifestWorkflow =
-  | { enabled: false }
-  | {
-      schema: 1;
-      enabled: true;
-      base_branch: string;
-      worktree_parent: string;
-      cmux_mode: 'manual' | 'auto';
-      loopback_mode: 'manual' | 'auto';
-      reviewer_independence: 'different-runtime' | 'same-runtime';
-      required_review_guides: string[];
-      commit_exclude: string[];
-      archive: boolean;
-      timeouts: { default_wait_seconds: number; default_work_seconds: number };
-      budget: { workflow_total_seconds: number };
-      agents: { claude: string[]; codex: string[] };
-      ship: { ci_wait_seconds: number; notify: boolean };
-      notify: { webhook_env: string };
-    };
 
 export interface ValidationError {
   path: string;

@@ -38,32 +38,6 @@ function firstOf<T>(items: readonly T[], label: string): T {
   return item;
 }
 
-// Full §2.8 workflow object; mutated per case. Distinct argv[0]s keep the
-// cross-field seat rule (hand-only) from firing in the parity battery.
-function fullWorkflow(): Record<string, unknown> {
-  return {
-    schema: 1,
-    enabled: true,
-    base_branch: 'main',
-    worktree_parent: '../worktrees',
-    cmux_mode: 'manual',
-    loopback_mode: 'manual',
-    reviewer_independence: 'different-runtime',
-    required_review_guides: [],
-    commit_exclude: ['reports/**', '*.log', '.DS_Store', 'tmp/**'],
-    archive: true,
-    timeouts: { default_wait_seconds: 1800, default_work_seconds: 1800 },
-    budget: { workflow_total_seconds: 5400 },
-    agents: { claude: ['claude'], codex: ['codex'] },
-    ship: { ci_wait_seconds: 1800, notify: true },
-    notify: { webhook_env: 'WORKFLOW_NOTIFY_WEBHOOK' },
-  };
-}
-
-function setWorkflow(manifest: Manifest, workflow: unknown): void {
-  (manifest as unknown as Record<string, unknown>)['workflow'] = workflow;
-}
-
 // Full deep_review block (ADR-007); mutated per case. tokens:null exercises the
 // ["integer","null"] branch so Ajv and the hand validator must agree on it.
 function validDeepReview(): Record<string, unknown> {
@@ -172,50 +146,11 @@ const batteryCases: readonly BatteryCase[] = [
     expectValid: false,
   },
   {
-    label: 'workflow-absent-valid',
+    // The workflow subsystem is removed: a top-level `workflow` key is now an
+    // unknown additional property, so both validators must reject it.
+    label: 'workflow-top-level-key-rejected',
     mutate: (m) => {
-      delete (m as unknown as { workflow?: unknown }).workflow;
-    },
-    expectValid: true,
-  },
-  {
-    label: 'workflow-disabled-minimal-valid',
-    mutate: (m) => {
-      setWorkflow(m, { enabled: false });
-    },
-    expectValid: true,
-  },
-  {
-    label: 'workflow-enabled-full-valid',
-    mutate: (m) => {
-      setWorkflow(m, fullWorkflow());
-    },
-    expectValid: true,
-  },
-  {
-    label: 'workflow-enabled-missing-agents-invalid',
-    mutate: (m) => {
-      const workflow = fullWorkflow();
-      delete workflow['agents'];
-      setWorkflow(m, workflow);
-    },
-    expectValid: false,
-  },
-  {
-    label: 'workflow-bad-enum-invalid',
-    mutate: (m) => {
-      const workflow = fullWorkflow();
-      workflow['cmux_mode'] = 'sometimes';
-      setWorkflow(m, workflow);
-    },
-    expectValid: false,
-  },
-  {
-    label: 'workflow-extra-key-invalid',
-    mutate: (m) => {
-      const workflow = fullWorkflow();
-      workflow['unexpected_key'] = true;
-      setWorkflow(m, workflow);
+      (m as unknown as Record<string, unknown>)['workflow'] = { enabled: false };
     },
     expectValid: false,
   },
@@ -296,6 +231,31 @@ for (const batteryCase of batteryCases) {
     );
   });
 }
+
+// The workflow subsystem is gone: a top-level `workflow` key must be rejected as an
+// unknown additional property by BOTH the hand validator and Ajv (exact assertion).
+test('top-level workflow key is rejected by both validators (additional-property)', () => {
+  const candidate = cloneRootManifest();
+  (candidate as unknown as Record<string, unknown>)['workflow'] = { enabled: false };
+
+  const handResult = validate(candidate);
+  assert.equal(handResult.ok, false, 'hand validator must reject a top-level workflow key');
+  assert.ok(
+    handResult.errors.some((e) => e.path === 'workflow' && e.rule === 'additional-property'),
+    `expected a hand additional-property error at "workflow"; got:\n${JSON.stringify(handResult.errors, null, 2)}`,
+  );
+
+  const schemaVerdict = validateFn(candidate);
+  assert.equal(schemaVerdict, false, 'Ajv must reject a top-level workflow key');
+  assert.ok(
+    (validateFn.errors ?? []).some(
+      (e) =>
+        e.keyword === 'additionalProperties' &&
+        (e.params as Record<string, unknown>)['additionalProperty'] === 'workflow',
+    ),
+    `expected an Ajv additionalProperties error naming "workflow"; got:\n${JSON.stringify(validateFn.errors, null, 2)}`,
+  );
+});
 
 // Parity alone does not pin hand-validator path/rule output, so sample each structural rule.
 
@@ -405,7 +365,6 @@ test('schema declares root properties in canonical order', () => {
     'workspaces',
     'filesets',
     'tiers',
-    'workflow',
     'deep_review',
   ]);
 });
@@ -451,31 +410,4 @@ test('schema declares nested property groups in canonical order', () => {
     'baseline',
     'bypassable',
   ]);
-  const workflow = child(defs, 'workflow');
-  assert.deepEqual(propertyKeys(workflow), [
-    'schema',
-    'enabled',
-    'base_branch',
-    'worktree_parent',
-    'cmux_mode',
-    'loopback_mode',
-    'reviewer_independence',
-    'required_review_guides',
-    'commit_exclude',
-    'archive',
-    'timeouts',
-    'budget',
-    'agents',
-    'ship',
-    'notify',
-  ]);
-  const workflowProps = child(workflow, 'properties');
-  assert.deepEqual(propertyKeys(child(workflowProps, 'timeouts')), [
-    'default_wait_seconds',
-    'default_work_seconds',
-  ]);
-  assert.deepEqual(propertyKeys(child(workflowProps, 'budget')), ['workflow_total_seconds']);
-  assert.deepEqual(propertyKeys(child(workflowProps, 'agents')), ['claude', 'codex']);
-  assert.deepEqual(propertyKeys(child(workflowProps, 'ship')), ['ci_wait_seconds', 'notify']);
-  assert.deepEqual(propertyKeys(child(workflowProps, 'notify')), ['webhook_env']);
 });

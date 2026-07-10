@@ -1,12 +1,8 @@
-// E5 — the worktree selector. Two landing modes:
-//   reuse-workflow: an active workflow session owns landing (its planning marker
-//     is at the worktree root) -> the engine reuses that worktree, never creating
-//     a branch/worktree of its own. The slug is IGNORED in this branch.
-//   dedicated: no marker -> the engine creates an engine-local
-//     `git worktree add -b deep-review/<slug> <wtPath> <base>`, with a confinement
-//     guard and a collision/idempotency gate (the S21 residue fix) that REFUSES to
-//     reuse or overwrite a directory that is not THIS repo's worktree on exactly
-//     `deep-review/<slug>`.
+// E5 — the worktree selector. The engine always creates an engine-local
+//   `git worktree add -b deep-review/<slug> <wtPath> <base>`, with a confinement
+//   guard and a collision/idempotency gate (the S21 residue fix) that REFUSES to
+//   reuse or overwrite a directory that is not THIS repo's worktree on exactly
+//   `deep-review/<slug>`.
 //
 // These tests drive a REAL ephemeral git repo (real worktrees, real branches), as
 // the plan requires: every irreversible boundary is proven by enforcement, never

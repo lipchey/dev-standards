@@ -1,6 +1,5 @@
 node_modules/
 runner/dist/
-workflow/dist/
 deep-review/dist/
 reports/quality/
 *.tsbuildinfo

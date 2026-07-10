@@ -257,11 +257,11 @@ export function selectWorktree(slug: string, deps: WorktreeDeps): WorktreeResult
   }
 
   // 6. create the engine-local worktree. A `--` separates options from the two
-  // positional operands (`<path> <commit-ish>`) so an option-like `base` (e.g. a
-  // config `base_branch` beginning with `-`) can never be misparsed as a git option
-  // — `git worktree add`'s operands are NOT pathspecs, so `--literal-pathspecs`
-  // would give them no protection; the `--` does (base is also rejected up front in
-  // resolveParentAndBase). Any git error -> EXIT_FAILURE + a §2.4 machine error.
+  // positional operands (`<path> <commit-ish>`) so an option-like `base` can never
+  // be misparsed as a git option — `git worktree add`'s operands are NOT pathspecs,
+  // so `--literal-pathspecs` would give them no protection; the `--` does (base is
+  // the current HEAD, resolved read-only in resolveParentAndBase). Any git error
+  // -> EXIT_FAILURE + a §2.4 machine error.
   try {
     runGit(deps, ['worktree', 'add', '-b', branch, '--', wtPath, base], 'worktree-add');
     return { exitCode: EXIT_OK, mode: 'dedicated', worktree: wtPath, branch };

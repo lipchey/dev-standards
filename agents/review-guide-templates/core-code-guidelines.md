@@ -1,9 +1,9 @@
 # Core Code Guidelines (review guide template)
 
 Seed template. This is the always-on review baseline - the cheap rules every
-coding task applies, the short list that `review-plan`, `review-implementation`,
-`process-review`, and `deep-review-refactor` all load first (per ADR-003, review
-guides are loaded by explicit brief, not auto-discovered). Unlike the other
+coding task applies, the short list that `deep-review-refactor` loads first
+(per ADR-003, review guides are loaded by explicit brief, not auto-discovered).
+Unlike the other
 seeds it is NOT adapted from an upstream source; it is the repo's own baseline,
 kept deliberately short and noise-free so the on-demand deep guides own the long
 tail. STARTING template: each adopting repo copies it into
