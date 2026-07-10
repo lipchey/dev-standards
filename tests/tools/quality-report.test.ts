@@ -333,10 +333,47 @@ test('writeAtomic: a race-planted symlink at the tmp path cannot redirect the wr
     const out = path.join(dir, 'r.html');
     // Attacker guesses the tmp name (suffix injected to make the guess deterministic) and
     // plants a symlink to the victim: 'wx' must refuse to follow it instead of truncating.
-    fs.symlinkSync(victim, path.join(dir, '.r.html.tmp-guessed'));
+    const planted = path.join(dir, '.r.html.tmp-guessed');
+    fs.symlinkSync(victim, planted);
     assert.throws(() => writeAtomic(out, '<html></html>', 'guessed'), /EEXIST/);
     assert.equal(fs.readFileSync(victim, 'utf8'), 'precious telemetry\n', 'victim untouched');
     assert.equal(fs.existsSync(out), false, 'no report written through the planted tmp');
+    // failure cleanup unlinks only what THIS call created — the pre-existing entry survives.
+    assert.ok(fs.lstatSync(planted).isSymbolicLink(), 'the planted entry was not deleted by cleanup');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: a long dangling-symlink CHAIN to the out target is still refused (no hop-cap fail-open)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-report-'));
+  try {
+    const target = path.join(dir, 'future-sink.jsonl');
+    // link9 -> link8 -> ... -> link1 -> target (all dangling)
+    let next = target;
+    for (let i = 1; i <= 9; i += 1) {
+      const link = path.join(dir, `link${i}`);
+      fs.symlinkSync(next, link);
+      next = link;
+    }
+    const res = runCli(['--path', next, '--out', target]);
+    assert.equal(res.status, 2);
+    assert.equal(fs.existsSync(target), false, 'nothing written at the chain target');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: a symlink LOOP as the sink path is indeterminate → guard fails closed', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-report-'));
+  try {
+    const a = path.join(dir, 'a.jsonl');
+    const b = path.join(dir, 'b.jsonl');
+    fs.symlinkSync(a, b);
+    fs.symlinkSync(b, a);
+    const res = runCli(['--path', a, '--out', path.join(dir, 'r.html')]);
+    assert.equal(res.status, 2, 'unresolvable identity must refuse, not write');
+    assert.equal(fs.existsSync(path.join(dir, 'r.html')), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

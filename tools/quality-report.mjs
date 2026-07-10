@@ -479,25 +479,31 @@ function parseCliArgs(argv) {
 /* Resolve a path to its on-disk identity even when it does not (fully) exist yet: follow a
    (possibly dangling) symlink chain at the leaf, realpath the deepest existing ancestor, and
    rejoin the not-yet-existing remainder. A sink that is a dangling symlink must compare equal
-   to its future target, or the alias guard fails open exactly when the sink is newest. */
-function canonicalize(p, depth = 0) {
+   to its future target, or the alias guard fails open exactly when the sink is newest.
+   Returns null for an INDETERMINATE identity (symlink loop or >40 hops, the kernel's own
+   ceiling) — the caller must fail CLOSED on null, never treat it as "different file". Only
+   symlink hops are capped; the ancestor walk needs none (dirname shortens monotonically). */
+function canonicalize(p, hops = { count: 0, seen: new Set() }) {
   const abs = path.resolve(p);
   try {
     return fs.realpathSync.native(abs);
   } catch {
     /* not fully existing — fall through */
   }
-  if (depth >= 8) return abs; // symlink-loop backstop: give up on resolution, compare as-is
   try {
     if (fs.lstatSync(abs).isSymbolicLink()) {
-      return canonicalize(path.resolve(path.dirname(abs), fs.readlinkSync(abs)), depth + 1);
+      if (hops.count >= 40 || hops.seen.has(abs)) return null;
+      hops.seen.add(abs);
+      hops.count += 1;
+      return canonicalize(path.resolve(path.dirname(abs), fs.readlinkSync(abs)), hops);
     }
   } catch {
     /* entry absent entirely */
   }
   const parent = path.dirname(abs);
   if (parent === abs) return abs;
-  return path.join(canonicalize(parent, depth + 1), path.basename(abs));
+  const cparent = canonicalize(parent, hops);
+  return cparent === null ? null : path.join(cparent, path.basename(abs));
 }
 
 /* Refuse to write the report ONTO its own input sink. Canonical-path equality (symlinks
@@ -509,6 +515,9 @@ const CASE_INSENSITIVE_FS = process.platform === 'darwin' || process.platform ==
 function isSameFile(a, b) {
   let ca = canonicalize(a);
   let cb = canonicalize(b);
+  /* indeterminate identity (loop / hop-cap) → refuse: a guard that cannot establish the
+     paths are different must not let the write proceed. */
+  if (ca === null || cb === null) return true;
   if (CASE_INSENSITIVE_FS) {
     ca = ca.toLowerCase();
     cb = cb.toLowerCase();
@@ -532,14 +541,20 @@ function isSameFile(a, b) {
 export function writeAtomic(outPath, contents, suffix = crypto.randomBytes(8).toString('hex')) {
   const dir = path.dirname(outPath);
   const tmp = path.join(dir, `.${path.basename(outPath)}.tmp-${suffix}`);
+  /* cleanup only what THIS call created: on EEXIST the entry at tmp is someone else's
+     (possibly the planted symlink itself) and must survive untouched. */
+  let created = false;
   try {
     fs.writeFileSync(tmp, contents, { flag: 'wx', mode: 0o600 });
+    created = true;
     fs.renameSync(tmp, outPath);
   } catch (error) {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-      /* never existed or already renamed */
+    if (created) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* already renamed */
+      }
     }
     throw error;
   }
