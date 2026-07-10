@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseLines, resolveTelemetryPath } from '../../tools/quality-stats.mjs';
-import { buildReportModel, renderHtml, runOutcome } from '../../tools/quality-report.mjs';
+import { buildReportModel, renderHtml, runOutcome, writeAtomic } from '../../tools/quality-report.mjs';
 
 /* The .mjs tools are dep-free and export no types; these builders mirror the RunEvent
    emitter contract (docs/effectiveness-plan.md §2 + runner telemetry) so fixtures stay
@@ -232,6 +232,44 @@ test('buildReportModel: a catch inside the embed window but outside the 7d flip 
   assert.equal(fresh.checks[0].flip, true);
 });
 
+test('buildReportModel: a short embed window cannot hide calibration-window evidence from the badges', () => {
+  // A fresh catch + a 5d-old timeout on the same key. The 7d flip window sees the noise and
+  // must refuse candidacy even when --days 1 excludes the timeout from the DISPLAYED window.
+  const noisy = modelOf(
+    [
+      ev(iso(T - 5 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'timeout', durationMs: 999, mode: 'report-only' }], { exit: 0 }),
+      ev(iso(T - 7_200_000), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'fail', durationMs: 10, mode: 'report-only' }], { exit: 0 }),
+      ev(iso(T - 3_600_000), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 10, mode: 'report-only' }], { exit: 0 }),
+    ],
+    { sinceDays: 1 },
+  );
+  assert.equal(noisy.runs.length, 2, 'the timeout run is outside the displayed window');
+  assert.equal(noisy.checks[0].flip, false, 'quality-stats sees the 7d noise → so must the badge');
+  // Same trap for prune: a 20d-old fail is inside the 30d prune window even when --days 7 hides it.
+  const dirty = modelOf(
+    [
+      ev(iso(T - 20 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'fail', durationMs: 10, mode: 'blocking' }], { exit: 1 }),
+      ev(iso(T - 1 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 10, mode: 'blocking' }], { exit: 0 }),
+    ],
+    { sinceDays: 7 },
+  );
+  assert.equal(dirty.checks[0].prune, false, 'the 30d prune window still sees the fail');
+});
+
+test('buildReportModel: badges join by tuple key — a real branch named "(none)" never inherits a null-branch candidacy', () => {
+  const model = modelOf([
+    // null branch: fresh fail→pass on a report-only check → flip candidate.
+    ev(iso(T - 7_200_000), 'r', null, [{ name: 'c', tier: 'fast', status: 'fail', durationMs: 10, mode: 'report-only' }], { exit: 0 }),
+    ev(iso(T - 3_600_000), 'r', null, [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 10, mode: 'report-only' }], { exit: 0 }),
+    // the literal branch "(none)" shares the human label but must NOT share the badge.
+    ev(iso(T - 1_800_000), 'r', '(none)', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 10, mode: 'report-only' }], { exit: 0 }),
+  ]);
+  const nullRow = model.checks.find((c: any) => c.branch === null);
+  const namedRow = model.checks.find((c: any) => c.branch === '(none)');
+  assert.equal(nullRow.flip, true);
+  assert.equal(namedRow.flip, false, 'label collision must not leak candidacy across keys');
+});
+
 /* ---- CLI: sink-clobber guard, days validation, missing sink, end-to-end ---- */
 
 const TOOL = fileURLToPath(new URL('../../tools/quality-report.mjs', import.meta.url));
@@ -267,6 +305,41 @@ test('CLI: --out that aliases the input sink exits 2 and leaves the sink byte-id
     assert.match(res.stderr, /refusing to overwrite/);
     assert.deepEqual(fs.readFileSync(file), before, 'the sink was not touched');
   });
+});
+
+test('CLI: a DANGLING-symlink sink aliasing --out is refused before anything is written', () => {
+  // The sink does not exist yet (freshest possible machine) but is a symlink pointing at the
+  // exact file the report would create: fail-open here would let the next telemetry append
+  // write JSONL into the report HTML.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-report-'));
+  try {
+    const target = path.join(dir, 'future-sink.jsonl');
+    const link = path.join(dir, 'events.jsonl');
+    fs.symlinkSync(target, link); // dangling: target does not exist
+    const res = runCli(['--path', link, '--out', target]);
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /refusing to overwrite/);
+    assert.equal(fs.existsSync(target), false, 'nothing was written at the future sink target');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeAtomic: a race-planted symlink at the tmp path cannot redirect the write onto another file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-report-'));
+  try {
+    const victim = path.join(dir, 'victim.jsonl');
+    fs.writeFileSync(victim, 'precious telemetry\n');
+    const out = path.join(dir, 'r.html');
+    // Attacker guesses the tmp name (suffix injected to make the guess deterministic) and
+    // plants a symlink to the victim: 'wx' must refuse to follow it instead of truncating.
+    fs.symlinkSync(victim, path.join(dir, '.r.html.tmp-guessed'));
+    assert.throws(() => writeAtomic(out, '<html></html>', 'guessed'), /EEXIST/);
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'precious telemetry\n', 'victim untouched');
+    assert.equal(fs.existsSync(out), false, 'no report written through the planted tmp');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('CLI: --days rejects a non-positive-integer window', () => {

@@ -14,6 +14,7 @@
  * Dep-free Node ESM (bare `node tools/quality-report.mjs`). buildReportModel + renderHtml are
  * pure and unit-tested; arg-parsing + file IO is a thin CLI wrapper.
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -79,15 +80,26 @@ export function buildReportModel({
 }) {
   const cutoff = now - sinceDays * DAY_MS;
   const windowed = [];
+  const present = [];
   let futureDated = 0;
   for (const e of events) {
-    if (e.startedAtMs > now) futureDated += 1;
+    if (e.startedAtMs > now) {
+      futureDated += 1;
+      continue;
+    }
+    present.push(e);
     if (inWindow(e.startedAtMs, cutoff, now)) windowed.push(e);
   }
 
-  /* flip/prune candidacy uses the CALIBRATION windows, not the embed window — the badge must
-     agree with quality-stats' text report on the same sink (see the constants' comment). */
+  /* Two aggregations, two jobs. Displayed stats come from the EMBED window (`windowed`).
+     Flip/prune candidacy comes from ALL non-future events over the CALIBRATION windows —
+     candidacy computed from an embed subset would diverge from quality-stats' text report
+     the moment --days is shorter than a calibration window (e.g. --days 1 hides a 5-day-old
+     timeout from the 7d flip window → false flip; --days 7 hides a 20-day-old fail from the
+     30d prune window → false prune). Joined to table rows by the collision-free tuple `key`,
+     never the human label. */
   const agg = aggregate(windowed, { now, sinceDays: flipDays, pruneDays });
+  const candidates = aggregate(present, { now, sinceDays: flipDays, pruneDays });
 
   /* Slim per-run rows: one per verify run, carrying only what the client sums/filters. The
      errors/timeouts split is kept separate (not folded into one "noise") so the KPI can show
@@ -103,8 +115,8 @@ export function buildReportModel({
     timeouts: countStatus(e.results, 'timeout'),
   }));
 
-  const flipLabels = new Set(agg.flip.map((f) => f.label));
-  const pruneLabels = new Set(agg.prune.map((p) => p.label));
+  const flipKeys = new Set(candidates.flip.map((f) => f.key));
+  const pruneKeys = new Set(candidates.prune.map((p) => p.key));
   const checks = agg.keys.map((k) => ({
     repo: k.repo,
     tier: k.tier,
@@ -119,8 +131,8 @@ export function buildReportModel({
     timeouts: k.counts.timeout,
     bypassed: k.counts.bypassed,
     p50Ms: k.p50,
-    flip: flipLabels.has(k.label),
-    prune: pruneLabels.has(k.label),
+    flip: flipKeys.has(k.key),
+    prune: pruneKeys.has(k.key),
   }));
 
   /* Catch pairs carry no reason (fail results have none — runner types); the view shows
@@ -464,27 +476,73 @@ function parseCliArgs(argv) {
   return opts;
 }
 
-/* Refuse to write the report ONTO its own input sink. String-equal resolved paths catch the
-   obvious `--path X --out X`; a stat dev+ino compare additionally catches symlink/hardlink
-   aliases to the same inode. Either way we exit before touching a byte of the sink. */
+/* Resolve a path to its on-disk identity even when it does not (fully) exist yet: follow a
+   (possibly dangling) symlink chain at the leaf, realpath the deepest existing ancestor, and
+   rejoin the not-yet-existing remainder. A sink that is a dangling symlink must compare equal
+   to its future target, or the alias guard fails open exactly when the sink is newest. */
+function canonicalize(p, depth = 0) {
+  const abs = path.resolve(p);
+  try {
+    return fs.realpathSync.native(abs);
+  } catch {
+    /* not fully existing — fall through */
+  }
+  if (depth >= 8) return abs; // symlink-loop backstop: give up on resolution, compare as-is
+  try {
+    if (fs.lstatSync(abs).isSymbolicLink()) {
+      return canonicalize(path.resolve(path.dirname(abs), fs.readlinkSync(abs)), depth + 1);
+    }
+  } catch {
+    /* entry absent entirely */
+  }
+  const parent = path.dirname(abs);
+  if (parent === abs) return abs;
+  return path.join(canonicalize(parent, depth + 1), path.basename(abs));
+}
+
+/* Refuse to write the report ONTO its own input sink. Canonical-path equality (symlinks
+   followed, case-folded where the platform's default filesystem is case-insensitive) catches
+   aliases even while one side does not exist yet; the stat dev+ino compare additionally
+   catches hardlinks between existing files. Either way we exit before touching the sink. */
+const CASE_INSENSITIVE_FS = process.platform === 'darwin' || process.platform === 'win32';
+
 function isSameFile(a, b) {
-  if (path.resolve(a) === path.resolve(b)) return true;
+  let ca = canonicalize(a);
+  let cb = canonicalize(b);
+  if (CASE_INSENSITIVE_FS) {
+    ca = ca.toLowerCase();
+    cb = cb.toLowerCase();
+  }
+  if (ca === cb) return true;
   try {
     const sa = fs.statSync(a);
     const sb = fs.statSync(b);
     return sa.dev === sb.dev && sa.ino === sb.ino;
   } catch {
-    return false; // one side does not exist → cannot be the same existing file
+    return false; // one side does not exist and the canonical paths differ
   }
 }
 
 /* tmp sibling + rename = atomic replace: a reader never sees a half-written report, and a
-   crash mid-write leaves the previous report intact (only the tmp is orphaned). */
-function writeAtomic(outPath, contents) {
+   crash mid-write leaves the previous report intact (only the tmp is orphaned). The tmp is
+   opened with 'wx' (O_CREAT|O_EXCL — refuses to follow ANYTHING pre-existing, symlinks
+   included) and a random suffix, so a race-planted symlink at a guessed tmp name cannot
+   redirect the truncating write onto another file. `suffix` is injectable for the test that
+   proves exactly that. */
+export function writeAtomic(outPath, contents, suffix = crypto.randomBytes(8).toString('hex')) {
   const dir = path.dirname(outPath);
-  const tmp = path.join(dir, `.${path.basename(outPath)}.tmp-${process.pid}`);
-  fs.writeFileSync(tmp, contents);
-  fs.renameSync(tmp, outPath);
+  const tmp = path.join(dir, `.${path.basename(outPath)}.tmp-${suffix}`);
+  try {
+    fs.writeFileSync(tmp, contents, { flag: 'wx', mode: 0o600 });
+    fs.renameSync(tmp, outPath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* never existed or already renamed */
+    }
+    throw error;
+  }
 }
 
 function main(argv) {

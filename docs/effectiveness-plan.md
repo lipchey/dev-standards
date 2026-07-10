@@ -248,10 +248,14 @@ JS-escape, а не голий символ; вставка в DOM лише че�
   inbox;
 - CALIBRATION.md існує; перше flip-рішення прийнято з посиланням на цифри
   і диспозицію кандидатів.
+- `quality-report.mjs` рендерить self-contained HTML з того самого sink;
+  flip/prune-бейджі збігаються з вердиктами `quality-stats` (калібрувальні
+  вікна 7д/30д незалежно від `--days`).
 
 ## Out of scope (v1)
 
-Дашборди/візуалізації; експорт у Directus/n8n (extension point — JSONL);
+Візуалізації понад self-contained HTML-звіт кроку 8.6 (сервер, live-reload,
+тренди глибші за byDay); експорт у Directus/n8n (extension point — JSONL);
 автоматичне unlearning правил (лишається challenge-only per trust-модель);
 телеметрія deep-review (уже має per-day markdown-звіти) і скілових
 capture-івентів (видно в git-історії гайдів); амендмент

@@ -302,6 +302,10 @@ export function aggregate(events, options = {}) {
       tier: group.tier,
       name: group.name,
       branch: group.branch,
+      /* label is for HUMANS (report text) and is collision-prone by construction (a real
+         branch literally named "(none)" reads like a null branch); key is the collision-free
+         JSON tuple — consumers joining records to flip/prune candidates MUST join on key. */
+      key: keyOf(group.repo, group.tier, group.name, group.branch),
       label: labelOf(group.repo, group.tier, group.name, group.branch),
       runs,
       counts,
@@ -319,7 +323,7 @@ export function aggregate(events, options = {}) {
     const windowCatches = countCatches(sinceOccs);
     const windowNoise = sinceOccs.filter((o) => NOISE_STATUSES.has(o.status)).length;
     if (latestMode === 'report-only' && windowCatches >= 1 && windowNoise === 0) {
-      flip.push({ label: record.label, catches: windowCatches });
+      flip.push({ key: record.key, label: record.label, catches: windowCatches });
     }
 
     /* Prune: a check that fired cleanly (>=1 pass) and never flagged anything
@@ -336,7 +340,7 @@ export function aggregate(events, options = {}) {
       else if (o.status === 'bypassed') pBypass += 1;
     }
     if (pPass >= 1 && pFail === 0 && pBypass === 0) {
-      prune.push({ label: record.label, runs: pruneOccs.length, pass: pPass });
+      prune.push({ key: record.key, label: record.label, runs: pruneOccs.length, pass: pPass });
     }
   }
 
