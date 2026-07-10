@@ -82,6 +82,24 @@ Judgment prompts:
   indirection that adds a name but no behavior? Weigh both directions - do not
   manufacture an abstraction a single caller will ever use.
 
+## Comments
+
+Judgment prompts:
+
+- Does each comment carry information the code cannot - a non-obvious why, a
+  constraint, an external gotcha, a deliberate trade-off? Boilerplate is a
+  finding to delete, not keep: file-header banners restating the module name,
+  section dividers, play-by-play narration of the next line, notes addressed
+  to the reviewer ("changed this to fix X"), and commented-out code.
+- Are all comments (doc comments included) written in English? A non-English
+  comment is a finding regardless of the team's working language.
+- Do comments use block form `/* */` (`/** */` for doc comments) in languages
+  that support it? Line form is acceptable only where a tool or the language
+  itself mandates it - directives (`// eslint-disable-next-line`,
+  `/// <reference>`, `//go:build`), shebangs, and languages whose comment or
+  doc syntax is line-based by spec (Python/shell/YAML `#`, Rust `///`, Go doc
+  comments).
+
 ## Tests
 
 Judgment prompts:
