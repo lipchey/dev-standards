@@ -2,31 +2,12 @@
 
 Non-blocking, dated. Newest first.
 
-## 2026-07-10 — Descriptor-relative confinement for skill-wrapper generation
+## 2026-07-10 — Descriptor-relative confinement for skill-wrapper generation — MOOT (Phase 2, 2026-07-10)
 
-**Deferred from the core-hardening Gate C round (finding #1, P1).**
-
-`generate-skill-wrappers.ts` confines every wrapper write/delete with an
-`assertConfined` lstat-walk preflight plus a `wx` (O_EXCL, no-follow) leaf create
-and no-follow `rename`. This defends **static** symlink attacks: a symlinked
-skills dir or a symlinked `SKILL.md` is refused, and the leaf is never followed.
-
-It does **not** defend a **concurrent-swap TOCTOU**: a local process that replaces
-`dir` (or an ancestor) with a symlink *between* the `assertConfined` preflight and
-the subsequent `mkdirSync` / `writeFileSync` / `renameSync` / `rmSync` can still
-redirect the operation outside the target root. The orphan-cleanup `rmSync` path is
-the most dangerous (deletion through a swapped inode).
-
-**Decision:** out of scope for the trusted single-user pilot — exploiting it needs a
-local adversary running concurrently during generation, and the static-symlink
-attack (the realistic one) is already closed.
-
-**Upgrade path (when the threat model widens):** perform the create/rename/unlink as
-**descriptor-relative, no-follow** operations (`openat`/`unlinkat`/`renameat` under
-verified directory handles, or `O_NOFOLLOW` fds), and re-check the generated-marker
-on that same inode rather than by path. **Effort:** M (rewrite the write/delete core
-around fd-relative syscalls; Node needs `fs.opendir`/`dir`-fd plumbing or a small
-native/`node:fs` `openat` shim).
+The confinement TOCTOU this tracked lived entirely in `generate-skill-wrappers.ts`,
+which was **deleted in Phase 2** (the single surviving skill now ships static
+wrappers guarded by `tests/runner/skill-wrappers-static.test.ts`; no runtime writes
+wrapper files). No code path remains to harden — closed as moot.
 
 ## 2026-07-10 — Remove the workflow (L3) subsystem entirely — DONE (2026-07-10)
 
@@ -79,7 +60,7 @@ Independent of the in-flight core-hardening batch (which already leaves
 - Resolve ADR-011 "review-chain" naming collision with the downstream
   `codex-chain` skill.
 - **Core `verify` shim lacks a build-freshness guard** (Gate P, Phase 1,
-  2026-07-10). The core `verify` shim and `tools/standards-sync` check only
+  2026-07-10). The core `verify` shim checks only
   bundle *existence*, not freshness; a stale gitignored `runner/dist/` runs
   blindly — violates guide rule quality-gates.md "build-on-demand artifacts
   need a build stamp + freshness check". CI is unaffected (bootstrap rebuilds

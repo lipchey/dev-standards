@@ -267,8 +267,8 @@ bootstrap кейс); один slice реально приземлений у п�
    перевірений); committed-bundles розглядати лише з повним планом
    міграції шимів/ignore/bootstrap/CI і rollback-ом.
    ДОДАТКОВО (Gate P Фази 1, 2026-07-10): портувати freshness-гард у ЯДЕРНИЙ
-   `verify`-шим + `tools/standards-sync` (зараз перевіряють лише *існування*
-   бандла — guide-правило «build-on-demand артефакт → stamp + freshness»
+   `verify`-шим (`tools/standards-sync` видалено у Фазі 2; зараз шим перевіряє
+   лише *існування* бандла — guide-правило «build-on-demand артефакт → stamp + freshness»
    порушено в ядрі; CI безпечний, бо bootstrap білдить щоразу; ризик — локальна
    ядерна розробка). SHA-стамп консюмера тут НЕ годиться (активна ядерна
    розробка міняє HEAD щокоміта + лишає uncommitted-правки) — потрібен

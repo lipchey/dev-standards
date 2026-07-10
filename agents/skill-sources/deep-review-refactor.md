@@ -7,8 +7,9 @@ description: Manual-only repo-local deep code/architecture review (review-only) 
 
 Canonical body (single source per ADR-003) for the repo-local
 `deep-review-refactor` skill. The runtime skill wrappers under `.agents/skills/`
-and `.claude/skills/` are thin pointers at this file; do not duplicate this body
-into them (ADR-010).
+and `.claude/skills/` are thin static pointers at this file; do not duplicate this
+body into them (ADR-010). Generation was retired in Phase 2 (2026-07-10): the
+wrappers are committed statically and guarded by `tests/runner/skill-wrappers-static.test.ts`.
 
 ## When to use / trigger
 
