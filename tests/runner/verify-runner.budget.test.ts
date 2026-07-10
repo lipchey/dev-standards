@@ -60,6 +60,23 @@ test('runTier fails closed when the tier wall-clock budget is exceeded', () => {
   }
 });
 
+test('FIX #7: a report-write failure in the deadline catch does not mask the original error', () => {
+  // A non-existent root makes emitReport (writeReport → realpathSync) throw; the injected
+  // clock forces the pre-return budget assertion to throw first. The ORIGINAL budget error
+  // must survive the best-effort report write, not be replaced by its ENOENT.
+  const missingRoot = path.join(os.tmpdir(), `ds-nope-${process.pid}-${Date.now()}`);
+  const budgetMs = 300 * 1000;
+  let n = 0;
+  const clock = (): number => (n++ === 0 ? 0 : budgetMs + 1); // startedAt=0, then past deadline
+  const m = manifest({ filesets: [], tiers: { staged: [], fast: [], full: [], audit: [] } });
+  assert.throws(
+    () => runTier(m, missingRoot, 'fast', clock),
+    (err: unknown) =>
+      err instanceof Error && /budget exceeded/i.test(err.message) && !/realpath|ENOENT/i.test(err.message),
+    'the original budget error must survive a report-write failure',
+  );
+});
+
 test('runTier completes and returns 0 when comfortably within budget', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-budget-'));
   try {

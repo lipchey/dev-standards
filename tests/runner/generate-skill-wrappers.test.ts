@@ -214,6 +214,47 @@ test('RUN-08: renderWrapper leaves plain scalars bare (byte-identity guard)', ()
   assert.match(wrapper, /^canonical_source: agents\/skill-sources\/review-plan\.md$/m, 'plain path must be bare');
 });
 
+// ── FIX #3: isPlainSafe round-trips bare only when safe; else JSON-quoted ──────
+
+test('FIX #3: an embedded newline is quoted (valid YAML) and round-trips to the original', () => {
+  const runtime = RUNTIMES[0]!;
+  const description = 'line1\nline2';
+  const wrapper = renderWrapper({ name: 'plan', description }, runtime, 'agents/skill-sources/plan.md');
+  // Must NOT emit a bare, multi-line `description:` (that injects an invalid extra YAML line).
+  assert.match(wrapper, /^description: "line1\\nline2"$/m, 'newline value must be JSON-quoted on one line');
+  const parsed = parseFrontmatter(wrapper);
+  assert.equal(parsed.ok, true, 'a quoted newline wrapper must still parse');
+  if (parsed.ok) assert.equal(parsed.frontmatter.description, description, 'newline round-trip');
+});
+
+test('FIX #3: YAML 1.2 float specials (.inf/.nan/.Inf) are quoted, not left bare', () => {
+  const runtime = RUNTIMES[0]!;
+  for (const description of ['.inf', '.nan', '.Inf', '-.inf', '+.nan']) {
+    const wrapper = renderWrapper({ name: 'plan', description }, runtime, 'agents/skill-sources/plan.md');
+    assert.match(wrapper, new RegExp('^description: ".*"$', 'm'), `${JSON.stringify(description)} must be quoted`);
+    const parsed = parseFrontmatter(wrapper);
+    assert.equal(parsed.ok, true);
+    if (parsed.ok) assert.equal(parsed.frontmatter.description, description, `round-trip for ${JSON.stringify(description)}`);
+  }
+});
+
+test('FIX #3: a string that merely STARTS numeric (e.g. "2026 migration") stays bare', () => {
+  const runtime = RUNTIMES[0]!;
+  const wrapper = renderWrapper({ name: 'plan', description: '2026 migration' }, runtime, 'agents/skill-sources/plan.md');
+  assert.match(wrapper, /^description: 2026 migration$/m, 'a non-numeric string starting with digits must stay bare');
+});
+
+test('FIX #3: indicator/colon/quote scalars are quoted and round-trip', () => {
+  const runtime = RUNTIMES[0]!;
+  for (const description of ['[danger]', 'a: b', '" quoted "']) {
+    const wrapper = renderWrapper({ name: 'plan', description }, runtime, 'agents/skill-sources/plan.md');
+    assert.match(wrapper, new RegExp('^description: ".*"$', 'm'), `${JSON.stringify(description)} must be quoted`);
+    const parsed = parseFrontmatter(wrapper);
+    assert.equal(parsed.ok, true, `${JSON.stringify(description)} wrapper must parse`);
+    if (parsed.ok) assert.equal(parsed.frontmatter.description, description, `round-trip for ${JSON.stringify(description)}`);
+  }
+});
+
 // ── core-fix #1: canonical_source (2 locations, clone-stable POSIX pointer) ────
 
 test('core-fix #1: same-root canonical_source is the historic literal in BOTH locations', () => {
@@ -422,6 +463,25 @@ test('RUN-05: generate deletes a generated-marked orphan but keeps a non-generat
     assert.ok(!fs.existsSync(path.join(orphanDir, 'SKILL.md')), 'the generated orphan must be removed');
     assert.match(result.stdout.join('\n'), /removed orphan/i);
     assert.ok(fs.existsSync(path.join(keepDir, 'SKILL.md')), 'a non-generated stray must be kept');
+  } finally {
+    cleanup(src);
+  }
+});
+
+// ── FIX #4: only ENOENT is "absent" on the orphan-discovery wrapper read ──────
+
+test('FIX #4: an orphan whose SKILL.md is a directory fails check (EISDIR surfaced, not silent in-sync)', () => {
+  const src = sourceRepo({ plan: 'd' });
+  try {
+    assert.equal(generate(src, src).code, EXIT_OK);
+    // An orphan wrapper dir with NO canonical source, whose SKILL.md is itself a
+    // DIRECTORY. It is only seen by the orphan-discovery read (findGeneratedWrappers),
+    // which must not swallow EISDIR as "no wrapper here".
+    fs.mkdirSync(path.join(src, '.agents', 'skills', 'gone', 'SKILL.md'), { recursive: true });
+
+    const result = check(src, src, true);
+    assert.equal(result.code, EXIT_FAIL, 'EISDIR on an orphan wrapper read must surface, not read as absent');
+    assert.match(result.stderr.join('\n'), /cannot read|EISDIR/i);
   } finally {
     cleanup(src);
   }

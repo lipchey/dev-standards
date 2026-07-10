@@ -61,14 +61,24 @@ function main(argv: string[]): number {
   }
 }
 
-// report-only outcomes are recorded but do not fail; one monotonic deadline bounds the
-// whole tier (setup + git + checks). remaining-time is passed as each spawn's timeout so
-// a hung git or check can't outlive the tier budget.
-export function runTier(manifest: Manifest, root: string, scope: TierName): number {
-  const startedAt = Date.now();
+// report-only outcomes are recorded but do not fail; one MONOTONIC deadline bounds the
+// whole tier (setup + git + checks). `now` is performance.now() so a backward wall-clock
+// jump can't extend a hard deadline; it is injectable only so tests can drive the clock.
+// Remaining-time is recomputed before every spawn/budget check and passed as each spawn's
+// timeout, so a hung git or check can't outlive the tier budget.
+export function runTier(
+  manifest: Manifest,
+  root: string,
+  scope: TierName,
+  now: () => number = () => performance.now(),
+): number {
+  const startedAt = now();
   const budgetSeconds = manifest.budgets[`${scope}_seconds`];
   const deadlineMs = startedAt + budgetSeconds * 1000;
-  const remainingMs = (): number => deadlineMs - Date.now();
+  // performance.now() is fractional; spawn timeouts must be integers, so floor the
+  // remaining budget (never granting MORE than what is left) before it reaches a spawn.
+  const remainingMs = (): number => Math.floor(deadlineMs - now());
+  const assertBudget = (): void => assertWithinBudget(startedAt, budgetSeconds, now);
 
   // Initialize results before setup so a deadline hit during git/fileset expansion can
   // still emit the work completed so far.
@@ -84,6 +94,9 @@ export function runTier(manifest: Manifest, root: string, scope: TierName): numb
     const filesByName = new Map<string, string[]>();
     for (const fileset of manifest.filesets) {
       filesByName.set(fileset.name, expandFileset(fileset, { cwd: root, remainingMs }));
+      // Fileset expansion (git + in-memory globbing) can itself cross the deadline; assert
+      // after each so a tier with zero checks can't succeed once the budget is spent (FIX #2).
+      assertBudget();
     }
 
     for (const check of tierChecks(manifest, scope)) {
@@ -95,11 +108,16 @@ export function runTier(manifest: Manifest, root: string, scope: TierName): numb
           : runCheck({ check, tier: scope, cwd: root, filesByName, remainingMs: left });
       results.push(result);
       process.stdout.write(summarize(result));
-      assertWithinBudget(startedAt, budgetSeconds);
+      assertBudget();
     }
+
+    // Fail closed before the success/report path: an empty/near-exhausted tier that
+    // slipped past the loops must not write a report and return 0 (FIX #2).
+    assertBudget();
   } catch (error) {
-    // ponytail: report write here is best-effort — we're already just past the deadline,
-    // so a partial report is acceptable and any write failure must not mask the real error.
+    // Report write here is best-effort — we're already past the deadline, so a partial
+    // report is acceptable. Guard it in its own try so a report-write failure can never
+    // mask/replace the original deadline/error, which is always re-thrown (FIX #7).
     try {
       emitReport();
     } catch {

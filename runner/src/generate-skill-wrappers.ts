@@ -160,13 +160,22 @@ export function wrapperPath(targetRoot: string, runtime: Runtime, name: string):
 // The predicate is conservative - when unsure, quote.
 function isPlainSafe(v: string): boolean {
   if (v === '') return false;
+  // A control char/newline/tab can't survive as a one-line bare scalar - it would
+  // inject an extra YAML line (a bare `description: a\nb` is invalid).
+  if (/[\u0000-\u001f\u007f]/.test(v)) return false;
   if (/^\s|\s$/.test(v)) return false; // leading/trailing whitespace
   if (/^[-?:,[\]{}#&*!|>'"%@`]/.test(v)) return false; // indicator as first char
   if (v.includes('"')) return false; // a double quote anywhere - quote defensively
   if (/:(\s|$)/.test(v)) return false; // ": " or a trailing ":" (mapping-like)
   if (/\s#/.test(v)) return false; // " #" starts a YAML comment
-  if (/^(true|false|null|~|yes|no|on|off)$/i.test(v)) return false; // reserved plain tokens
-  if (/^[+-]?(\d|\.\d)/.test(v)) return false; // number-ish whole value
+  // Anchored (^...$) YAML 1.2 implicit types: a value that FULL-matches one would
+  // be decoded to a bool/number/timestamp, so it must be quoted to stay a string.
+  // Anchoring keeps a plain string that merely STARTS numeric (e.g. "2026 migration") bare.
+  if (/^(true|false|null|~|yes|no|on|off)$/i.test(v)) return false; // bool/null (+ YAML 1.1 words)
+  if (/^[-+]?\.(inf|nan)$/i.test(v)) return false; // .inf / .nan / .Inf
+  if (/^[-+]?[0-9]+$/.test(v)) return false; // int
+  if (/^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$/.test(v)) return false; // float / scientific
+  if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}([Tt ][0-9:.+Zz-]*)?$/.test(v)) return false; // timestamp
   return true;
 }
 
@@ -348,6 +357,14 @@ let tmpCounter = 0;
 // replaces a pre-existing leaf symlink/file WITHOUT following it, so a symlinked
 // SKILL.md never redirects the write. NOT a multi-file transaction: a mid-loop
 // crash can leave earlier leaves written (each leaf is individually atomic).
+//
+// ponytail: STATIC symlink attacks are defended (the lstat-walk assertConfined
+// preflight + the `wx` no-follow leaf). The CONCURRENT-SWAP TOCTOU is NOT defended:
+// a local process that swaps `dir` (or an ancestor) for a symlink between the
+// assertConfined preflight and this mkdir/write/rename can still redirect it.
+// ACCEPTABLE for this trusted single-user pilot (needs a local adversary running
+// during generation). Upgrade path = descriptor-relative openat/no-follow ops under
+// verified directory handles (see BACKLOG: descriptor-relative confinement).
 function writeWrapperFile(abs: string, content: string): void {
   const dir = path.dirname(abs);
   mkdirSync(dir, { recursive: true });
@@ -362,8 +379,9 @@ type FoundResult = { ok: true; wrappers: { relPath: string }[] } | { ok: false; 
 // is confined: the skills root and each candidate leaf are symlink-checked
 // before we read them, so a symlinked skills tree cannot lure us into reading /
 // (later) deleting files outside the target. Only files carrying GENERATED_MARKER
-// are returned. Only ENOENT/ENOTDIR/EISDIR mean "no wrapper here"; EACCES etc.
-// are a structured failure.
+// are returned. Only ENOENT means "no wrapper here"; every other errno (EISDIR when
+// SKILL.md is a directory, ENOTDIR after a race, EACCES, ...) is a structured
+// failure - a malformed orphan must never be silently skipped (RUN-07).
 function findGeneratedWrappers(targetRoot: string): FoundResult {
   const wrappers: { relPath: string }[] = [];
   for (const runtime of RUNTIMES) {
@@ -387,7 +405,7 @@ function findGeneratedWrappers(targetRoot: string): FoundResult {
         content = readFileSync(path.join(targetRoot, relPath), 'utf8');
       } catch (error) {
         const e = error as NodeJS.ErrnoException;
-        if (e.code === 'ENOENT' || e.code === 'ENOTDIR' || e.code === 'EISDIR') continue;
+        if (e.code === 'ENOENT') continue; // no wrapper here; anything else surfaces
         return { ok: false, message: `cannot read ${relPath}: ${e.message}` };
       }
       if (content.includes(GENERATED_MARKER)) wrappers.push({ relPath });

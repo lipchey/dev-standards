@@ -2,6 +2,32 @@
 
 Non-blocking, dated. Newest first.
 
+## 2026-07-10 — Descriptor-relative confinement for skill-wrapper generation
+
+**Deferred from the core-hardening Gate C round (finding #1, P1).**
+
+`generate-skill-wrappers.ts` confines every wrapper write/delete with an
+`assertConfined` lstat-walk preflight plus a `wx` (O_EXCL, no-follow) leaf create
+and no-follow `rename`. This defends **static** symlink attacks: a symlinked
+skills dir or a symlinked `SKILL.md` is refused, and the leaf is never followed.
+
+It does **not** defend a **concurrent-swap TOCTOU**: a local process that replaces
+`dir` (or an ancestor) with a symlink *between* the `assertConfined` preflight and
+the subsequent `mkdirSync` / `writeFileSync` / `renameSync` / `rmSync` can still
+redirect the operation outside the target root. The orphan-cleanup `rmSync` path is
+the most dangerous (deletion through a swapped inode).
+
+**Decision:** out of scope for the trusted single-user pilot — exploiting it needs a
+local adversary running concurrently during generation, and the static-symlink
+attack (the realistic one) is already closed.
+
+**Upgrade path (when the threat model widens):** perform the create/rename/unlink as
+**descriptor-relative, no-follow** operations (`openat`/`unlinkat`/`renameat` under
+verified directory handles, or `O_NOFOLLOW` fds), and re-check the generated-marker
+on that same inode rather than by path. **Effort:** M (rewrite the write/delete core
+around fd-relative syscalls; Node needs `fs.opendir`/`dir`-fd plumbing or a small
+native/`node:fs` `openat` shim).
+
 ## 2026-07-10 — Remove the workflow (L3) subsystem entirely
 
 **Decision (owner):** drop the workflow feature from dev-standards altogether.

@@ -63,9 +63,12 @@ Judgment prompts:
   root (realpath starts-with root, checked on the resolved path, not the raw
   string)?
 - Is a symlink component that escapes the root rejected, and is the leaf written
-  no-follow (`wx` / `O_NOFOLLOW`, or unlink-then-create) so a swapped symlink
-  cannot redirect the write? The dangerous path is deletion/orphan-cleanup - it
-  must be confined too, not just the create path.
+  no-follow — exclusive/no-follow creation (`wx` / `O_CREAT|O_EXCL|O_NOFOLLOW`)
+  or atomic replacement via a temp file + `rename` through a verified directory —
+  so a swapped symlink cannot redirect the write? A bare unlink-then-create is
+  NOT safe: another process can install a symlink between the unlink and the
+  ordinary create and redirect it. The dangerous path is deletion/orphan-cleanup
+  - it must be confined too, not just the create path.
 - Does the code treat only `ENOENT` as "absent" and every other errno
   (`EACCES`, `ELOOP`, `ENOTDIR`) as a real failure, so an error is never
   misread as a safe empty state?
