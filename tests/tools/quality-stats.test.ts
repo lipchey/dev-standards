@@ -9,6 +9,7 @@ import {
   parseLines,
   normalizeEvent,
   aggregate,
+  formatReport,
   p50,
   countCatches,
   resolveTelemetryPath,
@@ -30,11 +31,17 @@ const DAY = 86_400_000;
 const T = Date.parse('2026-07-10T12:00:00.000Z');
 const iso = (ms: number): string => new Date(ms).toISOString();
 
-function ev(startedAt: string, repo: string, branch: string | null, results: Result[]): unknown {
+function ev(
+  startedAt: string,
+  repo: string,
+  branch: string | null,
+  results: Result[],
+  finishedAt: string = startedAt,
+): unknown {
   return {
     v: 1,
     startedAt,
-    finishedAt: startedAt,
+    finishedAt,
     repo,
     scope: 'staged',
     branch,
@@ -250,16 +257,26 @@ test('aggregate: a fail OLDER than the prune window does not disqualify prune ca
 
 /* ---- totals ---- */
 
-test('aggregate: totals report cost-per-catch as verify-seconds per catch-candidate', () => {
+test('aggregate: totals use per-event wall-clock span, not summed check durations', () => {
+  // durationMs is deliberately tiny (1ms): the 2000ms total can only come from the spans.
   const agg = aggregateOf([
-    ev(iso(T - 2 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'fail', durationMs: 1000, mode: 'report-only' }]),
-    ev(iso(T - 1 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 1000, mode: 'report-only' }]),
+    ev(iso(T - 2 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'fail', durationMs: 1, mode: 'report-only' }], iso(T - 2 * DAY + 1000)),
+    ev(iso(T - 1 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 1, mode: 'report-only' }], iso(T - 1 * DAY + 1000)),
   ]);
   assert.equal(agg.totals.totalCatches, 1);
-  assert.equal(agg.totals.totalDurationMs, 2000);
+  assert.equal(agg.totals.totalSpanMs, 2000, 'span = Σ(finishedAt - startedAt), not Σ durationMs');
+  assert.equal(agg.totals.spanlessEvents, 0);
   assert.equal(agg.totals.dayCount, 2);
   assert.equal(agg.totals.perDayMs, 1000);
   assert.equal(agg.totals.costPerCatchSec, 2);
+});
+
+test('aggregate: an event with an unparseable finishedAt falls back to Σ durationMs and is counted', () => {
+  const agg = aggregateOf([
+    ev(iso(T - 1 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 500, mode: 'blocking' }], 'not-a-date'),
+  ]);
+  assert.equal(agg.totals.totalSpanMs, 500, 'no usable span → summed check time');
+  assert.equal(agg.totals.spanlessEvents, 1);
 });
 
 test('aggregate: empty event list produces empty lists and a null cost-per-catch', () => {
@@ -267,8 +284,67 @@ test('aggregate: empty event list produces empty lists and a null cost-per-catch
   assert.deepEqual(agg.keys, []);
   assert.deepEqual(agg.flip, []);
   assert.deepEqual(agg.prune, []);
+  assert.deepEqual(agg.catches, []);
   assert.equal(agg.totals.totalCatches, 0);
   assert.equal(agg.totals.costPerCatchSec, null);
+});
+
+/* ---- F6: catch-candidate pair listing ---- */
+
+test('formatReport: Catch candidates lists each fail→pass pair with startedAt + short sha; null sha renders "-"', () => {
+  const failAt = iso(T - 2 * DAY);
+  const passAt = iso(T - 1 * DAY);
+  const { events } = parseLines(
+    jsonl([
+      { ...(ev(failAt, 'repoX', 'main', [{ name: 'eslint', tier: 'fast', status: 'fail', durationMs: 10, mode: 'report-only' }]) as Record<string, unknown>), head_sha: 'abc1234567890def' },
+      { ...(ev(passAt, 'repoX', 'main', [{ name: 'eslint', tier: 'fast', status: 'pass', durationMs: 10, mode: 'report-only' }]) as Record<string, unknown>), head_sha: null },
+    ]),
+  );
+  const agg = aggregate(events, { now: T, sinceDays: 7, pruneDays: 30 });
+  // The section count is derived from the same list (single source).
+  assert.equal(agg.catches.length, 1);
+  assert.equal(agg.totals.totalCatches, 1);
+
+  const report = formatReport(agg);
+  assert.ok(report.includes('## Catch candidates'), 'section present');
+  const line = report.split('\n').find((l) => l.startsWith('- repoX fast eslint main:'));
+  assert.equal(
+    line,
+    `- repoX fast eslint main: fail ${failAt} (abc123456789) -> pass ${passAt} (-)`,
+    `catch-candidate pair mis-rendered; got:\n${report}`,
+  );
+});
+
+/* ---- F7: windows reject future-dated events ---- */
+
+test('aggregate: a future-dated event (clock skew/tamper) is outside both windows', () => {
+  const future = iso(T + 3_600_000); // 1h ahead of now=T
+  // flip: an in-window fail + a FUTURE pass must not manufacture an in-window catch.
+  const flipAgg = aggregateOf([
+    ev(iso(T - 2 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'fail', durationMs: 10, mode: 'report-only' }]),
+    ev(future, 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 10, mode: 'report-only' }]),
+  ]);
+  assert.equal(flipAgg.flip.length, 0, 'a future pass cannot manufacture an in-window catch');
+  // prune: a lone FUTURE pass is not an in-window clean pass.
+  const pruneAgg = aggregateOf([
+    ev(future, 'r', 'main', [{ name: 'c', tier: 'full', status: 'pass', durationMs: 10, mode: 'blocking' }]),
+  ]);
+  assert.equal(pruneAgg.prune.length, 0, 'a future pass is not an in-window clean pass');
+});
+
+/* ---- F8: bypass reasons cannot inject report lines / terminal controls ---- */
+
+test('formatReport: a bypass reason with a newline and ANSI is JSON-escaped onto one line', () => {
+  const reason = 'boom\n[31mred';
+  const agg = aggregateOf([
+    ev(iso(T - 1 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'bypassed', durationMs: 10, mode: 'blocking', reason }]),
+  ]);
+  const report = formatReport(agg);
+  const line = report.split('\n').find((l) => l.startsWith('- r/fast/c@main:'));
+  assert.ok(line, `bypass reason line present; got:\n${report}`);
+  assert.ok(line.includes(JSON.stringify(reason)), 'reason is JSON-quoted');
+  assert.ok(!line.includes(''), 'the raw ESC byte is escaped away');
+  assert.equal(report.split('\n').filter((l) => l.includes('boom')).length, 1, 'the reason stays on one line');
 });
 
 /* ---- small pure helpers ---- */
@@ -341,11 +417,17 @@ test('CLI: a real fixture prints every documented section, both candidate lists,
   try {
     const res = runCli(['--path', file]);
     assert.equal(res.status, 0, res.stderr);
-    for (const section of ['## Per-key', '## Flip candidates', '## Prune candidates', '## Totals']) {
+    for (const section of ['## Per-key', '## Catch candidates', '## Flip candidates', '## Prune candidates', '## Totals']) {
       assert.ok(res.stdout.includes(section), `missing section: ${section}`);
     }
     assert.ok(res.stdout.includes('repoX/fast/eslint@main'), 'flip candidate listed');
     assert.ok(res.stdout.includes('repoX/full/knip@main'), 'prune candidate listed');
+    // The eslint fail→pass is a catch-candidate pair (head_sha "deadbeef" from the ev builder).
+    assert.match(
+      res.stdout,
+      /- repoX fast eslint main: fail .* \(deadbeef\) -> pass .* \(deadbeef\)/,
+      'catch-candidate pair listed',
+    );
     assert.ok(res.stdout.includes('malformed=1'), 'malformed counter');
     assert.ok(res.stdout.includes('unsupported-version=1'), 'unsupported counter');
     assert.ok(res.stdout.includes('human disposition required per docs/CALIBRATION.md'), 'candidate label');

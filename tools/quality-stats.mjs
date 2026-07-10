@@ -33,6 +33,9 @@ const STATUSES = new Set(['pass', 'fail', 'skipped', 'timeout', 'bypassed', 'err
 const NOISE_STATUSES = new Set(['timeout', 'error']);
 const DEFAULT_SINCE_DAYS = 7;
 const DEFAULT_PRUNE_DAYS = 30;
+/* Short head_sha rendered in the catch-candidate pairs (12 chars: unambiguous in any
+   real repo yet short enough to skim); a null sha (non-git run) renders as "-". */
+const SHA_SHORT_LEN = 12;
 
 const CANDIDATE_LABEL =
   'candidates — human disposition required per docs/CALIBRATION.md; ' +
@@ -89,6 +92,11 @@ export function normalizeEvent(obj) {
 
   const startedAtMs = typeof obj.startedAt === 'string' ? Date.parse(obj.startedAt) : NaN;
   if (!Number.isFinite(startedAtMs)) return { kind: 'malformed' };
+  /* finishedAt is optional in practice (older/crash-truncated writers): parse it when
+     present so totals can use the event span, else leave it null for the durationMs
+     fallback. head_sha + the raw startedAt string ride along for the catch-candidate
+     pairs; a non-string head_sha is tolerated as null (no new malformed reasons). */
+  const finishedAtMs = typeof obj.finishedAt === 'string' ? Date.parse(obj.finishedAt) : NaN;
   if (typeof obj.repo !== 'string' || obj.repo === '') return { kind: 'malformed' };
   if (!Array.isArray(obj.results)) return { kind: 'malformed' };
   /* branch is nullable in the contract; undefined is coerced to null so it keys
@@ -110,7 +118,17 @@ export function normalizeEvent(obj) {
       reason: typeof r.reason === 'string' ? r.reason : undefined,
     });
   }
-  return { event: { startedAtMs, repo: obj.repo, branch, results } };
+  return {
+    event: {
+      startedAt: obj.startedAt,
+      startedAtMs,
+      finishedAtMs: Number.isFinite(finishedAtMs) ? finishedAtMs : null,
+      head_sha: typeof obj.head_sha === 'string' ? obj.head_sha : null,
+      repo: obj.repo,
+      branch,
+      results,
+    },
+  };
 }
 
 function keyOf(repo, tier, name, branch) {
@@ -136,18 +154,29 @@ export function p50(sortedAsc) {
    (timeout/error) sits between a fail and a later pass, breaking the adjacency —
    which is exactly why noise "never catches". */
 export function countCatches(occs) {
-  let catches = 0;
+  return collectCatches(occs).length;
+}
+
+/* The fail→pass PAIRS behind countCatches, for the Catch candidates section. Same
+   contract as countCatches (`occs` = non-skipped, chronological). Each pair carries the
+   two occurrences so the report can print their startedAt + head_sha for disposition.
+   Adjacency is transitively covered by the countCatches tests, so it stays module-local. */
+function collectCatches(occs) {
+  const pairs = [];
   for (let i = 1; i < occs.length; i += 1) {
-    if (occs[i - 1].status === 'fail' && occs[i].status === 'pass') catches += 1;
+    if (occs[i - 1].status === 'fail' && occs[i].status === 'pass') {
+      pairs.push({ fail: occs[i - 1], pass: occs[i] });
+    }
   }
-  return catches;
+  return pairs;
 }
 
 /* ---- aggregate -------------------------------------------------------------
- * Fold events into per-key stats plus windowed flip/prune candidate lists.
- * `now` anchors both windows (injected so tests are deterministic; the CLI passes
- * Date.now()). Window rule: startedAt >= now - days*DAY_MS — inclusive lower
- * bound, so an event exactly on the edge is inside the window.
+ * Fold events into per-key stats, the windowed flip/prune candidate lists, and the flat
+ * catch-candidate pair list. `now` anchors both windows (injected so tests are
+ * deterministic; the CLI passes Date.now()). Window rule:
+ * now - days*DAY_MS <= startedAt <= now — inclusive at both ends, so an event exactly on
+ * either edge is inside and a future-dated event (clock skew/tamper) is excluded.
  */
 export function aggregate(events, options = {}) {
   const now = options.now ?? Date.now();
@@ -158,12 +187,17 @@ export function aggregate(events, options = {}) {
 
   const groups = new Map();
   const days = new Set();
-  let totalDurationMs = 0;
+  /* Total verify time = Σ per-event wall-clock span (finishedAt - startedAt), which also
+     captures fileset expansion / runner overhead / aborted-before-check time that summing
+     per-check durationMs omits. */
+  let totalSpanMs = 0;
+  let spanlessEvents = 0;
 
   for (const event of events) {
     days.add(new Date(event.startedAtMs).toISOString().slice(0, 10));
+    let eventDurationMs = 0; // per-event Σ durationMs — the fallback when this event has no span
     for (const r of event.results) {
-      if (r.status !== 'skipped' && r.durationMs !== null) totalDurationMs += r.durationMs;
+      if (r.status !== 'skipped' && r.durationMs !== null) eventDurationMs += r.durationMs;
       const key = keyOf(event.repo, r.tier, r.name, event.branch);
       let group = groups.get(key);
       if (group === undefined) {
@@ -178,16 +212,32 @@ export function aggregate(events, options = {}) {
       }
       group.occurrences.push({
         startedAtMs: event.startedAtMs,
+        startedAt: event.startedAt,
+        head_sha: event.head_sha,
         status: r.status,
         durationMs: r.durationMs,
         mode: r.mode,
         reason: r.reason,
       });
     }
+    /* Fall back to Σ durationMs ONLY when finishedAt is missing/unparseable or precedes
+       startedAt; count those events so the total's basis stays honest (they are NOT
+       malformed — the event is otherwise valid). */
+    const span =
+      event.finishedAtMs !== null && event.finishedAtMs >= event.startedAtMs
+        ? event.finishedAtMs - event.startedAtMs
+        : null;
+    if (span !== null) totalSpanMs += span;
+    else {
+      totalSpanMs += eventDurationMs;
+      spanlessEvents += 1;
+    }
   }
 
   const keys = [];
-  let totalCatches = 0;
+  /* Every fail→pass pair, flat across keys. The single source for both the Catch candidates
+     section and the aggregate count (totalCatches = catches.length). */
+  const catches = [];
   const flip = [];
   const prune = [];
 
@@ -211,8 +261,19 @@ export function aggregate(events, options = {}) {
 
     const nonSkipped = ordered.filter((o) => o.status !== 'skipped');
     const runs = nonSkipped.length;
-    const catches = countCatches(nonSkipped);
-    totalCatches += catches;
+    const keyCatches = collectCatches(nonSkipped);
+    for (const pair of keyCatches) {
+      catches.push({
+        repo: group.repo,
+        tier: group.tier,
+        name: group.name,
+        branch: group.branch,
+        failStartedAt: pair.fail.startedAt,
+        failSha: pair.fail.head_sha,
+        passStartedAt: pair.pass.startedAt,
+        passSha: pair.pass.head_sha,
+      });
+    }
     /* Current mode = the most recent occurrence's mode (this is what a flip would
        change). null if no occurrence declared one. */
     const latestMode = ordered.length ? ordered[ordered.length - 1].mode : null;
@@ -225,7 +286,7 @@ export function aggregate(events, options = {}) {
       label: labelOf(group.repo, group.tier, group.name, group.branch),
       runs,
       counts,
-      catches,
+      catches: keyCatches.length,
       p50: p50(durations),
       bypassReasons: [...bypassReasons],
       latestMode,
@@ -235,7 +296,7 @@ export function aggregate(events, options = {}) {
     /* Flip: a report-only check whose window shows a real catch and zero
        operational noise. Catch adjacency is computed WITHIN the window so a fail
        from before the window does not manufacture an in-window catch. */
-    const sinceOccs = nonSkipped.filter((o) => o.startedAtMs >= sinceCutoff);
+    const sinceOccs = nonSkipped.filter((o) => o.startedAtMs >= sinceCutoff && o.startedAtMs <= now);
     const windowCatches = countCatches(sinceOccs);
     const windowNoise = sinceOccs.filter((o) => NOISE_STATUSES.has(o.status)).length;
     if (latestMode === 'report-only' && windowCatches >= 1 && windowNoise === 0) {
@@ -246,7 +307,7 @@ export function aggregate(events, options = {}) {
        (0 fail, 0 bypassed) inside the prune window. A bypassed run DID flag
        something a human waved through, and a timeout-only check never actually
        evaluated — neither is prunable, so both are excluded by construction. */
-    const pruneOccs = nonSkipped.filter((o) => o.startedAtMs >= pruneCutoff);
+    const pruneOccs = nonSkipped.filter((o) => o.startedAtMs >= pruneCutoff && o.startedAtMs <= now);
     let pPass = 0;
     let pFail = 0;
     let pBypass = 0;
@@ -263,19 +324,27 @@ export function aggregate(events, options = {}) {
   keys.sort((a, b) => a.label.localeCompare(b.label));
   flip.sort((a, b) => a.label.localeCompare(b.label));
   prune.sort((a, b) => a.label.localeCompare(b.label));
+  catches.sort(
+    (a, b) =>
+      labelOf(a.repo, a.tier, a.name, a.branch).localeCompare(labelOf(b.repo, b.tier, b.name, b.branch)) ||
+      a.failStartedAt.localeCompare(b.failStartedAt),
+  );
 
   const dayCount = days.size;
+  const totalCatches = catches.length;
   return {
     keys,
     flip,
     prune,
+    catches,
     totals: {
       events: events.length,
       dayCount,
-      totalDurationMs,
-      perDayMs: dayCount ? Math.round(totalDurationMs / dayCount) : 0,
+      totalSpanMs,
+      spanlessEvents,
+      perDayMs: dayCount ? Math.round(totalSpanMs / dayCount) : 0,
       totalCatches,
-      costPerCatchSec: totalCatches ? Math.round((totalDurationMs / totalCatches) / 100) / 10 : null,
+      costPerCatchSec: totalCatches ? Math.round((totalSpanMs / totalCatches) / 100) / 10 : null,
     },
     sinceDays,
     pruneDays,
@@ -289,6 +358,11 @@ function table(headers, rows) {
   );
   const fmt = (cells) => cells.map((c, i) => String(c).padEnd(widths[i])).join('  ');
   return [fmt(headers), ...rows.map(fmt)].join('\n');
+}
+
+/* head_sha short form for the catch-candidate pairs; a null sha (non-git run) prints "-". */
+function shortSha(sha) {
+  return typeof sha === 'string' ? sha.slice(0, SHA_SHORT_LEN) : '-';
 }
 
 export function formatReport(agg, meta = {}) {
@@ -331,9 +405,26 @@ export function formatReport(agg, meta = {}) {
   const bypassed = agg.keys.filter((k) => k.bypassReasons.length > 0);
   if (bypassed.length > 0) {
     out.push('## Bypass reasons');
-    for (const k of bypassed) out.push(`- ${k.label}: ${k.bypassReasons.join('; ')}`);
+    /* Reasons are env-provided free text (DS_BYPASS_REASON). JSON-quote each so an embedded
+       newline or ANSI/terminal control sequence is escaped and can't inject report lines. */
+    for (const k of bypassed) {
+      out.push(`- ${k.label}: ${k.bypassReasons.map((r) => JSON.stringify(r)).join('; ')}`);
+    }
     out.push('');
   }
+
+  out.push('## Catch candidates');
+  out.push(CANDIDATE_LABEL);
+  if (agg.catches.length === 0) out.push('(none)');
+  else
+    for (const c of agg.catches) {
+      const branch = c.branch === null ? '(none)' : c.branch;
+      out.push(
+        `- ${c.repo} ${c.tier} ${c.name} ${branch}: ` +
+          `fail ${c.failStartedAt} (${shortSha(c.failSha)}) -> pass ${c.passStartedAt} (${shortSha(c.passSha)})`,
+      );
+    }
+  out.push('');
 
   out.push(`## Flip candidates (report-only, ≥1 catch, 0 operational noise, last ${agg.sinceDays}d)`);
   out.push(CANDIDATE_LABEL);
@@ -349,8 +440,13 @@ export function formatReport(agg, meta = {}) {
 
   out.push('## Totals');
   const cpc = agg.totals.costPerCatchSec === null ? 'N/A (no catch-candidates)' : `${agg.totals.costPerCatchSec}s`;
+  /* perDayMs and cost-per-catch both derive from the same wall-clock span sum (finishedAt -
+     startedAt), not summed check durations. Note events that lacked a usable span. */
+  const spanless = agg.totals.spanlessEvents
+    ? ` (${agg.totals.spanlessEvents} event(s) without a usable span — summed check time used)`
+    : '';
   out.push(
-    `verify time/day: ${agg.totals.perDayMs}ms over ${agg.totals.dayCount} day(s); ` +
+    `verify wall-clock/day: ${agg.totals.perDayMs}ms over ${agg.totals.dayCount} day(s)${spanless}; ` +
       `total catch-candidates: ${agg.totals.totalCatches}; cost per catch: ${cpc}`,
   );
 
