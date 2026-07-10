@@ -78,3 +78,12 @@ Independent of the in-flight core-hardening batch (which already leaves
   canonical record.
 - Resolve ADR-011 "review-chain" naming collision with the downstream
   `codex-chain` skill.
+- **Core `verify` shim lacks a build-freshness guard** (Gate P, Phase 1,
+  2026-07-10). The core `verify` shim and `tools/standards-sync` check only
+  bundle *existence*, not freshness; a stale gitignored `runner/dist/` runs
+  blindly — violates guide rule quality-gates.md "build-on-demand artifacts
+  need a build stamp + freshness check". CI is unaffected (bootstrap rebuilds
+  every run); the footgun is local core dev. NB: the consumer's SHA-based
+  `.built-from` stamp is **insufficient** for core — active core dev changes
+  HEAD on every commit and leaves uncommitted edits, so a content-fingerprint
+  of build inputs is needed, not a revision stamp. Owned by Phase 6 §5.
