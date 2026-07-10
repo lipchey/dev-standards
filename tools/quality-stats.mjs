@@ -274,9 +274,11 @@ export function aggregate(events, options = {}) {
         passSha: pair.pass.head_sha,
       });
     }
-    /* Current mode = the most recent occurrence's mode (this is what a flip would
-       change). null if no occurrence declared one. */
-    const latestMode = ordered.length ? ordered[ordered.length - 1].mode : null;
+    /* Current mode = the most recent NON-FUTURE occurrence's mode (this is what a flip
+       would change). Future-dated events are excluded from the windows, so they must not
+       define the current mode either. null if no occurrence declared one. */
+    const present = ordered.filter((o) => o.startedAtMs <= now);
+    const latestMode = present.length ? present[present.length - 1].mode : null;
 
     const record = {
       repo: group.repo,

@@ -332,6 +332,18 @@ test('aggregate: a future-dated event (clock skew/tamper) is outside both window
   assert.equal(pruneAgg.prune.length, 0, 'a future pass is not an in-window clean pass');
 });
 
+test('aggregate: a future-dated event does not define latestMode / flip eligibility', () => {
+  // In-window fail(report-only) -> pass(report-only) = a flip candidate; a FUTURE
+  // occurrence with mode 'blocking' must not steal latestMode and suppress it.
+  const agg = aggregateOf([
+    ev(iso(T - 2 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'fail', durationMs: 10, mode: 'report-only' }]),
+    ev(iso(T - 1 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 10, mode: 'report-only' }]),
+    ev(iso(T + 3_600_000), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 10, mode: 'blocking' }]),
+  ]);
+  assert.equal(agg.keys[0]!.latestMode, 'report-only', 'latestMode ignores future occurrences');
+  assert.equal(agg.flip.length, 1, 'the in-window catch still yields a flip candidate');
+});
+
 /* ---- F8: bypass reasons cannot inject report lines / terminal controls ---- */
 
 test('formatReport: a bypass reason with a newline and ANSI is JSON-escaped onto one line', () => {
