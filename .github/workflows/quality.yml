@@ -1,0 +1,46 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  fast:
+    name: Fast Verify
+    runs-on: ubuntu-latest
+    # Job-level ceiling around the whole run: the manifest's monotonic tier
+    # deadline only bounds ./verify, not checkout/setup-node/bootstrap.
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Bootstrap
+        run: npm run bootstrap
+      - name: Verify Fast
+        run: ./verify --fast
+
+  full:
+    name: Full Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Bootstrap
+        run: npm run bootstrap
+      - name: Verify Full
+        run: ./verify --full
