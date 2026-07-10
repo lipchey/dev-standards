@@ -87,8 +87,13 @@ export interface ValidationResult {
 export interface CheckResult {
   name: string;
   tier: TierName;
-  status: 'pass' | 'fail' | 'skipped' | 'timeout';
+  status: 'pass' | 'fail' | 'skipped' | 'timeout' | 'bypassed' | 'error';
+  /* exitCode is null for 'error' (spawn fault or signal kill — no exit code) and 'timeout';
+     it carries the child's real exit code for 'pass'/'fail'/'bypassed'. */
   exitCode: number | null;
   durationMs: number;
   mode: CheckMode;
+  /* For 'bypassed': the trimmed DS_BYPASS_REASON that relaxed the finding.
+     For 'error': the errno code, signal, or spawn-error message. Absent otherwise. */
+  reason?: string;
 }

@@ -105,13 +105,30 @@ Judgment prompts:
 Judgment prompts:
 
 - Does new or changed behavior have a test that would FAIL if the behavior
-  regressed? Coverage of lines is not coverage of behavior.
+  regressed? Coverage of lines is not coverage of behavior. If you cannot name a
+  plausible bug a test would catch, it earns nothing - do not write it.
 - Do tests assert observable behavior (inputs -> outputs, effects at the
   boundary) rather than internal implementation details that break on a harmless
-  refactor?
+  refactor? Mocks that mirror the internal call sequence are the specific
+  anti-pattern - they pin the implementation and make refactoring expensive.
 - Is at least the primary failure/edge case tested, not only the happy path?
 - For a bug fix: is there a regression test that reproduces the original bug and
-  now passes? A fix without a guarding test is a P2 finding.
+  now passes - red before the fix, green after? A fix without a guarding test is
+  a P2 finding.
+- Is the suite testing the right things? Types are the compiler's job, style the
+  linter's, third-party libraries their maintainers'; a test that re-checks any
+  of these, or a trivial getter/passthrough/constant, is noise to delete.
+- Are there fewer, deeper tests rather than many shallow ones? A snapshot large
+  enough that no reader would notice a wrong line needs an explicit reason to
+  exist.
+- Before a refactor, is current behavior pinned by characterization tests?
+  Conversely, a test that fails when behavior did NOT change is itself a finding
+  - it asserts an implementation detail and is a candidate to rewrite or delete.
+  Deleting a test is only justified once evidence shows the coverage is truly
+  redundant: for every invariant the test guarded, a concrete mutation must
+  still be caught by the surviving gate (a type check, a lint rule, another
+  test). "Never failed" alone is not that evidence - a test can guard a
+  regression that simply has not happened yet.
 
 ## Output expectations
 

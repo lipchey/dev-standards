@@ -108,10 +108,14 @@ test('skip_if_empty skips the check when its fileset is absent', () => {
   assert.equal(result.status, 'skipped');
 });
 
-test('a missing binary (ENOENT) becomes status fail (exitCode 1), not timeout', () => {
+test('a missing binary (ENOENT) becomes status error (operational fault), not fail or timeout', () => {
+  // A check that never ran must not be reported as a genuine finding; that would let a
+  // missing/broken report-only check pass its tier fail-open, or be bypassed.
   const result = runCheck(input(check(['this-binary-does-not-exist-xyz'])));
-  assert.equal(result.status, 'fail');
-  assert.equal(result.exitCode, 1);
+  assert.equal(result.status, 'error');
+  assert.equal(result.exitCode, null);
+  assert.ok(result.reason && result.reason.length > 0, 'error result must carry a reason');
+  assert.notEqual(result.status, 'fail');
   assert.notEqual(result.status, 'timeout');
 });
 

@@ -124,7 +124,7 @@
           "skip_if_empty": { "type": "string", "description": "Fileset name; skip this check when that fileset expands to zero files." },
           "mode": { "enum": ["blocking", "report-only"], "default": "blocking" },
           "baseline": { "type": "string", "description": "Committed baseline path (baseline-diff semantics are out of pre-flight scope)." },
-          "bypassable": { "type": "boolean", "default": false, "description": "Whether QUALITY_BYPASS_REASON may relax this check. Secret/credential checks must keep this false. Enforcement is out of pre-flight scope." }
+          "bypassable": { "type": "boolean", "default": false, "description": "When true, a genuine finding-fail (nonzero child exit) of this check is relaxed to `bypassed` if the DS_BYPASS_REASON env var holds a non-empty reason. This relaxes ONLY a real finding — never a spawn/signal/operational error and never a timeout, which always block regardless of this flag. Secret/credential checks MUST keep this false so their findings can never be waved through." }
         }
       }
     }

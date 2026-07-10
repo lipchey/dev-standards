@@ -5,6 +5,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isBlockingResult } from '../../runner/src/verify-runner.ts';
+import { writeReport } from '../../runner/src/report.ts';
+import type { CheckResult } from '../../runner/src/types.ts';
+
+function result(overrides: Partial<CheckResult>): CheckResult {
+  return { name: 'c', tier: 'fast', status: 'pass', exitCode: 0, durationMs: 1, mode: 'blocking', ...overrides };
+}
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const runnerPath = path.join(repoRoot, 'runner', 'dist', 'verify-runner.mjs');
@@ -76,6 +83,47 @@ test('a tier run in a non-git dir fails cleanly: non-zero exit, no stack trace',
       /error running fast tier:/,
       `stderr must include the clean error prefix, got:\n${run.stderr}`,
     );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// isBlockingResult IS the tier's exit decision (`results.some(isBlockingResult) ? 1 : 0`).
+// Bug caught: a broken report-only check passing its tier fail-open because 'error' was
+// treated as mode-gated like an ordinary finding.
+test('isBlockingResult: error blocks in any mode; a report-only finding does not', () => {
+  assert.equal(isBlockingResult(result({ status: 'error', mode: 'report-only', exitCode: null })), true);
+  assert.equal(isBlockingResult(result({ status: 'error', mode: 'blocking', exitCode: null })), true);
+  assert.equal(isBlockingResult(result({ status: 'fail', mode: 'report-only' })), false);
+  assert.equal(isBlockingResult(result({ status: 'fail', mode: 'blocking' })), true);
+});
+
+// Bug caught: a bypassed finding still failing the tier, or a report-only timeout blocking it.
+test('isBlockingResult: timeout blocks only when blocking; bypassed/pass/skipped never block', () => {
+  assert.equal(isBlockingResult(result({ status: 'timeout', mode: 'blocking', exitCode: null })), true);
+  assert.equal(isBlockingResult(result({ status: 'timeout', mode: 'report-only', exitCode: null })), false);
+  assert.equal(isBlockingResult(result({ status: 'bypassed', mode: 'blocking', exitCode: 1, reason: 'x' })), false);
+  assert.equal(isBlockingResult(result({ status: 'pass' })), false);
+  assert.equal(isBlockingResult(result({ status: 'skipped', exitCode: null })), false);
+});
+
+// Bug caught: writeReport filtering out the optional `reason`, so a bypassed/errored check's
+// explanation never reaches the persisted report.
+test('reason round-trips through the written report JSON', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-report-'));
+  try {
+    const results: CheckResult[] = [
+      result({ name: 'bypassed-check', status: 'bypassed', exitCode: 1, reason: 'flaky in CI' }),
+      result({ name: 'errored-check', status: 'error', exitCode: null, reason: 'ENOENT' }),
+    ];
+    const filePath = writeReport(
+      { repo: 'r', scope: 'fast', generatedAt: 'now', results },
+      tmp,
+      'reports/quality',
+    );
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    assert.equal(parsed.results[0].reason, 'flaky in CI');
+    assert.equal(parsed.results[1].reason, 'ENOENT');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

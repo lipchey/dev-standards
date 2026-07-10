@@ -77,9 +77,15 @@ export function runCheck(input: RunCheckInput): CheckResult {
   } as SpawnSyncOptions);
   const durationMs = Date.now() - startedAt;
 
+  /* Ordered, mutually exclusive classification, checked top to bottom. The first four rungs
+     are operational or clean outcomes; only the last rung is a genuine finding-fail, and only
+     there may a bypassable check be relaxed. This keeps a broken/missing/killed check from ever
+     collapsing into a plain 'fail' (which would let it be bypassed or silently pass a tier). */
+  const base = { name: check.name, tier, durationMs, mode };
+
   if (result.error !== undefined) {
-    const code = (result.error as NodeJS.ErrnoException).code;
-    if (code === 'ETIMEDOUT') {
+    const err = result.error as NodeJS.ErrnoException;
+    if (err.code === 'ETIMEDOUT') {
       // Reap the whole process group; the immediate child is already SIGKILLed by spawnSync.
       if (result.pid) {
         try {
@@ -88,13 +94,31 @@ export function runCheck(input: RunCheckInput): CheckResult {
           if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e;
         }
       }
-      return { name: check.name, tier, status: 'timeout', exitCode: null, durationMs, mode };
+      return { ...base, status: 'timeout', exitCode: null };
     }
-    return { name: check.name, tier, status: 'fail', exitCode: 1, durationMs, mode };
+    /* Spawn fault (ENOENT/EACCES/…): the check never ran, so this is operational, not a finding. */
+    return { ...base, status: 'error', exitCode: null, reason: err.code ?? err.message };
+  }
+
+  /* No exit code: the child was killed by a signal (or produced none). Operational, never a finding. */
+  if (result.status === null) {
+    return {
+      ...base,
+      status: 'error',
+      exitCode: null,
+      reason: result.signal ? `signal: ${result.signal}` : 'no exit code',
+    };
   }
 
   if (result.status === 0) {
-    return { name: check.name, tier, status: 'pass', exitCode: 0, durationMs, mode };
+    return { ...base, status: 'pass', exitCode: 0 };
   }
-  return { name: check.name, tier, status: 'fail', exitCode: result.status ?? 1, durationMs, mode };
+
+  /* Genuine finding-fail (nonzero exit). A bypassable check with a non-empty reason is relaxed
+     to 'bypassed', keeping the exit code; every other case (and every non-bypassable check) fails. */
+  const bypassReason = process.env.DS_BYPASS_REASON?.trim();
+  if (check.bypassable === true && bypassReason) {
+    return { ...base, status: 'bypassed', exitCode: result.status, reason: bypassReason };
+  }
+  return { ...base, status: 'fail', exitCode: result.status };
 }

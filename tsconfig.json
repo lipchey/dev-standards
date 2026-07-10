@@ -10,6 +10,7 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
+    "allowJs": true,
     "noEmit": true
   },
   "include": ["runner/src/**/*.ts", "deep-review/src/**/*.ts", "tests/**/*.ts"]

@@ -129,10 +129,15 @@ export function runTier(
   const reportPath = emitReport();
   process.stdout.write(`report: ${reportPath}\n`);
 
-  const blockingFailed = results.some(
-    (r) => r.mode === 'blocking' && (r.status === 'fail' || r.status === 'timeout'),
-  );
-  return blockingFailed ? EXIT_CHECK_FAILED : 0;
+  return results.some(isBlockingResult) ? EXIT_CHECK_FAILED : 0;
+}
+
+/* The tier's exit decision. An 'error' (spawn fault / signal kill) is an operational failure
+   and blocks REGARDLESS of mode, so a broken report-only check still fails the tier instead of
+   passing fail-open. A blocking 'fail'/'timeout' blocks; 'bypassed', 'pass', 'skipped', and
+   report-only findings never block. */
+export function isBlockingResult(r: CheckResult): boolean {
+  return r.status === 'error' || (r.mode === 'blocking' && (r.status === 'fail' || r.status === 'timeout'));
 }
 
 // A check whose tier deadline is already spent: failed as timed-out, never spawned.
