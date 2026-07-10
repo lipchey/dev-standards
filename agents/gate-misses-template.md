@@ -42,7 +42,9 @@ with an outcome note. Rules:
 
 - a **deterministic fix** (quality.json tweak, analyzer/rule change) closes
   ONLY with proof the gate now catches the escape: run the check against
-  the offending state — red before the fix, green after — and note it;
+  the RETAINED offending state — it passed (green) before the gate fix,
+  which is the miss itself, and must FAIL (red) after; the corrected
+  current state must stay green. Note both runs;
 - a **guide-only fix** (judgment rule, nondeterministic) closes with the
   marker `(nondeterministic-fix: guide)` so stats can separate the two;
 - a **core fix** closes when the mirrored inbox entry is promoted and the
