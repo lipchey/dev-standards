@@ -157,11 +157,14 @@ export function runTier(
     throw error;
   }
 
+  /* Telemetry before the report write: the two sinks are independent by contract, so a
+     normal-path report failure (which still fails the run loudly) must not lose the event. */
+  const exit = results.some(isBlockingResult) ? EXIT_CHECK_FAILED : 0;
+  emitTelemetry(exit, false);
+
   const reportPath = emitReport();
   process.stdout.write(`report: ${reportPath}\n`);
 
-  const exit = results.some(isBlockingResult) ? EXIT_CHECK_FAILED : 0;
-  emitTelemetry(exit, false);
   return exit;
 }
 

@@ -279,3 +279,29 @@ test('env contract (spawned runner): a tmp path writes one line; off writes noth
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/* The two sinks are independent by contract: a normal-path REPORT write failure still fails
+   the run loudly, but must not lose the telemetry event (emit happens before the report). */
+test('a normal-path report-write failure does not lose the telemetry event', () => {
+  const dir = tmpdir('ds-tel-report-fail-');
+  try {
+    const manifestPath = path.join(dir, 'quality.json');
+    fs.writeFileSync(manifestPath, JSON.stringify(NOOP_MANIFEST), 'utf8');
+    /* `reports` as a plain file makes writeReport's mkdir of reports/quality throw. */
+    fs.writeFileSync(path.join(dir, 'reports'), 'not a directory', 'utf8');
+    const sink = path.join(dir, 'sink', 'events.jsonl');
+
+    const run = spawnSync(process.execPath, [runnerPath, '--manifest', manifestPath, '--fast'], {
+      encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: sink },
+    });
+    assert.notEqual(run.status, 0, 'a report-write failure must still fail the run');
+    const lines = fs.readFileSync(sink, 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 1, 'the event must be written despite the report failure');
+    const e = JSON.parse(lines[0]!);
+    assert.equal(e.aborted, false);
+    assert.equal(e.exit, 0, 'the checks themselves passed; only the report write failed');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
