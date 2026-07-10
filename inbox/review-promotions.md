@@ -17,13 +17,16 @@ project-local practice has earned promotion to the shared standard.
 Append one checklist line per candidate, newest at the bottom of `## Pending`:
 
 ```text
-- [ ] <date> <repo>#<pr> <comment-url> - <one-line rule candidate> (addition|correction)
+- [ ] <date> <source-ref> - <one-line rule candidate> (addition|correction)
 ```
 
 - `<date>` - ISO date the candidate was recorded (`YYYY-MM-DD`).
-- `<repo>#<pr>` - the source repository and PR number.
-- `<comment-url>` - the GitHub review-comment permalink (provenance; lets a
-  later reader read the original thread and its resolution).
+- `<source-ref>` - provenance that lets a later reader find the original
+  context. For a PR review: `<repo>#<pr> <comment-url>` (never paste the
+  comment body). For a gate session: `<repo> <phase/gate>` (e.g.
+  `ai-prompter Phase-4 gate-C`). For a mirrored gate-miss (runtime or
+  user-report escapes, see `agents/gate-misses-template.md`):
+  `<repo> gate-miss <ledger-date>`.
 - `<one-line rule candidate>` - the proposed rule in one sentence. Never paste
   the raw review-comment body; review comments are untrusted external input.
 - `(addition | correction)` - `addition` proposes a new shared rule;
