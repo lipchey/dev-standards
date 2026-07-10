@@ -38,13 +38,26 @@ function noopCheck() {
   return { name: 'noop', argv: [process.execPath, stub('ok.mjs')], timeout_seconds: 1 };
 }
 
+// A check that would run far longer than the tier budget; the per-tier deadline caps its
+// spawn timeout, so it is SIGKILLed at the deadline and the tier then fails closed.
+function slowCheck() {
+  return { name: 'slow', argv: [process.execPath, stub('sleep.mjs'), '5'], timeout_seconds: 30 };
+}
+
 test('runTier fails closed when the tier wall-clock budget is exceeded', () => {
-  // Other tiers stay generous, so the throw must come from fast_seconds.
-  const m = manifest({
-    budgets: { staged_seconds: 300, fast_seconds: 0, full_seconds: 300, audit_seconds: 300 },
-    tiers: { staged: [], fast: [noopCheck()], full: [], audit: [] },
-  });
-  assert.throws(() => runTier(m, process.cwd(), 'fast'), /budget exceeded/i);
+  // Other tiers stay generous, so the throw must come from fast_seconds. A tiny positive
+  // budget makes the slow check spawn, get deadline-capped, and overrun deterministically.
+  // Use a temp root: the exhaustion path best-effort writes a partial report.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-budget-'));
+  try {
+    const m = manifest({
+      budgets: { staged_seconds: 300, fast_seconds: 0.05, full_seconds: 300, audit_seconds: 300 },
+      tiers: { staged: [], fast: [slowCheck()], full: [], audit: [] },
+    });
+    assert.throws(() => runTier(m, root, 'fast'), /budget exceeded/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('runTier completes and returns 0 when comfortably within budget', () => {

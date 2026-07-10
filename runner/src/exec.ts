@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import type { SpawnSyncOptions } from 'node:child_process';
 import type { Check, CheckMode, CheckResult, TierName } from './types.ts';
 
 export interface RunCheckInput {
@@ -6,6 +7,8 @@ export interface RunCheckInput {
   tier: TierName;
   cwd: string;
   filesByName: Map<string, string[]>;
+  // Remaining tier budget (ms); caps this check's timeout so no check outlives the tier deadline.
+  remainingMs?: number;
 }
 
 const FILES_TOKEN = /^\{files:([A-Za-z0-9_-]+)\}$/;
@@ -43,7 +46,7 @@ function skipped(name: string, tier: TierName, mode: CheckMode): CheckResult {
 }
 
 export function runCheck(input: RunCheckInput): CheckResult {
-  const { check, tier, cwd, filesByName } = input;
+  const { check, tier, cwd, filesByName, remainingMs } = input;
   const mode: CheckMode = check.mode ?? 'blocking';
 
   if (check.skip_if_empty !== undefined) {
@@ -56,18 +59,35 @@ export function runCheck(input: RunCheckInput): CheckResult {
   if (file === undefined) return skipped(check.name, tier, mode);
 
   const startedAt = Date.now();
-  // spawnSync timeout kills only the immediate child; process-group cleanup would require async orchestration.
+  // Cap the check at whatever tier budget is left, but never longer than its own timeout.
+  const timeoutMs = Math.min(check.timeout_seconds * 1000, remainingMs ?? Number.POSITIVE_INFINITY);
+  // detached:true makes the child a process-group leader so we can SIGKILL the whole
+  // subtree on timeout (spawnSync's own killSignal reaches only the immediate child).
+  // ponytail: a detached group also means an interactive Ctrl-C won't propagate to the
+  // check's descendants — acceptable for this trusted local pilot.
+  // `detached` is honored by spawnSync at runtime but missing from @types/node's
+  // SpawnSyncOptions, so assert the shape.
   const result = spawnSync(file, args, {
     shell: false,
     stdio: 'inherit',
     cwd,
-    timeout: check.timeout_seconds * 1000,
-  });
+    detached: true,
+    killSignal: 'SIGKILL',
+    timeout: timeoutMs,
+  } as SpawnSyncOptions);
   const durationMs = Date.now() - startedAt;
 
   if (result.error !== undefined) {
     const code = (result.error as NodeJS.ErrnoException).code;
     if (code === 'ETIMEDOUT') {
+      // Reap the whole process group; the immediate child is already SIGKILLed by spawnSync.
+      if (result.pid) {
+        try {
+          process.kill(-result.pid, 'SIGKILL');
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e;
+        }
+      }
       return { name: check.name, tier, status: 'timeout', exitCode: null, durationMs, mode };
     }
     return { name: check.name, tier, status: 'fail', exitCode: 1, durationMs, mode };

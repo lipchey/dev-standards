@@ -9,6 +9,8 @@ export interface FilesetContext {
   cwd: string;
   stagedFiles?: (diffFilter?: string, cwd?: string) => string[];
   trackedFiles?: (cwd?: string) => string[];
+  // Remaining tier budget (ms) → bounds the real git probes; injected seams ignore it.
+  remainingMs?: () => number;
 }
 
 // Source order is preserved; validation rejects repo_all diff_filter before this point.
@@ -24,13 +26,15 @@ export function expandFileset(fileset: Fileset, context: FilesetContext): string
 }
 
 function selectSource(fileset: Fileset, context: FilesetContext): string[] {
+  const timeoutMs = context.remainingMs?.();
   if (fileset.source === 'git_staged') {
-    const staged = context.stagedFiles ?? stagedFiles;
     // Keep the declared/default diff filter observable to injected helpers.
-    return staged(fileset.diff_filter ?? DEFAULT_DIFF_FILTER, context.cwd);
+    const filter = fileset.diff_filter ?? DEFAULT_DIFF_FILTER;
+    if (context.stagedFiles) return context.stagedFiles(filter, context.cwd);
+    return stagedFiles(filter, context.cwd, timeoutMs);
   }
-  const tracked = context.trackedFiles ?? trackedFiles;
-  return tracked(context.cwd);
+  if (context.trackedFiles) return context.trackedFiles(context.cwd);
+  return trackedFiles(context.cwd, timeoutMs);
 }
 
 export function filesetByName(manifest: Manifest, name: string): Fileset | undefined {
