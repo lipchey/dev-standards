@@ -36,7 +36,12 @@ deleted - the history is the second-use evidence.
 
 ## Pending
 
-_(none yet)_
+- [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex xhigh, no PR — gate session) - runner: record check spawn errors (ENOENT/EACCES) distinctly from a finding-fail, and allow treating spawn/setup errors as blocking regardless of `mode` — a missing secret-scanner binary currently collapses into a report-only `fail` and the tier exits 0 (fail-open) (addition)
+- [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - runner: validate `{files:...}`-expanded operands against glob metacharacters (`[ ] * ?`) — ESLint treats CLI file args as globs, so a bracket-named staged file is silently mis-resolved (addition)
+- [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - runner: tier deadline equality boundary — `remainingMs()` floors sub-ms headroom to 0 and the budget assertion fires only on strictly-greater elapsed; make `left <= 0` a tier-level failure with regression coverage (addition)
+- [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - deep-review secret-scan: binary path contract mismatch (`tools/run-gitleaks` expected vs `.tools/gitleaks` consumers install) and catch-all errno treated as absence — unify the path contract and fail closed on anything but ENOENT (correction)
+- [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - tests: `skill-wrappers-static.test.ts` lstat-checks only the final SKILL.md — the deleted generator rejected every symlinked path component; add ancestor-symlink mutation cases per testing guide (correction)
+- [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - core comment sweep: the 70ade5a→add5420 range adds ~149 `//` TS comment lines incl. dividers/narration — convert to block form and prune per the comments guide (correction)
 
 ## Promoted
 
