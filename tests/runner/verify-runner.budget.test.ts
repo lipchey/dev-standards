@@ -1,4 +1,5 @@
 // Budget enforcement needs an invalid-by-validator manifest; valid timeout sums fit budget.
+import './helpers/telemetry-off.ts'; // MUST be first: default the sink off for direct (non-npm) runs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

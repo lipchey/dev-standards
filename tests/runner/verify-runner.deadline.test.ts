@@ -1,6 +1,7 @@
 // RUN-02: one monotonic tier deadline bounds git/fileset probes and checks, so a
 // slow/hung git can't blow past the tier budget, and the timeout surfaces as a
 // structured error instead of a hang.
+import './helpers/telemetry-off.ts'; // MUST be first: default the sink off for direct (non-npm) runs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
