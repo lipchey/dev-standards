@@ -1,4 +1,12 @@
-import { readdirSync, readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  readdirSync,
+  readFileSync,
+  mkdirSync,
+  writeFileSync,
+  renameSync,
+  rmSync,
+  lstatSync,
+} from 'node:fs';
 import path from 'node:path';
 import { isMainModule } from './manifest-cli.ts';
 
@@ -9,12 +17,19 @@ import { isMainModule } from './manifest-cli.ts';
 // at the canonical body, never a copy of the body (ADR-003). Generation must be
 // byte-stable so `standards-sync --check` can detect drift by exact compare.
 //
+// source-root vs target-root (core-fix #1): the SOURCE root holds the canonical
+// bodies (agents/skill-sources/*.md); the TARGET root is where the per-runtime
+// wrappers are written. Same root (the historic single --repo-root case) keeps
+// byte-identical output. Cross-root renders canonical_source as a clone-stable,
+// POSIX, target-root-relative pointer so the target repo can resolve the body.
+//
 // Zero runtime deps (ADR-006): the frontmatter reader below is hand-rolled.
 
 export const EXIT_OK = 0;
 export const EXIT_USAGE = 2;
-// Generation/check faults (unreadable source, bad frontmatter, drift) reuse the
-// validator's exit 1 so the shim surfaces a single non-zero "needs attention".
+// Generation/check faults (unreadable source, bad frontmatter, drift, symlink
+// escape) reuse the validator's exit 1 so the shim surfaces a single non-zero
+// "needs attention".
 export const EXIT_FAIL = 1;
 
 export interface GenResult {
@@ -38,6 +53,11 @@ export const RUNTIMES: readonly Runtime[] = [
 ];
 
 const SOURCE_DIR = path.join('agents', 'skill-sources');
+
+// The marker every generated wrapper carries (also the LEGACY marker already in
+// shipped wrappers). Orphan/stale detection (RUN-05) matches on this substring,
+// and generate-mode deletes ONLY files that carry it.
+const GENERATED_MARKER = 'GENERATED FILE - do not edit';
 
 export interface Frontmatter {
   name: string;
@@ -81,12 +101,23 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
     }
     const key = line.slice(0, sep).trim();
     let value = line.slice(sep + 1).trim();
-    // Tolerate quoted scalars without pulling in a YAML dep.
-    if (
-      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
-      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
-    ) {
-      value = value.slice(1, -1);
+    // Decode quoted scalars without pulling in a YAML dep (RUN-08). Double
+    // quotes → JSON.parse (handles \" \n \\ etc.); single quotes → YAML literal
+    // semantics ('' escapes a quote). A malformed double-quoted scalar is a
+    // structured error, not a silent pass.
+    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+      try {
+        value = JSON.parse(value) as string;
+      } catch {
+        return { ok: false, message: `invalid double-quoted scalar for "${key}": ${value}` };
+      }
+    } else if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) {
+      value = value.slice(1, -1).replace(/''/g, "'");
+    }
+    // Reject duplicate frontmatter keys (RUN-08): last-write-wins hides a
+    // conflicting metadata line.
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      return { ok: false, message: `duplicate frontmatter key: "${key}"` };
     }
     fields[key] = value;
   }
@@ -105,49 +136,78 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
   if (description === undefined || description === '') {
     return { ok: false, message: 'frontmatter is missing a non-empty "description"' };
   }
+  // ponytail: unknown-key rejection deferred - extra keys are ignored, not
+  // rejected. Add a known-key allowlist here if bodies start carrying typo'd
+  // metadata that must fail loudly.
   return { ok: true, frontmatter: { name, description } };
 }
 
-// The committed wrapper path for a phase under a runtime, relative to repoRoot.
-export function wrapperPath(repoRoot: string, runtime: Runtime, name: string): string {
-  return path.join(repoRoot, runtime.skillsDir, name, 'SKILL.md');
+// The committed wrapper path for a phase under a target root.
+export function wrapperPath(targetRoot: string, runtime: Runtime, name: string): string {
+  return path.join(targetRoot, runtime.skillsDir, name, 'SKILL.md');
 }
 
-// Does this repo HOST generated wrappers? A repo "hosts" wrappers when any
-// runtime's skills root (.agents/skills or .claude/skills) exists. The source
-// repo (dev-standards) authors the bodies but hosts no wrappers, so neither dir
-// exists and the wrapper-drift check is skipped (option C). Adopting repos and
-// the fixtures DO create these dirs, so drift/missing-wrapper detection stays
-// fully active there.
-export function hostsWrappers(repoRoot: string): boolean {
-  return RUNTIMES.some((runtime) => existsSync(path.join(repoRoot, runtime.skillsDir)));
+// Would a bare (unquoted) YAML plain scalar round-trip to exactly `v`? Only then
+// do we emit it bare - preserving byte-identical output for the shipped bodies,
+// whose name/description/path values are all plain-safe. Anything else is
+// JSON-quoted below (RUN-08).
+//
+// ponytail: conditional quoting, NOT "quote every scalar". Two authoritative
+// requirements collide - RUN-08 wants every scalar quoted, but core-fix #1
+// requires same-root output byte-identical to today (bare `name:` /
+// `canonical_source:`). Conditional quoting satisfies both: every dangerous
+// value IS quoted (valid YAML 1.2), and plain values stay bare (byte-identical).
+// The predicate is conservative - when unsure, quote.
+function isPlainSafe(v: string): boolean {
+  if (v === '') return false;
+  if (/^\s|\s$/.test(v)) return false; // leading/trailing whitespace
+  if (/^[-?:,[\]{}#&*!|>'"%@`]/.test(v)) return false; // indicator as first char
+  if (v.includes('"')) return false; // a double quote anywhere - quote defensively
+  if (/:(\s|$)/.test(v)) return false; // ": " or a trailing ":" (mapping-like)
+  if (/\s#/.test(v)) return false; // " #" starts a YAML comment
+  if (/^(true|false|null|~|yes|no|on|off)$/i.test(v)) return false; // reserved plain tokens
+  if (/^[+-]?(\d|\.\d)/.test(v)) return false; // number-ish whole value
+  return true;
 }
 
-// Does this repo AUTHOR canonical bodies? True when agents/skill-sources holds
-// at least one `.md`. The source repo (dev-standards) does; an adopting repo
-// that only vendors wrappers does not. `check()` uses this so it ALWAYS parses
-// and validates its own bodies (catching broken frontmatter) regardless of
-// whether a skills tree exists - only the wrapper-drift COMPARISON is gated on
-// hostsWrappers. A repo with neither bodies nor a skills tree still passes.
-export function hasCanonicalBodies(repoRoot: string): boolean {
-  try {
-    return readdirSync(path.join(repoRoot, SOURCE_DIR)).some((f) => f.endsWith('.md'));
-  } catch {
-    return false;
+function yamlScalar(v: string): string {
+  return isPlainSafe(v) ? v : JSON.stringify(v);
+}
+
+// The clone-stable, POSIX, target-root-relative pointer to a canonical body.
+// Same root → the historic literal `agents/skill-sources/<name>.md` (byte for
+// byte). Cross root → a relative path (may contain `..` for a sibling source
+// repo), computed with POSIX separators explicitly (never path.relative's
+// platform separators). An absolute result (Windows cross-device) is not
+// clone-stable and is rejected by validateRoots before we get here.
+export function canonicalSourceRel(sourceRoot: string, targetRoot: string, name: string): string {
+  const sourceFile = path.resolve(sourceRoot, SOURCE_DIR, `${name}.md`);
+  const rel = path.relative(path.resolve(targetRoot), sourceFile);
+  return rel.split(path.sep).join(path.posix.sep);
+}
+
+// Reject a root pair that cannot yield a clone-stable (relative) pointer.
+function validateRoots(sourceRoot: string, targetRoot: string): { ok: true } | { ok: false; message: string } {
+  const rel = path.relative(path.resolve(targetRoot), path.resolve(sourceRoot, SOURCE_DIR));
+  if (rel === '' || path.isAbsolute(rel)) {
+    return {
+      ok: false,
+      message: `cannot render a clone-stable canonical_source: source ${sourceRoot} is not relative to target ${targetRoot}`,
+    };
   }
+  return { ok: true };
 }
 
 // Render a deterministic wrapper. Output is fully determined by (frontmatter,
-// runtime) so re-generation is byte-stable. The body is NEVER included: only
-// metadata + a pointer at the canonical source, named explicitly.
-export function renderWrapper(fm: Frontmatter, runtime: Runtime): string {
-  const sourceRel = `${SOURCE_DIR}/${fm.name}.md`;
+// runtime, canonicalSource) so re-generation is byte-stable. The body is NEVER
+// included: only metadata + a pointer at the canonical source.
+export function renderWrapper(fm: Frontmatter, runtime: Runtime, canonicalSource: string): string {
   return [
     '---',
-    `name: ${fm.name}`,
-    `description: ${fm.description}`,
-    `runtime: ${runtime.id}`,
-    `canonical_source: ${sourceRel}`,
+    `name: ${yamlScalar(fm.name)}`,
+    `description: ${yamlScalar(fm.description)}`,
+    `runtime: ${yamlScalar(runtime.id)}`,
+    `canonical_source: ${yamlScalar(canonicalSource)}`,
     '---',
     '',
     `# ${fm.name} (generated wrapper)`,
@@ -164,7 +224,7 @@ export function renderWrapper(fm: Frontmatter, runtime: Runtime): string {
     `Read and follow the canonical \`${fm.name}\` skill body:`,
     '',
     '```text',
-    sourceRel,
+    canonicalSource,
     '```',
     '',
   ].join('\n');
@@ -179,10 +239,11 @@ export type CollectResult =
   | { ok: true; phases: PhaseSource[] }
   | { ok: false; message: string };
 
-// Read every canonical body in agents/skill-sources/, parse its frontmatter,
-// and return them sorted by name so generation order is deterministic.
-export function collectPhases(repoRoot: string): CollectResult {
-  const dir = path.join(repoRoot, SOURCE_DIR);
+// Read every canonical body in <sourceRoot>/agents/skill-sources/, parse its
+// frontmatter, and return them sorted by name so generation order is
+// deterministic.
+export function collectPhases(sourceRoot: string): CollectResult {
+  const dir = path.join(sourceRoot, SOURCE_DIR);
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -194,7 +255,15 @@ export function collectPhases(repoRoot: string): CollectResult {
   const files = entries.filter((f) => f.endsWith('.md')).sort();
   const phases: PhaseSource[] = [];
   for (const file of files) {
-    const raw = readFileSync(path.join(dir, file), 'utf8');
+    let raw: string;
+    try {
+      raw = readFileSync(path.join(dir, file), 'utf8');
+    } catch (error) {
+      // A dangling/unreadable body is a structured failure, not an uncaught
+      // throw (RUN-07): ENOENT here means a listed entry vanished/was dangling.
+      const detail = error instanceof Error ? error.message : String(error);
+      return { ok: false, message: `cannot read ${SOURCE_DIR}/${file}: ${detail}` };
+    }
     const parsed = parseFrontmatter(raw);
     if (!parsed.ok) {
       return { ok: false, message: `${SOURCE_DIR}/${file}: ${parsed.message}` };
@@ -215,6 +284,11 @@ export function collectPhases(repoRoot: string): CollectResult {
   return { ok: true, phases };
 }
 
+export interface Roots {
+  sourceRoot: string;
+  targetRoot: string;
+}
+
 export interface PlannedWrapper {
   runtime: Runtime;
   name: string;
@@ -222,141 +296,328 @@ export interface PlannedWrapper {
   content: string;
 }
 
-// The full set of wrappers that SHOULD exist on disk, in deterministic order.
-export function planWrappers(phases: PhaseSource[]): PlannedWrapper[] {
+// The full set of wrappers that SHOULD exist under the target root, in
+// deterministic order. Each carries a target-resolvable canonical_source.
+export function planWrappers(phases: PhaseSource[], roots: Roots): PlannedWrapper[] {
   const planned: PlannedWrapper[] = [];
   for (const runtime of RUNTIMES) {
     for (const phase of phases) {
+      const canonicalSource = canonicalSourceRel(roots.sourceRoot, roots.targetRoot, phase.name);
       planned.push({
         runtime,
         name: phase.name,
         relPath: path.join(runtime.skillsDir, phase.name, 'SKILL.md'),
-        content: renderWrapper(phase.frontmatter, runtime),
+        content: renderWrapper(phase.frontmatter, runtime, canonicalSource),
       });
     }
   }
   return planned;
 }
 
-// generate mode: (re)write every wrapper to disk.
-export function generate(repoRoot: string): GenResult {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  const collected = collectPhases(repoRoot);
-  if (!collected.ok) {
-    stderr.push(collected.message);
-    return { code: EXIT_FAIL, stdout, stderr };
+// ── Target-side confinement (RUN-03) ─────────────────────────────────────────
+// Walk each EXISTING component of `relPath` beneath `root`; refuse if any is a
+// symlink (no-follow). ENOENT stops the walk - deeper components don't exist
+// yet, which is safe. Any other errno (EACCES/ENOTDIR/ELOOP) is a structured
+// failure, never silent absence (RUN-07). Used for discovery, marker-reads AND
+// deletion - the orphan-cleanup path is the dangerous one.
+type Confine = { ok: true } | { ok: false; message: string };
+function assertConfined(root: string, relPath: string): Confine {
+  const parts = relPath.split(path.sep).filter((p) => p !== '');
+  let cur = root;
+  for (const part of parts) {
+    cur = path.join(cur, part);
+    let st;
+    try {
+      st = lstatSync(cur);
+    } catch (error) {
+      const e = error as NodeJS.ErrnoException;
+      if (e.code === 'ENOENT') return { ok: true };
+      return { ok: false, message: `cannot stat ${cur}: ${e.message}` };
+    }
+    if (st.isSymbolicLink()) {
+      return { ok: false, message: `refusing to follow symlink at ${cur} (target-confinement guard)` };
+    }
   }
-
-  const planned = planWrappers(collected.phases);
-  for (const w of planned) {
-    const abs = path.join(repoRoot, w.relPath);
-    mkdirSync(path.dirname(abs), { recursive: true });
-    writeFileSync(abs, w.content);
-    stdout.push(`generated ${w.relPath}`);
-  }
-  stdout.push(`generated ${planned.length} skill wrappers for ${RUNTIMES.length} runtimes`);
-  return { code: EXIT_OK, stdout, stderr };
+  return { ok: true };
 }
 
-// check mode: validate the canonical bodies, then (only where wrappers are
-// hosted) regenerate in memory and compare against the committed files. Any
-// missing, extra-content, or drifted wrapper is a failure with a clear message.
-//
-// TWO independent dimensions, decoupled (FIX 1):
-//   1. Body validation. If this repo AUTHORS bodies (agents/skill-sources/*.md),
-//      ALWAYS parse and validate them - even with no skills tree. This catches
-//      broken/invalid frontmatter in the source repo's own bodies, which the
-//      old hostsWrappers early-return let pass with exit 0.
-//   2. Wrapper-drift COMPARISON. Only applies to repos that HOST wrappers; the
-//      source repo (dev-standards) and any non-adopting repo host none, so there
-//      is nothing to drift against - skip the comparison and pass (option C).
-// A repo with neither bodies nor a skills tree still passes.
-export function check(repoRoot: string): GenResult {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
+let tmpCounter = 0;
 
-  const authorsBodies = hasCanonicalBodies(repoRoot);
-  const hosts = hostsWrappers(repoRoot);
+// Per-file atomic write (RUN-07, narrow): stage to a same-directory temp with
+// O_EXCL (`wx` = no-follow create) then rename over the destination. rename
+// replaces a pre-existing leaf symlink/file WITHOUT following it, so a symlinked
+// SKILL.md never redirects the write. NOT a multi-file transaction: a mid-loop
+// crash can leave earlier leaves written (each leaf is individually atomic).
+function writeWrapperFile(abs: string, content: string): void {
+  const dir = path.dirname(abs);
+  mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(abs)}.tmp-${process.pid}-${tmpCounter++}`);
+  writeFileSync(tmp, content, { flag: 'wx' });
+  renameSync(tmp, abs);
+}
 
-  // Dimension 1: validate bodies whenever they exist. collectPhases is also the
-  // source of the drift plan when wrappers are hosted, so collect once and reuse.
-  let phases: PhaseSource[] = [];
-  if (authorsBodies || hosts) {
-    const collected = collectPhases(repoRoot);
-    if (!collected.ok) {
-      stderr.push(collected.message);
-      return { code: EXIT_FAIL, stdout, stderr };
+type FoundResult = { ok: true; wrappers: { relPath: string }[] } | { ok: false; message: string };
+
+// Enumerate on-disk generated wrappers under the target root (RUN-05). Discovery
+// is confined: the skills root and each candidate leaf are symlink-checked
+// before we read them, so a symlinked skills tree cannot lure us into reading /
+// (later) deleting files outside the target. Only files carrying GENERATED_MARKER
+// are returned. Only ENOENT/ENOTDIR/EISDIR mean "no wrapper here"; EACCES etc.
+// are a structured failure.
+function findGeneratedWrappers(targetRoot: string): FoundResult {
+  const wrappers: { relPath: string }[] = [];
+  for (const runtime of RUNTIMES) {
+    const rootConfine = assertConfined(targetRoot, runtime.skillsDir);
+    if (!rootConfine.ok) return { ok: false, message: rootConfine.message };
+    const skillsAbs = path.join(targetRoot, runtime.skillsDir);
+    let names: string[];
+    try {
+      names = readdirSync(skillsAbs);
+    } catch (error) {
+      const e = error as NodeJS.ErrnoException;
+      if (e.code === 'ENOENT') continue; // no skills tree for this runtime - fine
+      return { ok: false, message: `cannot read skills dir ${runtime.skillsDir}: ${e.message}` };
     }
+    for (const name of names.sort()) {
+      const relPath = path.join(runtime.skillsDir, name, 'SKILL.md');
+      const confine = assertConfined(targetRoot, relPath);
+      if (!confine.ok) return { ok: false, message: confine.message };
+      let content: string;
+      try {
+        content = readFileSync(path.join(targetRoot, relPath), 'utf8');
+      } catch (error) {
+        const e = error as NodeJS.ErrnoException;
+        if (e.code === 'ENOENT' || e.code === 'ENOTDIR' || e.code === 'EISDIR') continue;
+        return { ok: false, message: `cannot read ${relPath}: ${e.message}` };
+      }
+      if (content.includes(GENERATED_MARKER)) wrappers.push({ relPath });
+    }
+  }
+  return { ok: true, wrappers };
+}
+
+type BodiesProbe = { ok: true; authors: boolean } | { ok: false; message: string };
+// Does the SOURCE root author canonical bodies? Only ENOENT means "no sources";
+// SOURCE_DIR being a regular file (ENOTDIR) or unreadable (EACCES) is a
+// structured failure, not a silent "no bodies" (RUN-07).
+function probeBodies(sourceRoot: string): BodiesProbe {
+  try {
+    const entries = readdirSync(path.join(sourceRoot, SOURCE_DIR));
+    return { ok: true, authors: entries.some((f) => f.endsWith('.md')) };
+  } catch (error) {
+    const e = error as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') return { ok: true, authors: false };
+    return { ok: false, message: `cannot read skill sources at ${SOURCE_DIR}: ${e.message}` };
+  }
+}
+
+type HostsProbe = { ok: true; hosts: boolean } | { ok: false; message: string };
+// Does the TARGET root host a wrappers tree? lstat (no-follow); only ENOENT is
+// absence, other errno is a structured failure (RUN-07). A symlinked skills root
+// counts as "hosts" here and is caught later by findGeneratedWrappers.
+function probeHosts(targetRoot: string): HostsProbe {
+  let hosts = false;
+  for (const runtime of RUNTIMES) {
+    try {
+      lstatSync(path.join(targetRoot, runtime.skillsDir));
+      hosts = true;
+    } catch (error) {
+      const e = error as NodeJS.ErrnoException;
+      if (e.code === 'ENOENT') continue;
+      return { ok: false, message: `cannot stat skills dir ${runtime.skillsDir}: ${e.message}` };
+    }
+  }
+  return { ok: true, hosts };
+}
+
+function fail(message: string, stdout: string[] = []): GenResult {
+  return { code: EXIT_FAIL, stdout, stderr: [message] };
+}
+
+// generate mode: (re)write every planned wrapper, then delete generated-marked
+// orphans. Preflight (roots + collect + plan + confinement) runs BEFORE any
+// write so a bad destination aborts without partial generation (RUN-07).
+export function generate(sourceRoot: string, targetRoot: string): GenResult {
+  const stdout: string[] = [];
+
+  const rootsCheck = validateRoots(sourceRoot, targetRoot);
+  if (!rootsCheck.ok) return fail(rootsCheck.message);
+
+  const collected = collectPhases(sourceRoot);
+  if (!collected.ok) return fail(collected.message);
+
+  const planned = planWrappers(collected.phases, { sourceRoot, targetRoot });
+
+  // Preflight confinement for every destination (no partial writes on a bad path).
+  for (const w of planned) {
+    const c = assertConfined(targetRoot, w.relPath);
+    if (!c.ok) return fail(c.message);
+  }
+
+  // Discover pre-existing generated wrappers (confined) for orphan cleanup,
+  // before we write the new ones.
+  const found = findGeneratedWrappers(targetRoot);
+  if (!found.ok) return fail(found.message);
+
+  for (const w of planned) {
+    writeWrapperFile(path.join(targetRoot, w.relPath), w.content);
+    stdout.push(`generated ${w.relPath}`);
+  }
+
+  // Delete generated-marked orphans (not in the planned set), re-confining each
+  // destination just before removal (RUN-05).
+  const plannedRel = new Set(planned.map((w) => w.relPath));
+  for (const g of found.wrappers) {
+    if (plannedRel.has(g.relPath)) continue;
+    const c = assertConfined(targetRoot, g.relPath);
+    if (!c.ok) return fail(c.message, stdout);
+    rmSync(path.join(targetRoot, g.relPath));
+    stdout.push(`removed orphan ${g.relPath}`);
+  }
+
+  stdout.push(`generated ${planned.length} skill wrappers for ${RUNTIMES.length} runtimes`);
+  return { code: EXIT_OK, stdout, stderr: [] };
+}
+
+// check mode: validate the canonical bodies, then (unless in legacy/same-root
+// source-only mode) require the planned wrappers to exist and match, and fail on
+// stale/orphan generated wrappers (RUN-05).
+//
+// Wrapper-drift is SKIPPED only when sameRoot AND the target hosts no wrappers
+// tree - that is the source repo (dev-standards) checking itself. A cross-root
+// check ALWAYS requires the planned wrappers (missing = failure), because the
+// caller explicitly asked to generate into a separate target.
+export function check(sourceRoot: string, targetRoot: string, sameRoot: boolean): GenResult {
+  const stdout: string[] = [];
+
+  const rootsCheck = validateRoots(sourceRoot, targetRoot);
+  if (!rootsCheck.ok) return fail(rootsCheck.message);
+
+  const bodiesProbe = probeBodies(sourceRoot);
+  if (!bodiesProbe.ok) return fail(bodiesProbe.message);
+  const authorsBodies = bodiesProbe.authors;
+
+  const hostsProbe = probeHosts(targetRoot);
+  if (!hostsProbe.ok) return fail(hostsProbe.message);
+  const hosts = hostsProbe.hosts;
+
+  // Validate bodies whenever they exist, or whenever we will need the plan
+  // (cross-root always needs it). collectPhases is also the drift plan source.
+  let phases: PhaseSource[] = [];
+  if (authorsBodies || hosts || !sameRoot) {
+    const collected = collectPhases(sourceRoot);
+    if (!collected.ok) return fail(collected.message);
     phases = collected.phases;
   }
 
-  // Dimension 2: wrapper-drift comparison is gated on hosting wrappers.
-  if (!hosts) {
+  // Legacy/same-root source-only mode: nothing to drift against - skip.
+  if (sameRoot && !hosts) {
     stdout.push('no skill wrappers present (source repo) - wrapper drift check skipped');
-    return { code: EXIT_OK, stdout, stderr };
+    return { code: EXIT_OK, stdout, stderr: [] };
   }
 
-  const planned = planWrappers(phases);
+  const planned = planWrappers(phases, { sourceRoot, targetRoot });
+  const plannedRel = new Set(planned.map((w) => w.relPath));
   const drift: string[] = [];
+
   for (const w of planned) {
-    const abs = path.join(repoRoot, w.relPath);
-    let actual: string | undefined;
+    const confine = assertConfined(targetRoot, w.relPath);
+    if (!confine.ok) return fail(confine.message);
+    let actual: string;
     try {
-      actual = readFileSync(abs, 'utf8').replace(/\r\n/g, '\n');
-    } catch {
-      drift.push(`missing wrapper: ${w.relPath} (run: standards-sync --generate-skills)`);
-      continue;
+      actual = readFileSync(path.join(targetRoot, w.relPath), 'utf8').replace(/\r\n/g, '\n');
+    } catch (error) {
+      const e = error as NodeJS.ErrnoException;
+      if (e.code === 'ENOENT') {
+        drift.push(`missing wrapper: ${w.relPath} (run: standards-sync --generate-skills)`);
+        continue;
+      }
+      return fail(`cannot read wrapper ${w.relPath}: ${e.message}`); // EACCES/ENOTDIR/ELOOP
     }
     if (actual !== w.content) {
       drift.push(`drift: ${w.relPath} differs from the generated output (run: standards-sync --generate-skills)`);
     }
   }
 
+  // Stale/orphan generated wrappers with no matching planned entry (RUN-05).
+  const found = findGeneratedWrappers(targetRoot);
+  if (!found.ok) return fail(found.message);
+  for (const g of found.wrappers) {
+    if (!plannedRel.has(g.relPath)) {
+      drift.push(`stale wrapper: ${g.relPath} (no canonical source; run: standards-sync --generate-skills)`);
+    }
+  }
+
   if (drift.length > 0) {
-    stderr.push('skill wrapper drift detected:');
+    const stderr = ['skill wrapper drift detected:'];
     for (const line of drift) stderr.push(`  ${line}`);
     return { code: EXIT_FAIL, stdout, stderr };
   }
 
   stdout.push(`skill wrappers in sync (${planned.length} wrappers across ${RUNTIMES.length} runtimes)`);
-  return { code: EXIT_OK, stdout, stderr };
+  return { code: EXIT_OK, stdout, stderr: [] };
 }
 
-// CLI: exactly one of --generate | --check, plus required --repo-root <path>.
+// CLI: exactly one of --generate | --check, plus the roots. Roots are either the
+// back-compat alias `--repo-root <path>` (sets BOTH source and target), OR the
+// split `--source-root <path> [--target-root <path>]` (target defaults to
+// source). The two forms cannot be mixed and no flag may repeat.
 // usage -> 2; generation/check fault or drift -> 1; ok -> 0.
 export function run(argv: string[]): GenResult {
+  const usage =
+    'usage: --generate | --check (--repo-root <path> | --source-root <path> [--target-root <path>])';
+  const usageErr = (detail: string): GenResult => ({
+    code: EXIT_USAGE,
+    stdout: [],
+    stderr: [`${usage}${detail ? ` (${detail})` : ''}`],
+  });
+
   let mode: 'generate' | 'check' | undefined;
   let repoRoot: string | undefined;
+  let sourceRoot: string | undefined;
+  let targetRoot: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--generate' || arg === '--check') {
-      const next: 'generate' | 'check' = arg === '--generate' ? 'generate' : 'check';
-      if (mode !== undefined) {
-        return { code: EXIT_USAGE, stdout: [], stderr: ['usage: --generate | --check --repo-root <path> (give exactly one mode)'] };
-      }
-      mode = next;
+      if (mode !== undefined) return usageErr('give exactly one mode');
+      mode = arg === '--generate' ? 'generate' : 'check';
       continue;
     }
-    if (arg === '--repo-root') {
+    if (arg === '--repo-root' || arg === '--source-root' || arg === '--target-root') {
       const value = argv[i + 1];
-      if (value === undefined) {
-        return { code: EXIT_USAGE, stdout: [], stderr: ['usage: --repo-root <path> (missing value)'] };
+      if (value === undefined) return usageErr(`${arg} missing value`);
+      if (arg === '--repo-root') {
+        if (repoRoot !== undefined) return usageErr('--repo-root given twice');
+        repoRoot = value;
+      } else if (arg === '--source-root') {
+        if (sourceRoot !== undefined) return usageErr('--source-root given twice');
+        sourceRoot = value;
+      } else {
+        if (targetRoot !== undefined) return usageErr('--target-root given twice');
+        targetRoot = value;
       }
-      repoRoot = value;
       i += 1;
       continue;
     }
-    return { code: EXIT_USAGE, stdout: [], stderr: [`usage: --generate | --check --repo-root <path> (unexpected argument: ${arg})`] };
+    return usageErr(`unexpected argument: ${arg}`);
   }
 
-  if (mode === undefined || repoRoot === undefined) {
-    return { code: EXIT_USAGE, stdout: [], stderr: ['usage: --generate | --check --repo-root <path>'] };
+  if (mode === undefined) return usageErr('');
+
+  if (repoRoot !== undefined) {
+    if (sourceRoot !== undefined || targetRoot !== undefined) {
+      return usageErr('--repo-root cannot be combined with --source-root/--target-root');
+    }
+    sourceRoot = repoRoot;
+    targetRoot = repoRoot;
+  } else {
+    if (sourceRoot === undefined) return usageErr('--source-root is required (or use --repo-root)');
+    if (targetRoot === undefined) targetRoot = sourceRoot;
   }
 
-  return mode === 'generate' ? generate(repoRoot) : check(repoRoot);
+  const sameRoot = path.resolve(sourceRoot) === path.resolve(targetRoot);
+  return mode === 'generate' ? generate(sourceRoot, targetRoot) : check(sourceRoot, targetRoot, sameRoot);
 }
 
 if (isMainModule(import.meta.url)) {

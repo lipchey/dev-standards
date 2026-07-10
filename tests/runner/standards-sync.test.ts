@@ -286,6 +286,33 @@ test('standards-sync: drift-fails-check', () => {
   }
 });
 
+test('standards-sync: a pre-change generated orphan fails --check as stale and is removed by --generate-skills (RUN-05)', () => {
+  const dir = makeFixtureRepo();
+  try {
+    // Generate a clean tree, then plant a stale generated-marked wrapper whose
+    // canonical source does not exist (e.g. a renamed/deleted skill).
+    spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], { cwd: dir, encoding: 'utf8' });
+    const orphanDir = path.join(dir, '.agents', 'skills', 'ghost-phase');
+    fs.mkdirSync(orphanDir, { recursive: true });
+    fs.writeFileSync(path.join(orphanDir, 'SKILL.md'), 'GENERATED FILE - do not edit. stale wrapper\n');
+
+    const check = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], { cwd: dir, encoding: 'utf8' });
+    assert.notEqual(check.status, 0, 'a stale generated orphan must fail --check');
+    assert.match(check.stderr ?? '', /stale wrapper/i, `expected a stale-wrapper message; got ${JSON.stringify(check.stderr)}`);
+    assert.match(check.stderr ?? '', /ghost-phase/, 'the stale message should name the orphan');
+
+    // Regenerating removes the generated-marked orphan and the tree is in sync.
+    const regen = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--generate-skills'], { cwd: dir, encoding: 'utf8' });
+    assert.equal(regen.status, 0, `regenerate should exit 0; got ${combined(regen)}`);
+    assert.ok(!fs.existsSync(path.join(orphanDir, 'SKILL.md')), 'the generated orphan must be removed by --generate-skills');
+
+    const recheck = spawnSync('bash', [path.join(dir, 'tools', 'standards-sync'), '--check'], { cwd: dir, encoding: 'utf8' });
+    assert.equal(recheck.status, 0, `--check after cleanup should exit 0; got ${combined(recheck)}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('standards-sync: a missing wrapper fails --check as drift', () => {
   const dir = makeFixtureRepo();
   try {

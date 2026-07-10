@@ -61,35 +61,72 @@ function main(argv: string[]): number {
   }
 }
 
-// report-only outcomes are recorded but do not fail; wall-clock budget is checked after each run.
+// report-only outcomes are recorded but do not fail; one monotonic deadline bounds the
+// whole tier (setup + git + checks). remaining-time is passed as each spawn's timeout so
+// a hung git or check can't outlive the tier budget.
 export function runTier(manifest: Manifest, root: string, scope: TierName): number {
   const startedAt = Date.now();
   const budgetSeconds = manifest.budgets[`${scope}_seconds`];
+  const deadlineMs = startedAt + budgetSeconds * 1000;
+  const remainingMs = (): number => deadlineMs - Date.now();
 
-  const filesByName = new Map<string, string[]>();
-  for (const fileset of manifest.filesets) {
-    filesByName.set(fileset.name, expandFileset(fileset, { cwd: root }));
-  }
-
+  // Initialize results before setup so a deadline hit during git/fileset expansion can
+  // still emit the work completed so far.
   const results: CheckResult[] = [];
-  for (const check of tierChecks(manifest, scope)) {
-    const result = runCheck({ check, tier: scope, cwd: root, filesByName });
-    results.push(result);
-    process.stdout.write(summarize(result));
-    assertWithinBudget(startedAt, budgetSeconds);
+  const emitReport = (): string =>
+    writeReport(
+      { repo: manifest.repo, scope, generatedAt: new Date().toISOString(), results },
+      root,
+      manifest.paths.reports,
+    );
+
+  try {
+    const filesByName = new Map<string, string[]>();
+    for (const fileset of manifest.filesets) {
+      filesByName.set(fileset.name, expandFileset(fileset, { cwd: root, remainingMs }));
+    }
+
+    for (const check of tierChecks(manifest, scope)) {
+      const left = remainingMs();
+      // Never spawn with a spent budget; fail the check without launching it.
+      const result =
+        left <= 0
+          ? deadlineFail(check, scope)
+          : runCheck({ check, tier: scope, cwd: root, filesByName, remainingMs: left });
+      results.push(result);
+      process.stdout.write(summarize(result));
+      assertWithinBudget(startedAt, budgetSeconds);
+    }
+  } catch (error) {
+    // ponytail: report write here is best-effort — we're already just past the deadline,
+    // so a partial report is acceptable and any write failure must not mask the real error.
+    try {
+      emitReport();
+    } catch {
+      /* keep the original deadline/error */
+    }
+    throw error;
   }
 
-  const reportPath = writeReport(
-    { repo: manifest.repo, scope, generatedAt: new Date().toISOString(), results },
-    root,
-    manifest.paths.reports,
-  );
+  const reportPath = emitReport();
   process.stdout.write(`report: ${reportPath}\n`);
 
   const blockingFailed = results.some(
     (r) => r.mode === 'blocking' && (r.status === 'fail' || r.status === 'timeout'),
   );
   return blockingFailed ? EXIT_CHECK_FAILED : 0;
+}
+
+// A check whose tier deadline is already spent: failed as timed-out, never spawned.
+function deadlineFail(check: Check, scope: TierName): CheckResult {
+  return {
+    name: check.name,
+    tier: scope,
+    status: 'timeout',
+    exitCode: null,
+    durationMs: 0,
+    mode: check.mode ?? 'blocking',
+  };
 }
 
 function tierChecks(manifest: Manifest, scope: TierName): Check[] {

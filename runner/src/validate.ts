@@ -2,7 +2,7 @@ import type { Manifest, ValidationError, ValidationResult } from './types.ts';
 
 /**
  * Hand validator for quality manifests. Structural checks mirror the schema
- * except diff_filter's pattern (schema-only in Phase 1a); semantic checks cover
+ * (including diff_filter's `^[ACDMRTUXB]+$` pattern); semantic checks cover
  * cross-field rules. Error paths are dotted/indexed.
  */
 
@@ -100,6 +100,8 @@ const WORKFLOW_NOTIFY_KEYS = ['webhook_env'] as const;
 const WORKFLOW_MODES = ['manual', 'auto'] as const;
 const REVIEWER_INDEPENDENCE = ['different-runtime', 'same-runtime'] as const;
 const WEBHOOK_ENV_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+// git --diff-filter letters; mirrors schemas/quality.schema.json diff_filter.
+const DIFF_FILTER_PATTERN = /^[ACDMRTUXB]+$/;
 
 // deep_review (ADR-007). Optional top-level block; `{ "enabled": false }` (or
 // absent) is valid. `enabled` is the only required key; other fields are
@@ -392,7 +394,23 @@ function validateFileset(value: unknown, path: string, errors: ValidationError[]
   if (Object.hasOwn(fileset, 'source')) validateEnum(fileset['source'], `${path}.source`, FILESET_SOURCES, errors);
   if (Object.hasOwn(fileset, 'include')) validateStringArray(fileset['include'], `${path}.include`, 1, errors);
   if (Object.hasOwn(fileset, 'exclude')) validateStringArray(fileset['exclude'], `${path}.exclude`, 0, errors);
-  if (Object.hasOwn(fileset, 'diff_filter')) validateString(fileset['diff_filter'], `${path}.diff_filter`, errors);
+  if (Object.hasOwn(fileset, 'diff_filter')) validateDiffFilter(fileset['diff_filter'], `${path}.diff_filter`, errors);
+}
+
+function validateDiffFilter(value: unknown, path: string, errors: ValidationError[]): void {
+  if (typeof value !== 'string') {
+    addError(errors, path, 'type', `must be a string, got ${describeValue(value)}`, value);
+    return;
+  }
+  if (!DIFF_FILTER_PATTERN.test(value)) {
+    addError(
+      errors,
+      path,
+      'pattern',
+      'must match ^[ACDMRTUXB]+$ (git --diff-filter letters)',
+      value,
+    );
+  }
 }
 
 function validateTiers(value: unknown, errors: ValidationError[]): void {

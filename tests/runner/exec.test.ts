@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { expandArgv, runCheck } from '../../runner/src/exec.ts';
 import type { RunCheckInput } from '../../runner/src/exec.ts';
 import type { Check } from '../../runner/src/types.ts';
@@ -109,4 +113,57 @@ test('a missing binary (ENOENT) becomes status fail (exitCode 1), not timeout', 
   assert.equal(result.status, 'fail');
   assert.equal(result.exitCode, 1);
   assert.notEqual(result.status, 'timeout');
+});
+
+// RUN-01 tree-kill: a check that outlives its timeout must have its whole detached
+// process group SIGKILLed, so no descendant keeps mutating the repo afterwards.
+// Child stub spawns a grandchild that writes `marker` after `delayMs`, then ignores
+// SIGTERM and sleeps `hangMs`.
+function writeGroupStub(dir: string): string {
+  const file = path.join(dir, 'group-child.mjs');
+  fs.writeFileSync(
+    file,
+    "import { spawn } from 'node:child_process';\n" +
+      'const [marker, delayMs, hangMs] = process.argv.slice(2);\n' +
+      "spawn(process.execPath, ['-e', 'setTimeout(()=>require(\"fs\").writeFileSync(process.argv[1],\"x\"),' + delayMs + ')', marker], { stdio: 'ignore' });\n" +
+      "process.on('SIGTERM', () => {});\n" +
+      'setTimeout(() => process.exit(0), Number(hangMs));\n',
+  );
+  return file;
+}
+
+test('timeout SIGKILLs the whole detached group: no grandchild survives (RUN-01)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-treekill-'));
+  try {
+    const marker = path.join(dir, 'marker');
+    // Grandchild would write at ~2s; runCheck kills at 1s. Child hangs 60s (ignores SIGTERM).
+    const result = runCheck(
+      input(check([process.execPath, writeGroupStub(dir), marker, '2000', '60000'], { timeout_seconds: 1 })),
+    );
+    assert.equal(result.status, 'timeout');
+    await delay(2000);
+    assert.equal(
+      fs.existsSync(marker),
+      false,
+      'grandchild survived the timeout and wrote its marker — process group was not reaped',
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('control: the grandchild marker really writes when the check is not killed (RUN-01)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-treekill-ctl-'));
+  try {
+    const marker = path.join(dir, 'marker');
+    // Grandchild writes at 100ms; child exits at 300ms; generous timeout → no kill.
+    const result = runCheck(
+      input(check([process.execPath, writeGroupStub(dir), marker, '100', '300'], { timeout_seconds: 30 })),
+    );
+    assert.equal(result.status, 'pass');
+    await delay(200);
+    assert.equal(fs.existsSync(marker), true, 'grandchild should have written its marker when not killed');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
