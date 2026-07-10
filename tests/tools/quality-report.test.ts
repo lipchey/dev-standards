@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseLines, resolveTelemetryPath } from '../../tools/quality-stats.mjs';
-import { buildReportModel, renderHtml, runOutcome, foldByDay } from '../../tools/quality-report.mjs';
+import { buildReportModel, renderHtml, runOutcome } from '../../tools/quality-report.mjs';
 
 /* The .mjs tools are dep-free and export no types; these builders mirror the RunEvent
    emitter contract (docs/effectiveness-plan.md §2 + runner telemetry) so fixtures stay
@@ -102,13 +102,11 @@ test('buildReportModel: an aborted event (exit null, aborted true) is ABORTED, n
   assert.equal(model.runs[0].outcome, 'aborted');
   assert.equal(model.kpis.blocked, 0);
   assert.equal(model.kpis.aborted, 1);
-  assert.equal(model.byDay[0].pass, 0, 'never counted as a pass day');
-  assert.equal(model.byDay[0].aborted, 1);
 });
 
-/* ---- KPIs, byDay fold, catches, latestMode through aggregate ---- */
+/* ---- KPIs, catches, latestMode through aggregate ---- */
 
-test('buildReportModel: KPIs and byDay are exact sums over the in-window runs', () => {
+test('buildReportModel: KPIs are exact sums over the in-window runs', () => {
   const model = modelOf([
     ev(iso(T - 3 * DAY), 'ai', 'main', [{ name: 'eslint', tier: 'fast', status: 'fail', durationMs: 100, mode: 'report-only' }], { exit: 0 }),
     ev(iso(T - 2 * DAY), 'ai', 'main', [{ name: 'eslint', tier: 'fast', status: 'pass', durationMs: 90, mode: 'report-only' }], { exit: 0 }),
@@ -119,12 +117,6 @@ test('buildReportModel: KPIs and byDay are exact sums over the in-window runs', 
   assert.equal(model.kpis.aborted, 0);
   assert.equal(model.kpis.catches, 1, 'the eslint fail→pass is one catch candidate');
   assert.equal(model.kpis.bypasses, 0);
-  // byDay: one bucket per day, outcomes stacked
-  assert.equal(model.byDay.length, 3);
-  const totalPass = model.byDay.reduce((s: number, d: any) => s + d.pass, 0);
-  const totalBlocked = model.byDay.reduce((s: number, d: any) => s + d.blocked, 0);
-  assert.equal(totalPass, 2);
-  assert.equal(totalBlocked, 1);
   // latestMode + flip come straight through aggregate
   const eslint = model.checks.find((c: any) => c.check === 'eslint');
   assert.equal(eslint.latestMode, 'report-only');
@@ -159,7 +151,6 @@ test('buildReportModel: out-of-window and future-dated events are excluded every
   assert.equal(model.meta.counters.valid, 1, 'only the in-window event is valid');
   assert.equal(model.meta.counters.futureDated, 1, 'the future event is counted, not silently swallowed');
   assert.equal(model.runs.length, 1);
-  assert.equal(model.byDay.length, 1);
   assert.equal(model.checks.length, 1);
   assert.equal(model.catches.length, 0);
   assert.equal(model.kpis.runs, 1);
@@ -223,18 +214,22 @@ test('resolveTelemetryPath: DS_TELEMETRY_PATH=off falls back to the default sink
   assert.equal(resolveTelemetryPath(undefined, { DS_TELEMETRY_PATH: 'off' }, '/home'), dflt);
 });
 
-/* ---- foldByDay pure helper ---- */
+/* ---- flip badge uses the calibration window, never the embed window ---- */
 
-test('foldByDay: groups by date, stacks outcomes, sorts ascending', () => {
-  const days = foldByDay([
-    { date: '2026-07-09', outcome: 'pass' },
-    { date: '2026-07-08', outcome: 'blocked' },
-    { date: '2026-07-09', outcome: 'aborted' },
-  ]);
-  assert.deepEqual(days, [
-    { date: '2026-07-08', pass: 0, blocked: 1, aborted: 0 },
-    { date: '2026-07-09', pass: 1, blocked: 0, aborted: 1 },
-  ]);
+test('buildReportModel: a catch inside the embed window but outside the 7d flip window does NOT badge flip', () => {
+  // fail→pass at ~40d ago: well inside the 90d embed window, far outside the 7d flip window.
+  const catchPair = (at: number): unknown[] => [
+    ev(iso(T - at * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'fail', durationMs: 10, mode: 'report-only' }], { exit: 0 }),
+    ev(iso(T - at * DAY + 3_600_000), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 10, mode: 'report-only' }], { exit: 0 }),
+  ];
+  const stale = modelOf(catchPair(40));
+  assert.equal(stale.checks[0].catches, 1, 'the catch itself IS shown (embed window)');
+  assert.equal(stale.checks[0].flip, false, 'but candidacy expired with the 7d calibration window');
+  assert.equal(stale.meta.flipDays, 7, 'the calibration window is surfaced to the view');
+  assert.equal(stale.meta.pruneDays, 30);
+  // the same pair 2d ago is inside the calibration window → badge on.
+  const fresh = modelOf(catchPair(2));
+  assert.equal(fresh.checks[0].flip, true);
 });
 
 /* ---- CLI: sink-clobber guard, days validation, missing sink, end-to-end ---- */

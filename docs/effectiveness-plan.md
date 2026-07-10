@@ -226,7 +226,10 @@ persisted `exit`/`aborted` (`pass`/`blocked`/`aborted`), ніколи не з
 re-derived block-rule. Ін'єкція знешкоджена (кожен `<` серіалізується як
 JS-escape, а не голий символ; вставка в DOM лише через `textContent`);
 `--out` відмовляється перетерти sink і пише
-атомарно. CLI: `node tools/quality-report.mjs --path <events.jsonl>
+атомарно. Flip/prune-бейджі рахуються по КАЛІБРУВАЛЬНИХ вікнах (7д/30д,
+імпортовані константи quality-stats), а не по embed-вікну `--days` — дашборд
+ніколи не суперечить текстовому звіту щодо кандидатності. CLI:
+`node tools/quality-report.mjs --path <events.jsonl>
 --out <report.html> [--days N] [--open]`.
 
 ## Acceptance (Фаза 8 закрита, коли)

@@ -31,8 +31,11 @@ const STATUSES = new Set(['pass', 'fail', 'skipped', 'timeout', 'bypassed', 'err
 /* timeout/error are tool/spawn faults, not verdicts about the change: they are
    "operational noise" that never counts as a catch and disqualifies a flip. */
 const NOISE_STATUSES = new Set(['timeout', 'error']);
-const DEFAULT_SINCE_DAYS = 7;
-const DEFAULT_PRUNE_DAYS = 30;
+/* The calibration windows (flip = 7d, prune = 30d) are exported so the visual report
+   (quality-report.mjs) badges flip/prune with EXACTLY these defaults — two tools disagreeing
+   on what is a flip candidate would poison a calibration session. */
+export const DEFAULT_SINCE_DAYS = 7;
+export const DEFAULT_PRUNE_DAYS = 30;
 /* Short head_sha rendered in the catch-candidate pairs (12 chars: unambiguous in any
    real repo yet short enough to skim); a null sha (non-git run) renders as "-". */
 const SHA_SHORT_LEN = 12;

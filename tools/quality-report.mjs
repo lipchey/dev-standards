@@ -24,15 +24,16 @@ import {
   aggregate,
   inWindow,
   parseDays,
+  DEFAULT_SINCE_DAYS,
+  DEFAULT_PRUNE_DAYS,
 } from './quality-stats.mjs';
 
 const DAY_MS = 86_400_000;
-/* The visual report's default embed window is wider than the calibration flip window (7d):
-   a dashboard wants a few months of context, not just the last week. --days overrides it. */
+/* The embed window (what the dashboard SHOWS, --days) is deliberately wider than the
+   calibration windows (what BADGES a flip/prune candidate): a dashboard wants a few months of
+   context, but candidacy must mean exactly what quality-stats' text report means, so the flip
+   (7d) and prune (30d) windows are imported from there and never follow --days. */
 const DEFAULT_WINDOW_DAYS = 90;
-/* Prune candidacy still uses its own sub-window (matches quality-stats' DEFAULT_PRUNE_DAYS),
-   clamped in practice to whatever the embed window admits. */
-const DEFAULT_PRUNE_DAYS = 30;
 const SHA_SHORT_LEN = 12;
 
 /* ---- run outcome -----------------------------------------------------------
@@ -73,6 +74,7 @@ export function buildReportModel({
   sourcePath = '',
   now = Date.now(),
   sinceDays = DEFAULT_WINDOW_DAYS,
+  flipDays = DEFAULT_SINCE_DAYS,
   pruneDays = DEFAULT_PRUNE_DAYS,
 }) {
   const cutoff = now - sinceDays * DAY_MS;
@@ -83,7 +85,9 @@ export function buildReportModel({
     if (inWindow(e.startedAtMs, cutoff, now)) windowed.push(e);
   }
 
-  const agg = aggregate(windowed, { now, sinceDays, pruneDays });
+  /* flip/prune candidacy uses the CALIBRATION windows, not the embed window — the badge must
+     agree with quality-stats' text report on the same sink (see the constants' comment). */
+  const agg = aggregate(windowed, { now, sinceDays: flipDays, pruneDays });
 
   /* Slim per-run rows: one per verify run, carrying only what the client sums/filters. The
      errors/timeouts split is kept separate (not folded into one "noise") so the KPI can show
@@ -98,8 +102,6 @@ export function buildReportModel({
     errors: countStatus(e.results, 'error'),
     timeouts: countStatus(e.results, 'timeout'),
   }));
-
-  const byDay = foldByDay(runs);
 
   const flipLabels = new Set(agg.flip.map((f) => f.label));
   const pruneLabels = new Set(agg.prune.map((p) => p.label));
@@ -147,6 +149,8 @@ export function buildReportModel({
       generatedAt: new Date(now).toISOString(),
       sourcePath,
       windowDays: sinceDays,
+      flipDays,
+      pruneDays,
       counters: { valid: windowed.length, malformed, unsupported, futureDated },
     },
     kpis: {
@@ -158,27 +162,11 @@ export function buildReportModel({
       errors: runs.reduce((s, r) => s + r.errors, 0),
       timeouts: runs.reduce((s, r) => s + r.timeouts, 0),
     },
-    byDay,
     checks,
     catches,
     runs,
     filters: { repos, tiers, branches },
   };
-}
-
-/* Group runs by day into stacked-bar buckets. Exported so the model's initial byDay and the
-   client's per-filter recompute share one definition. */
-export function foldByDay(runs) {
-  const byDay = new Map();
-  for (const r of runs) {
-    let d = byDay.get(r.date);
-    if (d === undefined) {
-      d = { date: r.date, pass: 0, blocked: 0, aborted: 0 };
-      byDay.set(r.date, d);
-    }
-    d[r.outcome] += 1;
-  }
-  return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /* ---- HTML ------------------------------------------------------------------
@@ -256,6 +244,8 @@ const APP_JS = `
   byId('c-source').textContent = meta.sourcePath || '(default sink)';
   byId('c-generated').textContent = meta.generatedAt;
   byId('c-window').textContent = String(meta.windowDays);
+  byId('c-flipd').textContent = String(meta.flipDays);
+  byId('c-pruned').textContent = String(meta.pruneDays);
 
   var repoSel = byId('f-repo'), tierSel = byId('f-tier'), branchSel = byId('f-branch');
   var addOpt = function (sel, value, label) {
@@ -423,7 +413,7 @@ export function renderHtml(model) {
     <span class="legend"><span><i class="seg-pass" style="background:var(--pass)"></i>pass</span><span><i style="background:var(--blocked)"></i>blocked</span><span><i style="background:var(--aborted)"></i>aborted</span></span>
   </div>
 
-  <h2>Checks <span class="sub" style="font-weight:400">— flip/prune badges reflect the full embed window, not the current filter</span></h2>
+  <h2>Checks <span class="sub" style="font-weight:400">— flip/prune badges use the calibration windows (<span id="c-flipd"></span>d flip / <span id="c-pruned"></span>d prune), independent of the embed window and current filter</span></h2>
   <div class="scroll">
     <table>
       <thead><tr>
@@ -521,7 +511,6 @@ function main(argv) {
     sourcePath: filePath,
     now: Date.now(),
     sinceDays: opts.days,
-    pruneDays: DEFAULT_PRUNE_DAYS,
   });
   writeAtomic(opts.out, renderHtml(model));
   console.log(`quality-report: wrote ${opts.out} (${model.meta.counters.valid} run(s), window ${opts.days}d).`);
