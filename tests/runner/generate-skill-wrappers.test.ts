@@ -238,6 +238,17 @@ test('FIX #3: YAML 1.2 float specials (.inf/.nan/.Inf) are quoted, not left bare
   }
 });
 
+test('FIX #3b: YAML 1.2 base-prefixed integers (0x/0o) are quoted, not left bare', () => {
+  const runtime = RUNTIMES[0]!;
+  for (const description of ['0x10', '0o17', '-0x1f', '+0o7']) {
+    const wrapper = renderWrapper({ name: 'plan', description }, runtime, 'agents/skill-sources/plan.md');
+    assert.match(wrapper, new RegExp('^description: ".*"$', 'm'), `${JSON.stringify(description)} must be quoted`);
+    const parsed = parseFrontmatter(wrapper);
+    assert.equal(parsed.ok, true);
+    if (parsed.ok) assert.equal(parsed.frontmatter.description, description, `round-trip for ${JSON.stringify(description)}`);
+  }
+});
+
 test('FIX #3: a string that merely STARTS numeric (e.g. "2026 migration") stays bare', () => {
   const runtime = RUNTIMES[0]!;
   const wrapper = renderWrapper({ name: 'plan', description: '2026 migration' }, runtime, 'agents/skill-sources/plan.md');

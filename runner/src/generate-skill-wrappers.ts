@@ -174,6 +174,8 @@ function isPlainSafe(v: string): boolean {
   if (/^(true|false|null|~|yes|no|on|off)$/i.test(v)) return false; // bool/null (+ YAML 1.1 words)
   if (/^[-+]?\.(inf|nan)$/i.test(v)) return false; // .inf / .nan / .Inf
   if (/^[-+]?[0-9]+$/.test(v)) return false; // int
+  if (/^[-+]?0x[0-9a-fA-F]+$/.test(v)) return false; // hex int (YAML 1.2 core)
+  if (/^[-+]?0o[0-7]+$/.test(v)) return false; // octal int (YAML 1.2 core)
   if (/^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$/.test(v)) return false; // float / scientific
   if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}([Tt ][0-9:.+Zz-]*)?$/.test(v)) return false; // timestamp
   return true;
