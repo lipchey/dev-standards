@@ -99,15 +99,25 @@ function parseArgs(argv) {
   return { testGlobs: testGlobs.length > 0 ? testGlobs : DEFAULT_TEST_GLOBS, files };
 }
 
+/* Exit codes: 0 = ok, 1 = genuine finding (staged source without a test), 2 = operational failure
+   (an internal throw — bad args, unsupported glob). Without this catch an internal throw would exit
+   1 (Node's default), indistinguishable from a real finding and bypassable on a bypassable check;
+   the distinct code 2 lets the runner classify it as an operational 'error' via
+   operational_exit_codes. */
 export function main(argv) {
-  const { testGlobs, files } = parseArgs(argv);
-  const result = evaluate(files, { testGlobs });
-  if (result.ok) {
-    process.stdout.write('companion-tests: ok\n');
-    return 0;
+  try {
+    const { testGlobs, files } = parseArgs(argv);
+    const result = evaluate(files, { testGlobs });
+    if (result.ok) {
+      process.stdout.write('companion-tests: ok\n');
+      return 0;
+    }
+    process.stderr.write(`${result.message}\n`);
+    return 1;
+  } catch (error) {
+    process.stderr.write(`companion-tests: ${error?.message ?? error}\n`);
+    return 2;
   }
-  process.stderr.write(`${result.message}\n`);
-  return 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

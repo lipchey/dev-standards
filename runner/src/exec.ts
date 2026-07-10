@@ -77,10 +77,11 @@ export function runCheck(input: RunCheckInput): CheckResult {
   } as SpawnSyncOptions);
   const durationMs = Date.now() - startedAt;
 
-  /* Ordered, mutually exclusive classification, checked top to bottom. The first four rungs
+  /* Ordered, mutually exclusive classification, checked top to bottom. The first five rungs
      are operational or clean outcomes; only the last rung is a genuine finding-fail, and only
-     there may a bypassable check be relaxed. This keeps a broken/missing/killed check from ever
-     collapsing into a plain 'fail' (which would let it be bypassed or silently pass a tier). */
+     there may a bypassable check be relaxed. This keeps a broken/missing/killed check — or a tool
+     signalling its own operational failure via a declared exit code — from ever collapsing into a
+     plain 'fail' (which would let it be bypassed or silently pass a tier). */
   const base = { name: check.name, tier, durationMs, mode };
 
   if (result.error !== undefined) {
@@ -112,6 +113,15 @@ export function runCheck(input: RunCheckInput): CheckResult {
 
   if (result.status === 0) {
     return { ...base, status: 'pass', exitCode: 0 };
+  }
+
+  /* Declared operational exit code: the tool signalled an INTERNAL failure (e.g. diff-cover exit 2
+     on stale coverage), not a caught defect. Classify as 'error' — unbypassable and blocking
+     regardless of mode, like a spawn fault — so a tool malfunction never counts as a caught finding
+     nor slips through a bypassable check. The CheckResult contract fixes exitCode:null for 'error',
+     so the real code is preserved in `reason`. */
+  if (check.operational_exit_codes?.includes(result.status)) {
+    return { ...base, status: 'error', exitCode: null, reason: `operational exit ${result.status}` };
   }
 
   /* Genuine finding-fail (nonzero exit). A bypassable check with a non-empty reason is relaxed

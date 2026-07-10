@@ -14,6 +14,7 @@ type RuleName =
   | 'additional-property'
   | 'min-length'
   | 'min-items'
+  | 'unique-items'
   | 'pattern'
   // Semantic rules.
   | 'tier-budget'
@@ -67,7 +68,14 @@ const WORKSPACE_KEYS = ['name', 'path', 'stack', 'package_manager'] as const;
 const FILESET_REQUIRED = ['name', 'source', 'include'] as const;
 const FILESET_ALLOWED = [...FILESET_REQUIRED, 'exclude', 'diff_filter'] as const;
 const CHECK_REQUIRED = ['name', 'argv', 'timeout_seconds'] as const;
-const CHECK_ALLOWED = [...CHECK_REQUIRED, 'skip_if_empty', 'mode', 'baseline', 'bypassable'] as const;
+const CHECK_ALLOWED = [
+  ...CHECK_REQUIRED,
+  'skip_if_empty',
+  'mode',
+  'baseline',
+  'bypassable',
+  'operational_exit_codes',
+] as const;
 const REQUIRED_TIERS = ['staged', 'fast', 'full'] as const;
 const TIER_NAMES = ['staged', 'fast', 'full', 'audit'] as const;
 
@@ -417,6 +425,38 @@ function validateCheck(value: unknown, path: string, errors: ValidationError[]):
   if (Object.hasOwn(check, 'mode')) validateEnum(check['mode'], `${path}.mode`, CHECK_MODES, errors);
   if (Object.hasOwn(check, 'baseline')) validateString(check['baseline'], `${path}.baseline`, errors);
   if (Object.hasOwn(check, 'bypassable')) validateBoolean(check['bypassable'], `${path}.bypassable`, errors);
+  if (Object.hasOwn(check, 'operational_exit_codes')) {
+    validateOperationalExitCodes(check['operational_exit_codes'], `${path}.operational_exit_codes`, errors);
+  }
+}
+
+// Mirrors the schema: a non-empty array of unique integers in [1, 255]. Item-level errors are
+// indexed; `uniqueItems` is reported at the offending item so the message is actionable.
+function validateOperationalExitCodes(value: unknown, path: string, errors: ValidationError[]): void {
+  if (!isUnknownArray(value)) {
+    addError(errors, path, 'type', `must be an array of integers, got ${describeValue(value)}`, value);
+    return;
+  }
+  if (value.length < 1) {
+    addError(errors, path, 'min-items', 'must contain at least 1 item', value);
+  }
+  const seen = new Set<number>();
+  value.forEach((item, index) => {
+    if (typeof item !== 'number' || !Number.isInteger(item) || item < 1 || item > 255) {
+      addError(
+        errors,
+        `${path}[${index}]`,
+        'type',
+        `must be an integer in the inclusive range [1, 255], got ${describeValue(item)}`,
+        item,
+      );
+      return;
+    }
+    if (seen.has(item)) {
+      addError(errors, `${path}[${index}]`, 'unique-items', `duplicate exit code ${item}`, item);
+    }
+    seen.add(item);
+  });
 }
 
 // deep_review (ADR-007): present-but-disabled (or absent) is valid; only

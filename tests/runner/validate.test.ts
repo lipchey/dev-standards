@@ -110,6 +110,53 @@ test('unknown {files:name} token fails with rule files-token-reference', () => {
   expectError(validate(manifest), { rule: 'files-token-reference' });
 });
 
+test('operational_exit_codes: a valid unique integer array in [1,255] passes', () => {
+  const manifest = makeManifest();
+  firstFastCheck(manifest).operational_exit_codes = [2, 3];
+  const result = validate(manifest);
+  assert.equal(
+    result.ok,
+    true,
+    `expected a valid operational_exit_codes to pass; received errors:\n${JSON.stringify(result.errors, null, 2)}`,
+  );
+});
+
+test('operational_exit_codes: wrong type (not an array) fails with rule type', () => {
+  const manifest = makeManifest();
+  (firstFastCheck(manifest) as unknown as { operational_exit_codes: number }).operational_exit_codes = 2;
+  expectError(validate(manifest), { path: 'tiers.fast[0].operational_exit_codes', rule: 'type' });
+});
+
+test('operational_exit_codes: empty array fails with rule min-items', () => {
+  const manifest = makeManifest();
+  firstFastCheck(manifest).operational_exit_codes = [];
+  expectError(validate(manifest), { path: 'tiers.fast[0].operational_exit_codes', rule: 'min-items' });
+});
+
+test('operational_exit_codes: 0 is out of range and fails at item index with rule type', () => {
+  const manifest = makeManifest();
+  firstFastCheck(manifest).operational_exit_codes = [0];
+  expectError(validate(manifest), { path: 'tiers.fast[0].operational_exit_codes[0]', rule: 'type' });
+});
+
+test('operational_exit_codes: 256 is out of range and fails at item index with rule type', () => {
+  const manifest = makeManifest();
+  firstFastCheck(manifest).operational_exit_codes = [256];
+  expectError(validate(manifest), { path: 'tiers.fast[0].operational_exit_codes[0]', rule: 'type' });
+});
+
+test('operational_exit_codes: a non-integer item fails at item index with rule type', () => {
+  const manifest = makeManifest();
+  firstFastCheck(manifest).operational_exit_codes = [2.5];
+  expectError(validate(manifest), { path: 'tiers.fast[0].operational_exit_codes[0]', rule: 'type' });
+});
+
+test('operational_exit_codes: duplicate items fail with rule unique-items', () => {
+  const manifest = makeManifest();
+  firstFastCheck(manifest).operational_exit_codes = [2, 2];
+  expectError(validate(manifest), { path: 'tiers.fast[0].operational_exit_codes[1]', rule: 'unique-items' });
+});
+
 function validDeepReview(): NonNullable<Manifest['deep_review']> {
   return {
     enabled: true,

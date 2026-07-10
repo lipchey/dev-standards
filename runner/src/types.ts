@@ -25,6 +25,11 @@ export interface Check {
   mode?: CheckMode;
   baseline?: string;
   bypassable?: boolean;
+  /* Child exit codes this tool uses to signal an INTERNAL/operational failure (e.g. diff-cover
+     exit 2 = stale coverage) rather than a caught defect. A declared code classifies the run to
+     status:'error' — unbypassable, blocks regardless of mode — so a tool malfunction never counts
+     as a caught finding or slips through a bypassable check. Integers 1–255, unique. */
+  operational_exit_codes?: number[];
 }
 
 export interface Workspace {

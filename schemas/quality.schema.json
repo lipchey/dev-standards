@@ -124,7 +124,8 @@
           "skip_if_empty": { "type": "string", "description": "Fileset name; skip this check when that fileset expands to zero files." },
           "mode": { "enum": ["blocking", "report-only"], "default": "blocking" },
           "baseline": { "type": "string", "description": "Committed baseline path (baseline-diff semantics are out of pre-flight scope)." },
-          "bypassable": { "type": "boolean", "default": false, "description": "When true, a genuine finding-fail (nonzero child exit) of this check is relaxed to `bypassed` if the DS_BYPASS_REASON env var holds a non-empty reason. This relaxes ONLY a real finding — never a spawn/signal/operational error and never a timeout, which always block regardless of this flag. Secret/credential checks MUST keep this false so their findings can never be waved through." }
+          "bypassable": { "type": "boolean", "default": false, "description": "When true, a genuine finding-fail (nonzero child exit) of this check is relaxed to `bypassed` if the DS_BYPASS_REASON env var holds a non-empty reason. This relaxes ONLY a real finding — never a spawn/signal/operational error and never a timeout, which always block regardless of this flag. Secret/credential checks MUST keep this false so their findings can never be waved through." },
+          "operational_exit_codes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 255 }, "description": "Child exit codes this tool uses to signal an INTERNAL/operational failure (e.g. diff-cover exit 2 = stale coverage), not a caught finding. A declared code classifies the run to status `error`: unbypassable, blocks regardless of mode, and excluded from effectiveness stats. Integers 1–255, unique." }
         }
       }
     }

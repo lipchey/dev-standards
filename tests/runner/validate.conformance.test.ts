@@ -146,6 +146,34 @@ const batteryCases: readonly BatteryCase[] = [
     expectValid: false,
   },
   {
+    label: 'operational_exit_codes: valid [2]',
+    mutate: (m) => {
+      firstOf(m.tiers.fast, 'fast-tier check').operational_exit_codes = [2];
+    },
+    expectValid: true,
+  },
+  {
+    label: 'operational_exit_codes: empty array',
+    mutate: (m) => {
+      firstOf(m.tiers.fast, 'fast-tier check').operational_exit_codes = [];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'operational_exit_codes: out-of-range item (0)',
+    mutate: (m) => {
+      firstOf(m.tiers.fast, 'fast-tier check').operational_exit_codes = [0];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'operational_exit_codes: duplicate items',
+    mutate: (m) => {
+      firstOf(m.tiers.fast, 'fast-tier check').operational_exit_codes = [2, 2];
+    },
+    expectValid: false,
+  },
+  {
     // The workflow subsystem is removed: a top-level `workflow` key is now an
     // unknown additional property, so both validators must reject it.
     label: 'workflow-top-level-key-rejected',
@@ -409,5 +437,6 @@ test('schema declares nested property groups in canonical order', () => {
     'mode',
     'baseline',
     'bypassable',
+    'operational_exit_codes',
   ]);
 });

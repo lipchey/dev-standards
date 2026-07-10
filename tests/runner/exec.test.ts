@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expandArgv, runCheck } from '../../runner/src/exec.ts';
 import type { RunCheckInput } from '../../runner/src/exec.ts';
+import { isBlockingResult } from '../../runner/src/verify-runner.ts';
 import type { Check } from '../../runner/src/types.ts';
 
 function stub(name: string): string {
@@ -31,6 +32,43 @@ test('exit 1 becomes status fail', () => {
   const result = runCheck(input(check([process.execPath, stub('fail.mjs')])));
   assert.equal(result.status, 'fail');
   assert.equal(result.exitCode, 1);
+});
+
+// operational_exit_codes (P8.1): a DECLARED nonzero exit is the tool's own operational failure,
+// not a caught finding. It must classify to 'error' — unbypassable, blocking regardless of mode.
+test('declared operational exit code becomes status error, exitCode null, code preserved in reason', () => {
+  const result = runCheck(
+    input(check([process.execPath, stub('exit2.mjs')], { operational_exit_codes: [2] })),
+  );
+  assert.equal(result.status, 'error');
+  assert.equal(result.exitCode, null);
+  assert.equal(result.reason, 'operational exit 2');
+});
+
+// The whole point of 'error': it blocks the tier even for a report-only check (isBlockingResult IS
+// the tier's exit decision), so a tool malfunction can never pass fail-open.
+test('a declared operational error blocks the tier even when mode is report-only', () => {
+  const result = runCheck(
+    input(check([process.execPath, stub('exit2.mjs')], { operational_exit_codes: [2], mode: 'report-only' })),
+  );
+  assert.equal(result.status, 'error');
+  assert.equal(result.mode, 'report-only');
+  assert.equal(isBlockingResult(result), true);
+});
+
+// An UNDECLARED nonzero exit is unchanged from today: a genuine finding-fail.
+test('an undeclared nonzero exit stays status fail (operational rung does not hijack it)', () => {
+  const result = runCheck(
+    input(check([process.execPath, stub('exit2.mjs')], { operational_exit_codes: [3] })),
+  );
+  assert.equal(result.status, 'fail');
+  assert.equal(result.exitCode, 2);
+});
+
+test('with no operational_exit_codes declared, a nonzero exit is a plain fail as before', () => {
+  const result = runCheck(input(check([process.execPath, stub('exit2.mjs')])));
+  assert.equal(result.status, 'fail');
+  assert.equal(result.exitCode, 2);
 });
 
 test('timeout becomes status timeout and exitCode null', () => {

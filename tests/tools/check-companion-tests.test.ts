@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, matches } from '../../tools/check-companion-tests.mjs';
+import { evaluate, main, matches } from '../../tools/check-companion-tests.mjs';
 
 const testGlobs = ['**/*.test.ts', '**/*.spec.ts'];
 
@@ -61,4 +61,20 @@ test('matcher: * does not cross /', () => {
 
 test('matcher: rejects unsupported glob syntax in --tests patterns', () => {
   assert.throws(() => matches('src/a.ts', 'src/[a].ts'));
+});
+
+// main() exit-code contract (P8.1): 0 = ok, 1 = genuine finding, 2 = operational failure.
+// An internal throw (bad args / unsupported glob) must map to the distinct operational code 2 —
+// not 1 — so the runner's operational_exit_codes can classify it as an 'error', not a finding.
+test('main: an unrecognized argument is an operational failure (exit 2), never a finding (1)', () => {
+  assert.equal(main(['--bogus']), 2);
+});
+
+test('main: an unsupported glob in --tests is an operational failure (exit 2)', () => {
+  assert.equal(main(['--tests', 'src/[a].ts', '--', 'src/a.ts']), 2);
+});
+
+test('main: a genuine finding is exit 1, and an ok run is exit 0 (unchanged by the catch)', () => {
+  assert.equal(main(['--', 'src/a.ts']), 1);
+  assert.equal(main(['--', 'src/a.ts', 'src/a.test.ts']), 0);
 });

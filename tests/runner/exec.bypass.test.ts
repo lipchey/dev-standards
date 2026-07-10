@@ -70,6 +70,28 @@ test('spawn ENOENT is status error, never bypassed even with bypassable + reason
   assert.ok(result.reason && result.reason.length > 0);
 });
 
+// Bug caught: a tool's DECLARED operational failure (operational_exit_codes) being waved through by
+// a bypassable check — the operational rung sits ABOVE the bypass rung, so it can never be bypassed.
+test('declared operational exit is status error, never bypassed even with bypassable + reason', () => {
+  const result = withBypassReason('trust me', () =>
+    runCheck(input(check([process.execPath, stub('exit2.mjs')], { bypassable: true, operational_exit_codes: [2] }))),
+  );
+  assert.equal(result.status, 'error');
+  assert.equal(result.exitCode, null);
+  assert.equal(result.reason, 'operational exit 2');
+});
+
+// The bypass path for UNDECLARED codes is unchanged: exit 2 with no operational declaration is a
+// genuine finding, so a bypassable check + reason still relaxes it to 'bypassed'.
+test('an undeclared nonzero exit still bypasses normally (operational rung leaves the bypass path intact)', () => {
+  const result = withBypassReason('flaky in CI', () =>
+    runCheck(input(check([process.execPath, stub('exit2.mjs')], { bypassable: true, operational_exit_codes: [3] }))),
+  );
+  assert.equal(result.status, 'bypassed');
+  assert.equal(result.reason, 'flaky in CI');
+  assert.equal(result.exitCode, 2);
+});
+
 // Bug caught: a SIGKILLed check (no exit code) collapsing into a plain fail that could be bypassed.
 test('signal-killed child (null exit) is status error, never bypassed', () => {
   const result = withBypassReason('trust me', () =>
