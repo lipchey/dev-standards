@@ -6,6 +6,11 @@ on:
     branches:
       - <base-branch>
 
+# CI runs are ephemeral noise for effectiveness telemetry; keep the sink off.
+# Quoted: unquoted `off` is YAML boolean false, not the literal string the runner checks for.
+env:
+  DS_TELEMETRY_PATH: "off"
+
 jobs:
   fast:
     name: Fast Verify

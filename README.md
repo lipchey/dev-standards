@@ -31,3 +31,24 @@ npm run bootstrap   # npm ci && npm run build
 git-ignored; run `npm run bootstrap` (or `npm run build`) before `./verify`. Only adopting repos vendor the
 built `tools/verify-runner.mjs` — and only the `.mjs`, never the `.mjs.map`, which
 embeds the original TypeScript via `sourcesContent`.
+
+## Telemetry
+
+Each `./verify` run appends one JSON line (event shape:
+`{v, startedAt, finishedAt, repo, scope, branch, head_sha, exit, aborted, results}`)
+to an append-only effectiveness log, so we can measure what the gates actually catch.
+
+`DS_TELEMETRY_PATH` has three values:
+
+- **unset** → default sink `~/.local/share/dev-standards/events.jsonl` (one file per
+  machine, shared across consumers; parent dir auto-created `0700`, file `0600`);
+- **`off`** → disabled, nothing is written;
+- **any other value** → that exact file path.
+
+The write is **fail-open**: a broken sink never blocks a tier or fails a commit — it
+prints one stderr warning and moves on. Because that warning is easy to miss,
+`./verify --doctor` prints the resolved sink path and flags an unwritable sink.
+
+The event's `reason` field carries env-provided free text (`DS_BYPASS_REASON`, spawn
+errno), truncated to 200 chars. **Keep no secrets in `DS_BYPASS_REASON`** — it is
+persisted to the log verbatim.

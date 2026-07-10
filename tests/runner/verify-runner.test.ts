@@ -67,6 +67,7 @@ test('a tier run in a non-git dir fails cleanly: non-zero exit, no stack trace',
 
     const run = spawnSync(process.execPath, [runnerPath, '--manifest', manifestPath, '--fast'], {
       encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
     });
 
     assert.equal(typeof run.status, 'number', 'runner must exit with a numeric status');

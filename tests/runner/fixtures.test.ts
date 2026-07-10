@@ -19,8 +19,10 @@ function fixtureReport(name: string, scope: string): string {
 }
 
 function runRunner(manifest: string, scopeFlag: string): ReturnType<typeof spawnSync> {
+  // Explicit off: the suite must never write the operator's real telemetry sink.
   return spawnSync(process.execPath, [runnerPath, '--manifest', manifest, scopeFlag], {
     encoding: 'utf8',
+    env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
   });
 }
 

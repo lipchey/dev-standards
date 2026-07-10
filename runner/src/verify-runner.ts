@@ -8,6 +8,7 @@ import { runCheck } from './exec.ts';
 import { assertWithinBudget } from './budget.ts';
 import { writeReport } from './report.ts';
 import { doctor } from './doctor.ts';
+import { appendRunEvent, buildRunEvent, gitContext, resolveSinkPath } from './telemetry.ts';
 import type { Check, CheckResult, Manifest, TierName } from './types.ts';
 
 const EXIT_CHECK_FAILED = 1;
@@ -72,6 +73,8 @@ export function runTier(
   scope: TierName,
   now: () => number = () => performance.now(),
 ): number {
+  // Wall-clock start for the telemetry event; `now()` is the monotonic budget clock only.
+  const startedAtIso = new Date().toISOString();
   const startedAt = now();
   const budgetSeconds = manifest.budgets[`${scope}_seconds`];
   const deadlineMs = startedAt + budgetSeconds * 1000;
@@ -89,6 +92,31 @@ export function runTier(
       root,
       manifest.paths.reports,
     );
+
+  // Exactly-once finalization seam, independent of report writing. Fenced in its own try so a
+  // telemetry failure can never mask the original error (abort path) nor affect the tier result;
+  // the write itself is additionally fail-open. Skip the git probes entirely when disabled.
+  const emitTelemetry = (exit: number | null, aborted: boolean): void => {
+    try {
+      if (resolveSinkPath() === null) return;
+      const { branch, head_sha } = gitContext(root);
+      appendRunEvent(
+        buildRunEvent({
+          startedAt: startedAtIso,
+          finishedAt: new Date().toISOString(),
+          repo: manifest.repo,
+          scope,
+          branch,
+          head_sha,
+          exit,
+          aborted,
+          results,
+        }),
+      );
+    } catch {
+      /* telemetry is fail-open; never affect the tier result or mask a re-thrown error */
+    }
+  };
 
   try {
     const filesByName = new Map<string, string[]>();
@@ -123,13 +151,18 @@ export function runTier(
     } catch {
       /* keep the original deadline/error */
     }
+    // Abort path: partial results, no exit decision. A report-write failure above must not
+    // prevent this, and this must not mask/replace the original error re-thrown below.
+    emitTelemetry(null, true);
     throw error;
   }
 
   const reportPath = emitReport();
   process.stdout.write(`report: ${reportPath}\n`);
 
-  return results.some(isBlockingResult) ? EXIT_CHECK_FAILED : 0;
+  const exit = results.some(isBlockingResult) ? EXIT_CHECK_FAILED : 0;
+  emitTelemetry(exit, false);
+  return exit;
 }
 
 /* The tier's exit decision. An 'error' (spawn fault / signal kill) is an operational failure
