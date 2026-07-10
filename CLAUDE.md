@@ -24,3 +24,6 @@ their bootstrap script and run a thin `verify` shim). Pilot consumer:
   ai-prompter, (2) `workflow/` is removed, (3) `DEEP_REVIEW_FINDINGS.md` is
   triaged into BACKLOG or committed. When all three are done, write
   `docs/ADOPTION.md` and delete this bullet.
+- **Post-removal roadmap**: `docs/post-workflow-removal-plan.md` — execute
+  after the `workflow/` removal lands; each phase gets its own low-level plan
+  + Gate P before dispatch.
