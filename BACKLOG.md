@@ -28,7 +28,13 @@ on that same inode rather than by path. **Effort:** M (rewrite the write/delete 
 around fd-relative syscalls; Node needs `fs.opendir`/`dir`-fd plumbing or a small
 native/`node:fs` `openat` shim).
 
-## 2026-07-10 — Remove the workflow (L3) subsystem entirely
+## 2026-07-10 — Remove the workflow (L3) subsystem entirely — DONE (2026-07-10)
+
+**Status: DONE (2026-07-10).** The workflow (L3) subsystem is removed: engine,
+tests, the `build:workflow` esbuild target, the schema `workflow` block,
+`validateWorkflow` + reviewer-independence checks, and the workflow-only config
+fields are all gone; deep-review was decoupled from `workflow/` first. All gates
+(test / typecheck / build / verify --full / standards-sync) green.
 
 **Decision (owner):** drop the workflow feature from dev-standards altogether.
 
@@ -47,7 +53,7 @@ realigns the code with the README's stated "Phase 1a Scope" (runner +
 disabled-workflow manifest only), which the built-out workflow silently
 contradicts (INT-05).
 
-**Scope of removal (do at execution time, not now):**
+**Scope removed (completed 2026-07-10):**
 - Delete `workflow/src/**`, `workflow/dist/`, `tests/workflow/**` (~261 tests),
   the `build:workflow` esbuild target, and the workflow globs in the `test`
   script (`package.json`).

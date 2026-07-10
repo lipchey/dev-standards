@@ -7,9 +7,8 @@ import { fileURLToPath } from 'node:url';
 // seed MUST resolve to a real file in agents/review-guide-templates/. The
 // machine-readable source of truth for the guide names is skill-catalog.json's
 // `feeds_guides` arrays; `core-code-guidelines.md` is the always-on baseline
-// referenced by the skill bodies (review-plan / review-implementation /
-// process-review / deep-review-refactor) but has no upstream source, so it is
-// asserted explicitly.
+// referenced by the surviving `deep-review-refactor` skill body but has no
+// upstream source, so it is asserted explicitly.
 
 const templatesDir = fileURLToPath(new URL('../../agents/review-guide-templates/', import.meta.url));
 const catalogPath = fileURLToPath(new URL('../../agents/skill-catalog.json', import.meta.url));

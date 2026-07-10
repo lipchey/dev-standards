@@ -1,6 +1,6 @@
 // Feature-slug + worktree-path helpers, extracted (copied verbatim) from the
-// workflow module so deep-review no longer imports it — workflow/ is removed in a
-// later phase. Same SLUG_RE, same SlugError shape (its `input` field and message
+// (now-removed) workflow module so deep-review no longer imports it. Same SLUG_RE,
+// same SlugError shape (its `input` field and message
 // are asserted at the deep-review CLI edge and in tests), and the same
 // defaultFeatureWorktree body, so the slug contract and the SlugError identity
 // deep-review maps to EXIT_USAGE stay byte-for-byte compatible.

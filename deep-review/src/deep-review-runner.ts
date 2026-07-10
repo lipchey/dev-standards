@@ -12,7 +12,7 @@ import { runCli } from './cli.ts';
 import type { CliDeps } from './cli.ts';
 
 // Node realpaths import.meta.url under symlinks; realpath both sides for the
-// entrypoint check (the idiom from workflow/runner; inlined to keep the bundle
+// entrypoint check (the idiom from runner; inlined to keep the bundle
 // self-contained, with no cross-module dependency).
 export function isMainModule(metaUrl: string): boolean {
   const argvPath = process.argv[1];

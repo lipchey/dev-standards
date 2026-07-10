@@ -18,7 +18,7 @@ import type {
   SecretScanSpawnResult,
 } from '../../deep-review/src/secret-scan.ts';
 
-// ── injected-spawn fixture (mirrors tests/workflow/gh.test.ts) ────────────────
+// ── injected-spawn fixture ────────────────────────────────────────────────────
 
 interface SpawnCall {
   file: string;
@@ -129,7 +129,7 @@ test('(d) absent wrapper resolves to a no-op (null) and never spawns', () => {
   assert.equal(fx.calls.length, 0, 'absent wrapper => spawn is never reached');
 });
 
-test('(e) present-but-not-executable wrapper is a no-op (null); doctor makes it loud', () => {
+test('(e) present-but-not-executable wrapper is a no-op (null)', () => {
   const fx = spawnFixture({ status: 1 });
   const scan = createSecretScanner({
     spawn: fx.spawn,
@@ -138,8 +138,7 @@ test('(e) present-but-not-executable wrapper is a no-op (null); doctor makes it 
     statMode: () => 0o644, // present, no execute bit
   });
   // DESIGN: a present-but-non-executable wrapper cannot be run, so the runtime
-  // scanner no-ops (null) exactly like the absent case. The loud guard is the
-  // doctor CHECK_SECRET_SCANNER probe, which FAILS when the workflow is enabled.
+  // scanner no-ops (null) exactly like the absent case (treated as clean).
   assert.equal(scan('body with a SECRET token'), null);
   assert.equal(fx.calls.length, 0, 'non-executable wrapper => spawn is never reached');
 });

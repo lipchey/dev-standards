@@ -8,7 +8,7 @@
 // with a stable canonical key order so write → read is byte-idempotent.
 //
 // Effects (fs read/write) live behind an injectable `deps` seam (default real
-// fs), mirroring the workflow/runner edge style, so the validator/serializer are
+// fs), mirroring the runner edge style, so the validator/serializer are
 // unit-testable without touching disk.
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -27,8 +27,8 @@ export type FindingsRule =
   | 'path-unsafe';
 
 // A validation failure carrying the offending rule + JSON path. `kind` is a
-// cross-realm tag (a bundled copy can defeat `instanceof`), mirroring the
-// workflow module's error classes. Tests assert `.rule`.
+// cross-realm tag (a bundled copy can defeat `instanceof`), mirroring the sibling
+// modules' error-tag idiom (slice.ts / worktree.ts GitStepError). Tests assert `.rule`.
 export class FindingsValidationError extends Error {
   readonly kind = 'findings-validation-error' as const;
   readonly rule: FindingsRule;

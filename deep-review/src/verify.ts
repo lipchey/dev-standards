@@ -22,7 +22,7 @@ import type { MachineError } from './types.ts';
 // Bound the machine-readable stderr_tail (mirrors slice.ts / worktree.ts / handoff.ts).
 const STDERR_TAIL_MAX = 2000;
 
-// The verify shim's filename at the worktree root (mirrors ./verify / ./workflow).
+// The verify shim's filename at the worktree root (mirrors ./verify).
 const VERIFY_ENTRY = 'verify';
 
 // ── Effects seam ───────────────────────────────────────────────────────────────

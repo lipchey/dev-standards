@@ -1,13 +1,12 @@
-// Core types for the deep-review engine (ADR-007). This is a THIRD top-level
-// helper module alongside the frozen runner/ and workflow/ modules, built to its
-// own esbuild bundle (S22) and invoked only by the `deep-review-refactor` skill —
-// never autonomously. Zero runtime dependencies; pure data + type declarations.
+// Core types for the deep-review engine (ADR-007). This is a standalone top-level
+// helper module alongside the frozen runner/, built to its own esbuild bundle (S22)
+// and invoked only by the `deep-review-refactor` skill — never autonomously. Zero
+// runtime dependencies; pure data + type declarations.
 //
-// The exit-code subset and machine-readable error shape are declared LOCALLY,
-// not imported from workflow/. They are a serialization boundary each module owns
-// independently (the deep-review module must not depend on the frozen workflow
-// module), exactly as the Phase-1 runner declares its own copy of the workflow
-// config shape on Manifest.workflow.
+// The exit-code subset and machine-readable error shape are declared LOCALLY, not
+// imported. They are a serialization boundary deep-review owns independently (it must
+// not depend on the runner's internal types), mirroring the runner's own pattern of
+// declaring its own copy of a shared shape rather than sharing a type across modules.
 
 // §2.7 exit-code subset this engine uses. The numeric values MIRROR the shared
 // launcher exit-code contract so a shared launcher reads the same contract.
@@ -21,7 +20,7 @@ export const EXIT_NEEDS_HUMAN = 13;
 // tool/git/network failure.
 // `step` is optional and OMITTED (never set to `undefined`) when unknown, under
 // exactOptionalPropertyTypes. Declared locally, not imported (serialization
-// boundary; no dependency on the frozen workflow module).
+// boundary; deep-review owns this boundary independently).
 export interface MachineError {
   command: string;
   step?: string;

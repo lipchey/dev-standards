@@ -1,11 +1,9 @@
 // E6 — the landing handoff, read through ADR-012. There is NO local merge verb and
-// NO local merge gate for this engine to call: ADR-012 replaced those with the
-// GitHub PR ship cycle. `decideHandoff` is therefore a CONTEXT-DETECT +
-// INSTRUCTION-EMITTER ONLY — it lands nothing, invokes nothing that mutates, and
-// names no merge verb. deep-review ALWAYS lands the standalone way: it leaves a
-// committed `deep-review/<slug>` branch for a human to open and review as a PR
-// (that branch has no workflow feature record, so no automated ship cycle could
-// operate on it anyway).
+// NO local merge gate for this engine to call. `decideHandoff` ALWAYS emits the same
+// standalone, human-opens-PR instruction — it performs only a single read-only branch
+// lookup, lands nothing, invokes nothing that mutates, and names no merge verb.
+// deep-review leaves a committed `deep-review/<slug>` branch for a human to open and
+// review as a PR; the human drives the PR review and landing directly.
 //
 // The ONLY effect this module performs is a single read-only branch lookup behind
 // the injected `getBranch` seam (default `git rev-parse --abbrev-ref HEAD`, fixed
@@ -144,12 +142,11 @@ function summarizeFindings(findings: readonly FindingRecord[]): string {
 // ── Instruction emitters ────────────────────────────────────────────────────────
 
 // standalone: deep-review leaves a committed branch for a human to open and review
-// as a PR — and MUST NOT suggest the automated ship cycle (no feature record
-// exists, so it could not operate on this branch).
+// as a PR — and MUST NEVER suggest any automated landing; a human drives the PR.
 function standaloneInstruction(branch: string, summary: string): string {
   return [
     'Landing mode: standalone (a human owns landing).',
-    `The deep-review helper has landed nothing and mutates nothing. It leaves a committed branch \`${branch}\` for a human to open and review as a PR. This branch has no workflow feature record, so a human drives the PR review and landing directly.`,
+    `The deep-review helper has landed nothing and mutates nothing. It leaves a committed branch \`${branch}\` for a human to open and review as a PR. A human drives the PR review and landing directly.`,
     '',
     summary,
   ].join('\n');

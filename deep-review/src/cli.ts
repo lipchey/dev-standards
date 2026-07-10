@@ -4,7 +4,7 @@
 // slice engine, report writer, worktree/handoff/verify) replace the stub bodies.
 // An unknown or missing subcommand prints usage to stderr and returns EXIT_USAGE.
 // Logic stays behind the injected `deps` seam (process streams) so it is testable
-// without touching the real process, mirroring the workflow CLI edge style.
+// without touching the real process, mirroring the runner CLI edge style.
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -265,10 +265,10 @@ function selectWorktreeCmd(rest: string[], deps: CliDeps): number {
   }
 }
 
-// `handoff --findings <path>` — emit the ADR-012 ship/cleanup landing instruction
-// (E6). The engine is a context-detect + instruction emitter ONLY: it lands
-// nothing, names no merge verb, and never suggests the automated ship cycle in the
-// standalone case. The §2.3 mode gate means a `review-only` findings file returns
+// `handoff --findings <path>` — emit the ADR-012 standalone landing instruction
+// (E6). The engine is an instruction emitter ONLY: it lands nothing, names no merge
+// verb, and never suggests any automated landing. The §2.3 mode gate means a
+// `review-only` findings file returns
 // EXIT_WRONG_STATE. handoff reads NO config — only cwd + the (untrusted) findings
 // file, which goes through readFindings (real-fs default; a FindingsValidationError
 // flows through runCli's toMachineError path). The chosen instruction is printed to

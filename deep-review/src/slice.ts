@@ -31,7 +31,7 @@ import { isNoTouch } from './no-touch.ts';
 
 // The git-commit trailer key (pinned so call sites read by name and never drift).
 // The slice commit message's LAST line is exactly `Deep-Review-Slice: <id>`, the
-// durable per-slice provenance record (mirrors workflow's Workflow-Phase trailer).
+// durable per-slice provenance record (an engine-local git-trailer convention).
 export const SLICE_TRAILER_KEY = 'Deep-Review-Slice';
 
 // Bound the machine-readable stderr_tail so a runaway stderr cannot bloat the
@@ -123,7 +123,7 @@ function tailOf(text: string): string {
 
 // A failing git step. Carries the §2.4 MachineError fields (`command` — the git
 // argv, never a shell string — `stderr_tail`, `step`). `kind` is a cross-realm
-// tag (a bundled copy can defeat `instanceof`), mirroring workflow's GitError.
+// tag (a bundled copy can defeat `instanceof`), mirroring the sibling GitStepError tag idiom.
 class GitStepError extends Error {
   readonly kind = 'slice-git-error' as const;
   readonly command: string;

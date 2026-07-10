@@ -1,9 +1,9 @@
 # Review-Promotion Inbox
 
-Append-only ledger of rule candidates surfaced while processing PR reviews
-(the `process-review` phase). When a reviewer's comment looks like it belongs
-in the shared standards rather than only this repo, the process-review session
-records it here instead of editing a shared rule directly.
+Append-only ledger of rule candidates surfaced while processing PR reviews.
+When a reviewer's comment looks like it belongs in the shared standards rather
+than only this repo, a review/PR-processing session records it here instead of
+editing a shared rule directly.
 
 This file is an **input** to `dev-standards`' own review/standards cycle, never
 a direct rule edit: a human (or a later `dev-standards` session) reviews each

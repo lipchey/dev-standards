@@ -9,8 +9,8 @@
 //   - the slug is sanitized (an unsafe operand -> SlugError -> EXIT_USAGE at the edge);
 //   - the base branch must resolve (a read-only HEAD read; a detached/no HEAD and a
 //     non-repo cwd both fail closed with EXIT_WRONG_STATE, no partial add);
-//   - the computed path must resolve UNDER the parent (an inline confinement guard
-//     replicating new-feature.ts's parent check — re-implemented, never imported);
+//   - the computed path must resolve UNDER the parent (an inline confinement guard,
+//     deep-review's own — previously shared with the now-removed workflow helper);
 //   - an EXISTING directory at the target is VALIDATED, never assumed: it is reused
 //     only if it is THIS repo's worktree on exactly `deep-review/<slug>`. A plain
 //     dir, a foreign worktree, or a worktree on a DIFFERENT branch (the S21
@@ -27,7 +27,7 @@ import { EXIT_OK, EXIT_FAILURE, EXIT_WRONG_STATE } from './types.ts';
 import type { MachineError } from './types.ts';
 import { sanitizeFeatureSlug, defaultFeatureWorktree } from './feature-slug.ts';
 
-// Bound the machine-readable stderr_tail (mirrors slice.ts / workflow trailers).
+// Bound the machine-readable stderr_tail (mirrors slice.ts).
 const STDERR_TAIL_MAX = 2000;
 
 // The engine's fixed worktree-BRANCH prefix (the only part fixed by the body); the
@@ -95,11 +95,11 @@ export function realWorktreeDeps(cwd: string): WorktreeDeps {
   };
 }
 
-// ── Confinement guard (engine-local; replicates new-feature.ts:158-164) ────────
+// ── Confinement guard (engine-local) ───────────────────────────────────────────
 
-// Asserts `wtPath` resolves to `parent` itself or a path strictly under it. A
-// re-implementation of the workflow helper's parent confinement (that helper is
-// private — never imported); the same `resolve` + `startsWith(parent + sep)` check.
+// Asserts `wtPath` resolves to `parent` itself or a path strictly under it. This
+// parent confinement is deep-review's own (previously shared with the now-removed
+// workflow helper); the same `resolve` + `startsWith(parent + sep)` check.
 export function assertUnderParent(wtPath: string, parent: string): void {
   const resolved = path.resolve(wtPath);
   const resolvedParent = path.resolve(parent);

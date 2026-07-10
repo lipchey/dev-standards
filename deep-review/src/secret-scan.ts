@@ -1,30 +1,28 @@
 // The real secret-scan adapter behind the frozen `scanPrBody: (body) => string | null`
-// seam (null = clean, non-null = a hit description). ship aborts on a hit; cleanup
-// SKIPS the archive on a hit but proceeds.
+// seam (null = clean, non-null = a hit description). deep-review's report path
+// (report.ts) uses it to scan a PR body before that body is emitted.
 //
 // OWNER DECISION (S15): the scanner is wired by CONVENTION on the adopting repo's
-// pinned gitleaks wrapper at `<root>/tools/run-gitleaks` — NOT via the §2.8 workflow
-// config (frozen) and NOT via an env var. The wrapper is resolved at CALL time, so a
-// `ship` running in a feature worktree and a `cleanup` running at the main repo root
-// each resolve their own root. Where no wrapper exists (dev-standards itself, every
-// fixture repo) the scanner is a NO-OP — this is NOT a silent gap: `workflow doctor`
-// FAILS loudly (CHECK_SECRET_SCANNER) when the workflow is ENABLED but no wrapper
-// resolves.
+// pinned gitleaks wrapper at `<root>/tools/run-gitleaks` — resolved at CALL time, so
+// each invocation resolves its own repo/worktree root. Where no wrapper exists
+// (dev-standards itself, every fixture repo) the scanner resolves to a NO-OP —
+// treated as clean. There is no doctor probe in deep-review; a missing wrapper is
+// simply a silent no-op-clean.
 //
-// Spawn convention mirrors gh.ts / cmux-adapter.ts: a default real spawnSync wrapper
-// with shell:false and a FIXED argv, injectable for tests, with a bounded timeout.
+// Spawn convention: a default real spawnSync wrapper with shell:false and a FIXED
+// argv, injectable for tests, with a bounded timeout.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-// Bounded wrapper timeout (mirror gh.ts DEFAULT_TIMEOUT_MS). The scanned content is
-// small (a PR body / an archive entry), so 30s is generous headroom.
+// Bounded wrapper timeout. The scanned content is small (a PR body / an archive
+// entry), so 30s is generous headroom.
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-// Bound the redacted output tail folded into a hit description (mirror gh.ts
-// STDERR_TAIL_MAX). gitleaks runs with --redact, so secret VALUES are masked by the
-// wrapper before any of its output reaches this tail.
+// Bound the redacted output tail folded into a hit description. gitleaks runs with
+// --redact, so secret VALUES are masked by the wrapper before any of its output
+// reaches this tail.
 const OUTPUT_TAIL_MAX = 2000;
 
 // CONVENTION path of the adopting repo's pinned gitleaks wrapper, under the repo /
@@ -40,8 +38,7 @@ export const GITLEAKS_CONFIG_REL = '.gitleaks.toml';
 // makes gitleaks read the candidate content from stdin; `--no-banner` keeps its
 // stderr to findings only; `--redact` masks any matched secret value in the
 // wrapper's own output. Fixed, non-body argv + shell:false + content-on-stdin
-// means no operand ever reaches a shell or an option slot (no injection surface),
-// exactly like gh.ts / cmux-adapter.ts.
+// means no operand ever reaches a shell or an option slot (no injection surface).
 export const GITLEAKS_ARGS: readonly string[] = ['stdin', '--no-banner', '--redact'];
 
 // Build the argv for a scan, optionally threading an absolute config path.
@@ -99,8 +96,7 @@ export interface ScannerResolution {
 }
 
 // Resolves the convention wrapper under `root` and reports presence + executability.
-// Shared by the runtime scanner (decides no-op vs. run) AND the doctor probe (decides
-// PASS vs. loud FAIL) so the two can never drift.
+// Used by the runtime scanner to decide no-op vs. run.
 export function resolveScanner(
   root: string,
   deps: { fileExists: (p: string) => boolean; statMode: (p: string) => number | null },
@@ -119,8 +115,8 @@ function defaultStatMode(filePath: string): number | null {
   }
 }
 
-// The real-edge resolution (fs.existsSync + fs.statSync). doctor's real probe reuses
-// this so "doctor says the scanner resolves" === "the scanner will actually run".
+// The real-edge resolution (fs.existsSync + fs.statSync): whether the scanner will
+// actually run against a given root.
 export function realScannerResolution(root: string): ScannerResolution {
   return resolveScanner(root, { fileExists: (p) => existsSync(p), statMode: defaultStatMode });
 }
@@ -161,8 +157,7 @@ export function createSecretScanner(deps: SecretScannerDeps = {}): (body: string
     const root = cwd();
     const resolution = resolveScanner(root, fsDeps);
     // No wrapper wired (dev-standards / every fixture repo), or a present-but-non-
-    // executable file: resolve to a NO-OP. The doctor CHECK_SECRET_SCANNER probe makes
-    // this state LOUD whenever the workflow is ENABLED, so it is never a silent gap.
+    // executable file: resolve to a NO-OP (treated as clean).
     if (!resolution.present || !resolution.executable) return null;
 
     // FIX 3: spawn at `cwd: root` and, if the adopting repo ships a custom
