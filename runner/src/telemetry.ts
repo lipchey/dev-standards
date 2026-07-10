@@ -65,14 +65,19 @@ export function appendRunEvent(event: RunEvent, env: NodeJS.ProcessEnv = process
 }
 
 /* Best-effort git identity for the run. Any failure (non-git dir, detached HEAD, missing git,
-   timeout) → nulls; never throws, never meaningfully delays the run (small fixed timeout). */
+   timeout) → nulls; never throws, never meaningfully delays the run. ONE spawn with a single
+   2s cap (worst case now +2s, typical ~10ms), not two serial probes: `rev-parse` processes
+   its args left-to-right, so `HEAD --abbrev-ref HEAD` prints the full sha on line 1 and the
+   branch abbrev on line 2. A detached head prints the literal "HEAD" as line 2 → branch null;
+   any failure or short (< 2 line) output → both null. */
 export function gitContext(cwd: string): { branch: string | null; head_sha: string | null } {
-  const branch = gitProbe(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
-  return {
-    // rev-parse --abbrev-ref HEAD prints the literal "HEAD" for a detached head → no branch.
-    branch: branch === 'HEAD' ? null : branch,
-    head_sha: gitProbe(['rev-parse', 'HEAD'], cwd),
-  };
+  const out = gitProbe(['rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'], cwd);
+  if (out === null) return { branch: null, head_sha: null };
+  const lines = out.split('\n');
+  const sha = lines[0];
+  const branch = lines[1];
+  if (!sha || !branch) return { branch: null, head_sha: null };
+  return { branch: branch === 'HEAD' ? null : branch, head_sha: sha };
 }
 
 function gitProbe(args: string[], cwd: string): string | null {
