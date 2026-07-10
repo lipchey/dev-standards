@@ -54,8 +54,8 @@
         "timeout_seconds": 60
       },
       {
-        "name": "runner-tests",
-        "argv": ["npm", "run", "test:runner"],
+        "name": "full-tests",
+        "argv": ["npm", "test"],
         "timeout_seconds": 60
       },
       {
