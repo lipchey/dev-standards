@@ -55,11 +55,8 @@ Produce findings; change nothing. The runtime is six steps, in order:
 One command, run inside a git worktree: an internal review (phase 1, the
 `review-only` steps above) followed by a fix phase (phase 2).
 
-Worktree selection. If the skill runs inside an active workflow-feature worktree
-(detected by a `workflow-session-planning.md` marker at the worktree root), it
-reuses that worktree and hands the branch back to that session's ship cycle.
-Otherwise it creates a dedicated `deep-review/<slug>` worktree from the current
-base, commits there, and leaves it for human review.
+Worktree selection. The skill creates a dedicated `deep-review/<slug>` worktree
+from the current base, commits there, and leaves it for human review.
 
 Classify each finding into `fixable-now`, `no-touch`, or `needs-plan`.
 
@@ -96,16 +93,12 @@ A path in either set is never edited - it is emitted as a plan instead.
 ## Landing is not the skill's job (ADR-012)
 
 The skill never merges to base itself. Its autonomy ends at a committed worktree
-branch.
-
-- Inside a workflow session: it hands the committed branch to the ADR-012 PR ship
-  cycle - `workflow ship`, then human PR review, then `process-review`, then
-  merge, then `cleanup`. The skill does not drive that cycle; it hands off to it.
-- Standalone: it leaves a committed branch for a human to open and review as a PR.
+branch: it leaves a committed `deep-review/<slug>` branch for a human to open and
+review as a PR. It does not land, and it names no automated ship cycle.
 
 There is no local merge verb and no local merge gate for this skill to call -
 ADR-012 replaced those with the GitHub PR ship cycle. Landing always goes through
-that cycle or a human.
+a human opening that PR.
 
 ## Why this preserves "self-monitoring, not self-healing"
 

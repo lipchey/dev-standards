@@ -19,7 +19,7 @@ import { writeReport, realReportDeps } from './report.ts';
 import { selectWorktree, realWorktreeDeps } from './worktree.ts';
 import { decideHandoff, realHandoffDeps } from './handoff.ts';
 import { runFinalVerify, realVerifyDeps } from './verify.ts';
-import { SlugError } from '../../workflow/src/new-feature.ts';
+import { SlugError } from './feature-slug.ts';
 
 export interface CliDeps {
   stdout: (text: string) => void;
@@ -231,13 +231,13 @@ function report(rest: string[], deps: CliDeps): number {
   return result.exitCode;
 }
 
-// `select-worktree --slug <slug>` — choose the landing worktree (E5): reuse the
-// active workflow worktree when its planning marker is present, else create an
-// engine-local `deep-review/<slug>` worktree. The §2 contract (sanitize gate,
+// `select-worktree --slug <slug>` — create an engine-local `deep-review/<slug>`
+// worktree under `../worktrees` off HEAD (E5). The §2 contract (sanitize gate,
 // base resolution, confinement guard, collision/idempotency gate) lives in
-// ./worktree.ts; this handler parses the flag, resolves the worktree cwd + config,
-// prints the chosen mode/worktree/branch, and maps a SlugError to EXIT_USAGE at the
-// argv edge (a git failure renders the §2.4 machine error as the LAST stderr line).
+// ./worktree.ts; this handler parses the flag, resolves the worktree cwd, prints
+// the chosen mode/worktree/branch, and maps a SlugError to EXIT_USAGE at the argv
+// edge (a git failure renders the §2.4 machine error as the LAST stderr line). It
+// reads NO config — the worktree parent/base come only from the repo HEAD.
 function selectWorktreeCmd(rest: string[], deps: CliDeps): number {
   const slug = parseSlugFlag(rest);
   if (slug === undefined || slug === '') {
@@ -245,9 +245,8 @@ function selectWorktreeCmd(rest: string[], deps: CliDeps): number {
     return EXIT_USAGE;
   }
   const env = resolveEnv(deps);
-  const config = loadConfig(resolve(env.cwd, 'quality.json'));
   try {
-    const result = selectWorktree(slug, realWorktreeDeps(env.cwd, config));
+    const result = selectWorktree(slug, realWorktreeDeps(env.cwd));
     if (result.machineError !== undefined) {
       deps.stderr(`${JSON.stringify({ error: result.machineError })}\n`);
     } else if (result.mode !== undefined && result.worktree !== undefined) {

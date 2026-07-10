@@ -8,12 +8,11 @@
 import { loadManifest } from '../../runner/src/manifest.ts';
 import type { Manifest } from '../../runner/src/types.ts';
 
-// The engine view of the manifest. `deep_review` and `workflow` are optional on
-// the manifest, so their projected types include `undefined` (no block present).
+// The engine view of the manifest. `deep_review` is optional on the manifest, so
+// its projected type includes `undefined` (no block present).
 export interface DeepReviewConfig {
   deepReview: Manifest['deep_review'];
   reportsDir: string;
-  workflow: Manifest['workflow'];
 }
 
 export function loadConfig(filePath: string): DeepReviewConfig {
@@ -26,6 +25,5 @@ export function loadConfig(filePath: string): DeepReviewConfig {
   return {
     deepReview: manifest.deep_review,
     reportsDir: manifest.paths.reports,
-    workflow: manifest.workflow,
   };
 }

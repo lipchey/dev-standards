@@ -22,17 +22,13 @@ import { fileURLToPath } from 'node:url';
 import { EXIT_OK, EXIT_FAILURE, EXIT_USAGE, EXIT_WRONG_STATE } from '../../deep-review/src/types.ts';
 import {
   selectWorktree,
-  isWorkflowWorktree,
   assertUnderParent,
   realWorktreeDeps,
 } from '../../deep-review/src/worktree.ts';
 import type { WorktreeDeps, SpawnResult } from '../../deep-review/src/worktree.ts';
-import { SlugError } from '../../workflow/src/new-feature.ts';
-import type { ManifestWorkflow } from '../../runner/src/types.ts';
+import { SlugError } from '../../deep-review/src/feature-slug.ts';
 import { runCli } from '../../deep-review/src/cli.ts';
 import type { CliDeps } from '../../deep-review/src/cli.ts';
-
-const PLANNING = 'workflow-session-planning.md';
 
 // ── Real-git fixture (mirrors tests/deep-review/slice.test.ts) ────────────────
 
@@ -96,73 +92,24 @@ function spawnFailingAdd(): { spawn: WorktreeDeps['spawn']; gitCalls: string[][]
 
 function deps(
   cwd: string,
-  over: { workflow?: ManifestWorkflow; spawn?: WorktreeDeps['spawn'] } = {},
+  over: { spawn?: WorktreeDeps['spawn'] } = {},
 ): WorktreeDeps {
   return {
     cwd,
-    workflow: over.workflow,
     existsSync: (p) => fs.existsSync(p),
     realpath: (p) => fs.realpathSync(p),
     spawn: over.spawn ?? realSpawn,
   };
 }
 
-// A full, schema-shaped enabled workflow block; only base_branch/worktree_parent
-// are read by the engine, the rest are filler to satisfy the discriminated union.
-function enabledWorkflow(worktree_parent: string, base_branch: string): ManifestWorkflow {
-  return {
-    schema: 1,
-    enabled: true,
-    base_branch,
-    worktree_parent,
-    cmux_mode: 'manual',
-    loopback_mode: 'manual',
-    reviewer_independence: 'different-runtime',
-    required_review_guides: [],
-    commit_exclude: [],
-    archive: false,
-    timeouts: { default_wait_seconds: 0, default_work_seconds: 0 },
-    budget: { workflow_total_seconds: 0 },
-    agents: { claude: [], codex: [] },
-    ship: { ci_wait_seconds: 0, notify: false },
-    notify: { webhook_env: '' },
-  };
-}
-
-// The fallback parent the engine computes when workflow is absent/disabled.
+// The parent the engine always computes: `../worktrees` off the cwd, HEAD as base.
 function fallbackWtPath(cwd: string, slug: string): string {
   return path.join(path.resolve(cwd, '../worktrees'), `deep-review-${slug}`);
 }
 
-// ── reuse-workflow ─────────────────────────────────────────────────────────────
+// ── dedicated (always: ../worktrees off HEAD) ──────────────────────────────────
 
-test('reuse: a planning marker at the worktree root -> mode "reuse-workflow", worktree=cwd, NO worktree add, slug IGNORED', () => {
-  const { base, repo } = makeBase();
-  fs.writeFileSync(path.join(repo, PLANNING), '# session\n');
-  const spy = spyOverReal();
-
-  // An UNSAFE slug proves the slug is ignored: reuse short-circuits BEFORE sanitize.
-  const result = selectWorktree('../evil', deps(repo, { spawn: spy.spawn }));
-
-  assert.equal(result.exitCode, EXIT_OK);
-  assert.equal(result.mode, 'reuse-workflow');
-  assert.equal(result.worktree, repo);
-  assert.equal(result.branch, undefined, 'no branch in reuse mode');
-  assert.deepEqual(spy.gitCalls, [], 'no git spawn at all in reuse mode');
-  fs.rmSync(base, { recursive: true, force: true });
-});
-
-test('isWorkflowWorktree reflects the planning marker presence', () => {
-  const { base, repo } = makeBase();
-  assert.equal(isWorkflowWorktree(repo, { existsSync: (p) => fs.existsSync(p) }), false);
-  fs.writeFileSync(path.join(repo, PLANNING), '# s\n');
-  assert.equal(isWorkflowWorktree(repo, { existsSync: (p) => fs.existsSync(p) }), true);
-  fs.rmSync(base, { recursive: true, force: true });
-});
-
-// ── dedicated (fallback HEAD + workflow-enabled) ───────────────────────────────
-
-test('dedicated (fallback HEAD): no marker, workflow absent -> creates branch deep-review/<slug> + worktree from HEAD base', () => {
+test('dedicated: no marker -> creates branch deep-review/<slug> + worktree from HEAD base', () => {
   const { base, repo } = makeBase();
   const spy = spyOverReal();
 
@@ -179,20 +126,6 @@ test('dedicated (fallback HEAD): no marker, workflow absent -> creates branch de
     spy.gitCalls.some((a) => a.includes('worktree') && a.includes('add')),
     'a worktree add happened',
   );
-  fs.rmSync(base, { recursive: true, force: true });
-});
-
-test('dedicated (workflow enabled): uses worktree_parent + base_branch from the config block', () => {
-  const { base, repo } = makeBase();
-  const parent = path.resolve(repo, '../wts');
-  const result = selectWorktree('bravo', deps(repo, { workflow: enabledWorkflow('../wts', 'main') }));
-
-  const expected = path.join(parent, 'deep-review-bravo');
-  assert.equal(result.exitCode, EXIT_OK);
-  assert.equal(result.mode, 'dedicated');
-  assert.equal(result.branch, 'deep-review/bravo');
-  assert.equal(result.worktree, expected);
-  assert.equal(git(expected, ['rev-parse', '--abbrev-ref', 'HEAD']).trim(), 'deep-review/bravo');
   fs.rmSync(base, { recursive: true, force: true });
 });
 
@@ -344,24 +277,7 @@ test('worktree-add failure: a non-zero `git worktree add` -> EXIT_FAILURE + mach
   fs.rmSync(base, { recursive: true, force: true });
 });
 
-// ── base injection (option-like base_branch) + the `--` argv defense ────────────
-
-test('base injection: a workflow base_branch beginning with "-" (e.g. --force) -> EXIT_WRONG_STATE, git `worktree add` NEVER attempted', () => {
-  const { base, repo } = makeBase();
-  const spy = spyOverReal();
-
-  const result = selectWorktree(
-    'victim',
-    deps(repo, { workflow: enabledWorkflow('../wts', '--force'), spawn: spy.spawn }),
-  );
-
-  assert.equal(result.exitCode, EXIT_WRONG_STATE);
-  assert.ok(
-    !spy.gitCalls.some((a) => a.includes('worktree') && a.includes('add')),
-    'no worktree add attempted for an option-like base',
-  );
-  fs.rmSync(base, { recursive: true, force: true });
-});
+// ── the `--` argv defense ───────────────────────────────────────────────────────
 
 test('dedicated argv: the `git worktree add` argv inserts `--` immediately before the <path> <base> operands', () => {
   const { base, repo } = makeBase();
@@ -390,15 +306,9 @@ test('confinement: assertUnderParent refuses an escape and allows a child', () =
 
 // ── realWorktreeDeps factory wiring ────────────────────────────────────────────
 
-test('realWorktreeDeps projects the config workflow block + real fs/spawn seams', () => {
-  const wf = enabledWorkflow('../wts', 'main');
-  const d = realWorktreeDeps('/some/cwd', {
-    deepReview: undefined,
-    reportsDir: 'reports/quality',
-    workflow: wf,
-  });
+test('realWorktreeDeps wires cwd + real fs/spawn seams', () => {
+  const d = realWorktreeDeps('/some/cwd');
   assert.equal(d.cwd, '/some/cwd');
-  assert.equal(d.workflow, wf);
   assert.equal(typeof d.existsSync, 'function');
   assert.equal(typeof d.realpath, 'function');
   assert.equal(typeof d.spawn, 'function');

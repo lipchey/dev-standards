@@ -35,7 +35,7 @@ import { isNoTouch } from './no-touch.ts';
 export const SLICE_TRAILER_KEY = 'Deep-Review-Slice';
 
 // Bound the machine-readable stderr_tail so a runaway stderr cannot bloat the
-// emitted JSON line (matches workflow/src/trailers.ts STDERR_TAIL_MAX).
+// emitted JSON line (the shared 2000-char trailer cap).
 const STDERR_TAIL_MAX = 2000;
 
 // True if the string carries any C0 control char (0x00-0x1F) or DEL (0x7F). Used

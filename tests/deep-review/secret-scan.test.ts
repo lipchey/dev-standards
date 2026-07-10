@@ -11,12 +11,12 @@ import {
   GITLEAKS_ARGS,
   GITLEAKS_CONFIG_REL,
   SCANNER_REL,
-} from '../../workflow/src/secret-scan.ts';
+} from '../../deep-review/src/secret-scan.ts';
 import type {
   SecretScanSpawn,
   SecretScanSpawnOptions,
   SecretScanSpawnResult,
-} from '../../workflow/src/secret-scan.ts';
+} from '../../deep-review/src/secret-scan.ts';
 
 // ── injected-spawn fixture (mirrors tests/workflow/gh.test.ts) ────────────────
 

@@ -9,16 +9,16 @@
 // module), exactly as the Phase-1 runner declares its own copy of the workflow
 // config shape on Manifest.workflow.
 
-// §2.7 exit-code subset this engine uses. The numeric values MIRROR
-// workflow/src/types.ts so a shared launcher reads the same contract.
+// §2.7 exit-code subset this engine uses. The numeric values MIRROR the shared
+// launcher exit-code contract so a shared launcher reads the same contract.
 export const EXIT_OK = 0;
 export const EXIT_FAILURE = 1;
 export const EXIT_USAGE = 2;
 export const EXIT_WRONG_STATE = 11;
 export const EXIT_NEEDS_HUMAN = 13;
 
-// Mirror of workflow/src/trailers.ts `MachineReadableError`: the machine-readable
-// error payload emitted as the last line of stderr on a tool/git/network failure.
+// The §2.4 machine-readable error payload emitted as the last line of stderr on a
+// tool/git/network failure.
 // `step` is optional and OMITTED (never set to `undefined`) when unknown, under
 // exactOptionalPropertyTypes. Declared locally, not imported (serialization
 // boundary; no dependency on the frozen workflow module).

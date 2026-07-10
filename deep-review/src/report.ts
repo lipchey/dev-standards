@@ -15,15 +15,15 @@
 // "secret-scan") and the file is NOT written. Only on a clean scan is the file
 // written, via the injected write seam, to <reportsDir>/deep-review-<date>.md.
 // All effects (now/scanner/fs-write) live behind injected deps; the renderer is
-// pure. The default scanner is `createSecretScanner` (workflow/src/secret-scan.ts),
-// which is a NO-OP returning clean where no `<root>/tools/run-gitleaks` wrapper
-// exists — true of dev-standards and every fixture repo.
+// pure. The default scanner is `createSecretScanner` (./secret-scan.ts), which is
+// a NO-OP returning clean where no `<root>/tools/run-gitleaks` wrapper exists —
+// true of dev-standards and every fixture repo.
 
 import path from 'node:path';
 import { writeFileSync } from 'node:fs';
 import { EXIT_OK, EXIT_FAILURE } from './types.ts';
 import type { FindingRecord, FindingsFile, FindingStatus, MachineError } from './types.ts';
-import { createSecretScanner } from '../../workflow/src/secret-scan.ts';
+import { createSecretScanner } from './secret-scan.ts';
 
 // ── Metadata-only field rendering ────────────────────────────────────────────
 

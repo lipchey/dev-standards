@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeFeatureSlug, SlugError } from '../../workflow/src/new-feature.ts';
+import { sanitizeFeatureSlug, SlugError } from '../../deep-review/src/feature-slug.ts';
 
 test('slug-accepts-lowercase-digits-dashes-length-1-to-60', () => {
   assert.equal(sanitizeFeatureSlug('a'), 'a');

@@ -1,49 +1,35 @@
-// E6 — the ship/cleanup handoff, read through ADR-012. There is NO local merge
-// verb and NO local merge gate for this engine to call: ADR-012 replaced those
-// with the GitHub PR ship cycle. `decideHandoff` is therefore a CONTEXT-DETECT +
-// INSTRUCTION-EMITTER ONLY — it lands nothing, invokes nothing that mutates, names
-// no merge verb, and never suggests the automated ship cycle in the standalone
-// case (a standalone `deep-review/<slug>` branch has no workflow feature record,
-// so the automated cycle could not operate on it; the body's wording is "leave a
-// committed branch for a human to open and review as a PR").
+// E6 — the landing handoff, read through ADR-012. There is NO local merge verb and
+// NO local merge gate for this engine to call: ADR-012 replaced those with the
+// GitHub PR ship cycle. `decideHandoff` is therefore a CONTEXT-DETECT +
+// INSTRUCTION-EMITTER ONLY — it lands nothing, invokes nothing that mutates, and
+// names no merge verb. deep-review ALWAYS lands the standalone way: it leaves a
+// committed `deep-review/<slug>` branch for a human to open and review as a PR
+// (that branch has no workflow feature record, so no automated ship cycle could
+// operate on it anyway).
 //
-// Two landing modes, chosen by the SAME read-only marker check E5 uses
-// (`isWorkflowWorktree`, reused — never re-implemented here):
-//   in-session: an active workflow session owns the worktree (its planning marker
-//     is present). Driving the committed branch to base is THAT session's job,
-//     through the ADR-012 ship cycle (`workflow ship` -> human PR review ->
-//     `process-review` -> human merge -> `workflow cleanup`). The helper itself
-//     invokes none of those and mutates nothing.
-//   standalone: no marker. The helper leaves a committed branch for a human to
-//     open and review as a PR — no automated ship suggestion.
-//
-// The ONLY effect this module performs is a READ: the marker check (`existsSync`)
-// and a single read-only branch lookup behind the injected `getBranch` seam
-// (default `git rev-parse --abbrev-ref HEAD`, fixed argv, `shell: false`). NO git
-// mutation, NO network. A failed branch read fails closed with a §2.4 MachineError
-// naming step "rev-parse" (mirrors the slice.ts / worktree.ts GitStepError idiom).
+// The ONLY effect this module performs is a single read-only branch lookup behind
+// the injected `getBranch` seam (default `git rev-parse --abbrev-ref HEAD`, fixed
+// argv, `shell: false`). NO git mutation, NO network. A failed branch read fails
+// closed with a §2.4 MachineError naming step "rev-parse" (mirrors the slice.ts /
+// worktree.ts GitStepError idiom).
 
-import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { EXIT_OK, EXIT_FAILURE, EXIT_WRONG_STATE } from './types.ts';
 import type { FindingRecord, FindingsFile, FindingStatus, MachineError } from './types.ts';
-import { isWorkflowWorktree } from './worktree.ts';
 
 // Bound the machine-readable stderr_tail (mirrors slice.ts / worktree.ts).
 const STDERR_TAIL_MAX = 2000;
 
-export type HandoffMode = 'in-session' | 'standalone';
+export type HandoffMode = 'standalone';
 
 // ── Effects seam ───────────────────────────────────────────────────────────────
 
-// The injected effects. `existsSync` is the read-only marker check shared with E5
-// (isWorkflowWorktree keys on it); `getBranch` is the SINGLE read-only branch
-// lookup — it may THROW on a git read failure (not a repo / detached HEAD), which
-// decideHandoff catches and converts to a §2.4 MachineError. Both are READS; there
-// is deliberately NO mutating seam on this interface.
+// The injected effects. `getBranch` is the SINGLE read-only branch lookup — it may
+// THROW on a git read failure (not a repo / detached HEAD), which decideHandoff
+// catches and converts to a §2.4 MachineError. It is a READ; there is deliberately
+// NO mutating seam on this interface.
 export interface HandoffDeps {
   cwd: string;
-  existsSync: (p: string) => boolean;
   getBranch: () => string;
 }
 
@@ -127,12 +113,11 @@ function defaultGetBranch(cwd: string): string {
   return branch;
 }
 
-// The production deps: real fs marker check + the real read-only branch lookup.
-// Mirrors slice.ts `realSliceDeps` / worktree.ts `realWorktreeDeps`.
+// The production deps: the real read-only branch lookup. Mirrors slice.ts
+// `realSliceDeps` / worktree.ts `realWorktreeDeps`.
 export function realHandoffDeps(cwd: string): HandoffDeps {
   return {
     cwd,
-    existsSync: (p) => fs.existsSync(p),
     getBranch: () => defaultGetBranch(cwd),
   };
 }
@@ -158,29 +143,12 @@ function summarizeFindings(findings: readonly FindingRecord[]): string {
 
 // ── Instruction emitters ────────────────────────────────────────────────────────
 
-// in-session: the active workflow session drives the ADR-012 ship cycle. Names the
-// full cycle (so the operator/agent knows the next steps), states the helper itself
-// mutates nothing, and deliberately never names the removed merge verb.
-function inSessionInstruction(branch: string, summary: string): string {
-  return [
-    'Landing mode: in-session (an active workflow session owns landing).',
-    `The deep-review helper has landed nothing and mutates nothing here. The committed branch \`${branch}\` is driven to base by THIS active workflow session, through the ADR-012 PR ship cycle, in order:`,
-    '  1. workflow ship',
-    '  2. human PR review',
-    '  3. process-review',
-    '  4. human merge',
-    '  5. workflow cleanup',
-    '',
-    summary,
-  ].join('\n');
-}
-
-// standalone: no active session. The helper leaves a committed branch for a human
-// to open and review as a PR — and MUST NOT suggest the automated ship cycle (no
-// feature record exists, so it could not operate on this branch).
+// standalone: deep-review leaves a committed branch for a human to open and review
+// as a PR — and MUST NOT suggest the automated ship cycle (no feature record
+// exists, so it could not operate on this branch).
 function standaloneInstruction(branch: string, summary: string): string {
   return [
-    'Landing mode: standalone (no active workflow session owns landing).',
+    'Landing mode: standalone (a human owns landing).',
     `The deep-review helper has landed nothing and mutates nothing. It leaves a committed branch \`${branch}\` for a human to open and review as a PR. This branch has no workflow feature record, so a human drives the PR review and landing directly.`,
     '',
     summary,
@@ -191,17 +159,12 @@ function standaloneInstruction(branch: string, summary: string): string {
 
 export function decideHandoff(findingsFile: FindingsFile, deps: HandoffDeps): HandoffResult {
   // 1. Mode gate FIRST — landing is a fix-flow step; a review-only run changes
-  // nothing, so refuse BEFORE any git read (no getBranch call, no marker check).
+  // nothing, so refuse BEFORE any git read (no getBranch call).
   if (findingsFile.mode !== 'review-and-refactor') {
     return { exitCode: EXIT_WRONG_STATE };
   }
 
-  // 2. Landing-mode detection: reuse E5's read-only marker check (never
-  // re-implemented). Marker present -> the active session owns landing (in-session);
-  // absent -> a human owns landing (standalone).
-  const mode: HandoffMode = isWorkflowWorktree(deps.cwd, deps) ? 'in-session' : 'standalone';
-
-  // 3. The ONLY effect: a read-only branch lookup behind the injected seam. A failed
+  // 2. The ONLY effect: a read-only branch lookup behind the injected seam. A failed
   // read (not a repo / detached HEAD) fails closed with a §2.4 MachineError.
   let branch: string;
   try {
@@ -210,10 +173,8 @@ export function decideHandoff(findingsFile: FindingsFile, deps: HandoffDeps): Ha
     return { exitCode: EXIT_FAILURE, machineError: branchReadError(error) };
   }
 
-  // 4. Findings status summary (metadata only) + 5. the mode-specific instruction.
+  // 3. Findings status summary (metadata only) + the standalone landing instruction.
+  // deep-review always leaves a committed branch for a human to open as a PR.
   const summary = summarizeFindings(findingsFile.findings);
-  const instruction =
-    mode === 'in-session' ? inSessionInstruction(branch, summary) : standaloneInstruction(branch, summary);
-
-  return { exitCode: EXIT_OK, mode, instruction };
+  return { exitCode: EXIT_OK, mode: 'standalone', instruction: standaloneInstruction(branch, summary) };
 }

@@ -3,7 +3,7 @@
 // `deep-review-refactor` skill. This file is the IO EDGE: it owns the real
 // process streams and the one `process.exit`. All command logic lives in ./cli.ts
 // behind the injected CliDeps seam so it stays unit-testable without touching the
-// process. Mirrors workflow/src/workflow-runner.ts.
+// process. Mirrors the runner/ single-file entrypoint pattern.
 
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -36,7 +36,7 @@ const realDeps: CliDeps = {
 };
 
 export function main(argv: string[]): number {
-  // Top-level backstop (mirrors workflow/src/workflow-runner.ts's fatal handler):
+  // Top-level backstop (mirrors the runner entrypoint's fatal handler):
   // runCli already converts handler throws into a §2.4 machine error, so this only
   // catches a pathological escape (e.g. a sink itself throwing) and still emits a
   // machine-error JSON line rather than a raw stack trace before exiting FAILURE.

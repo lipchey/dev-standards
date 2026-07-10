@@ -1,29 +1,20 @@
 // E5 — the worktree selector. The deep-review engine never lands a branch (ADR-012:
 // no local merge verb), but it must place the fix work in the RIGHT worktree, and
 // it must do so without ever silently reusing or clobbering a directory it does not
-// own. Two landing modes:
-//
-//   reuse-workflow: an active workflow session owns landing — its planning marker
-//     (`workflow-session-planning.md`, the EXACT exported `PLANNING_FILE_NAME`) is
-//     at the worktree root. The engine reuses that worktree, creates NO branch and
-//     NO worktree, and IGNORES the slug (the workflow session's ship cycle lands).
-//
-//   dedicated: no marker -> the engine creates `deep-review/<slug>` via an
-//     ENGINE-LOCAL fixed-argv `git worktree add` (the workflow machinery is reused
-//     only for the slug sanitizer + the worktree-path helper; its branch/parent
-//     creation is private and `safeBranch` rejects non-`feature/` branches, so the
-//     add is engine-local by necessity).
+// own. It creates a dedicated `deep-review/<slug>` worktree via an ENGINE-LOCAL
+// fixed-argv `git worktree add` (the slug sanitizer + worktree-path helper are
+// extracted into ./feature-slug.ts; the add is engine-local by necessity).
 //
 // Every irreversible boundary is enforced DETERMINISTICALLY before any mutation:
 //   - the slug is sanitized (an unsafe operand -> SlugError -> EXIT_USAGE at the edge);
-//   - the base branch must resolve (config OR a read-only HEAD read; a detached/no
-//     HEAD and a non-repo cwd both fail closed with EXIT_WRONG_STATE, no partial add);
+//   - the base branch must resolve (a read-only HEAD read; a detached/no HEAD and a
+//     non-repo cwd both fail closed with EXIT_WRONG_STATE, no partial add);
 //   - the computed path must resolve UNDER the parent (an inline confinement guard
 //     replicating new-feature.ts's parent check — re-implemented, never imported);
 //   - an EXISTING directory at the target is VALIDATED, never assumed: it is reused
 //     only if it is THIS repo's worktree on exactly `deep-review/<slug>`. A plain
 //     dir, a foreign worktree, or a worktree on a DIFFERENT branch (the S21
-//     collision: a workflow feature `feature/deep-review-<slug>` occupying the same
+//     collision: a feature `feature/deep-review-<slug>` occupying the same
 //     `deep-review-<slug>` directory) is REFUSED with EXIT_WRONG_STATE and no mutation.
 //
 // Effects (fs + git spawn) live behind the injected `deps` seam so the selection
@@ -34,14 +25,7 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { EXIT_OK, EXIT_FAILURE, EXIT_WRONG_STATE } from './types.ts';
 import type { MachineError } from './types.ts';
-import type { ManifestWorkflow } from '../../runner/src/types.ts';
-import type { DeepReviewConfig } from './config.ts';
-import { sanitizeFeatureSlug } from '../../workflow/src/new-feature.ts';
-import { defaultFeatureWorktree } from '../../workflow/src/feature-record.ts';
-// Single-source the workflow marker name from its one exported definition so the
-// engine and the workflow helper can never drift on the filename (E6 reuses
-// isWorkflowWorktree below, which keys on this same constant).
-import { PLANNING_FILE_NAME } from '../../workflow/src/cli.ts';
+import { sanitizeFeatureSlug, defaultFeatureWorktree } from './feature-slug.ts';
 
 // Bound the machine-readable stderr_tail (mirrors slice.ts / workflow trailers).
 const STDERR_TAIL_MAX = 2000;
@@ -66,11 +50,9 @@ export interface SpawnResult {
 
 // The injected effects. `spawn` runs git (fixed argv, never a shell); `existsSync`
 // and `realpath` are the fs reads (real-path normalization is needed because
-// `git worktree list` reports symlink-resolved paths); `workflow` is the (narrowed)
-// manifest workflow block that, when enabled, supplies the worktree parent + base.
+// `git worktree list` reports symlink-resolved paths).
 export interface WorktreeDeps {
   cwd: string;
-  workflow: ManifestWorkflow | undefined;
   existsSync: (p: string) => boolean;
   realpath: (p: string) => string;
   spawn: (file: string, args: readonly string[], options: { cwd: string }) => SpawnResult;
@@ -80,7 +62,7 @@ export interface WorktreeDeps {
 // (never undefined) under exactOptionalPropertyTypes via conditional spreads.
 export interface WorktreeResult {
   exitCode: number;
-  mode?: 'reuse-workflow' | 'dedicated';
+  mode?: 'dedicated';
   worktree?: string;
   branch?: string;
   machineError?: MachineError;
@@ -101,25 +83,16 @@ const defaultSpawn: WorktreeDeps['spawn'] = (file, args, options) => {
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
 
-// The production deps: real fs + the real fixed-argv git spawn, with the workflow
-// block projected off the loaded config. Mirrors slice.ts `realSliceDeps` /
-// report.ts `realReportDeps`.
-export function realWorktreeDeps(cwd: string, config: DeepReviewConfig): WorktreeDeps {
+// The production deps: real fs + the real fixed-argv git spawn. deep-review's
+// worktrees always land under `../worktrees` off HEAD (no manifest config feeds
+// this). Mirrors slice.ts `realSliceDeps` / report.ts `realReportDeps`.
+export function realWorktreeDeps(cwd: string): WorktreeDeps {
   return {
     cwd,
-    workflow: config.workflow,
     existsSync: (p) => fs.existsSync(p),
     realpath: (p) => fs.realpathSync(p),
     spawn: defaultSpawn,
   };
-}
-
-// ── Reuse-marker detection (exported; E6 single-sources this) ──────────────────
-
-// True iff an active workflow session owns `root` (its planning marker is present).
-// Exported so E6's handoff decision keys on the SAME check as E5's mode selection.
-export function isWorkflowWorktree(root: string, deps: { existsSync: (p: string) => boolean }): boolean {
-  return deps.existsSync(path.join(root, PLANNING_FILE_NAME));
 }
 
 // ── Confinement guard (engine-local; replicates new-feature.ts:158-164) ────────
@@ -242,21 +215,10 @@ function validateExistingWorktree(deps: WorktreeDeps, wtPath: string, branch: st
 
 // ── Parent + base resolution ───────────────────────────────────────────────────
 
-// Resolves the worktree parent (absolute) and the base branch. When the workflow
-// block is enabled, both come from the config; otherwise the parent falls back to
-// `../worktrees` and the base to the current HEAD read read-only. A non-repo cwd or
+// Resolves the worktree parent (absolute) and the base branch. The parent is always
+// `../worktrees` and the base is the current HEAD, read read-only. A non-repo cwd or
 // a detached/no HEAD yields `undefined` (the caller fails closed, EXIT_WRONG_STATE).
 function resolveParentAndBase(deps: WorktreeDeps): { parent: string; base: string } | undefined {
-  const wf = deps.workflow;
-  if (wf?.enabled === true) {
-    const base = wf.base_branch;
-    // Reject an option-like base (leading `-`) up front: the `--` separator in the
-    // worktree-add argv already neutralizes it, but `base_branch` is validated only
-    // as a non-empty string by the manifest validator, so a config value like
-    // `--force` would otherwise reach git. Fail closed with a clear context error.
-    if (base.startsWith('-')) return undefined;
-    return { parent: path.resolve(deps.cwd, wf.worktree_parent), base };
-  }
   const head = deps.spawn('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: deps.cwd });
   if (head.status !== 0) return undefined;
   const base = head.stdout.trim();
@@ -267,40 +229,34 @@ function resolveParentAndBase(deps: WorktreeDeps): { parent: string; base: strin
 // ── The selector ───────────────────────────────────────────────────────────────
 
 export function selectWorktree(slug: string, deps: WorktreeDeps): WorktreeResult {
-  // 1. reuse-workflow: an active session owns landing — reuse its worktree, create
-  // nothing, IGNORE the slug (do NOT sanitize it; reuse short-circuits first).
-  if (isWorkflowWorktree(deps.cwd, deps)) {
-    return { exitCode: EXIT_OK, mode: 'reuse-workflow', worktree: deps.cwd };
-  }
-
-  // 2. sanitize the slug. An unsafe operand throws SlugError -> mapped to EXIT_USAGE
+  // 1. sanitize the slug. An unsafe operand throws SlugError -> mapped to EXIT_USAGE
   // at the CLI edge (argv-level), so it is NOT caught here.
   const safeSlug = sanitizeFeatureSlug(slug);
 
-  // 3. resolve parent + base; a non-repo cwd or a detached/no HEAD fails closed.
+  // 2. resolve parent + base; a non-repo cwd or a detached/no HEAD fails closed.
   const resolved = resolveParentAndBase(deps);
   if (resolved === undefined) return { exitCode: EXIT_WRONG_STATE };
   const { parent, base } = resolved;
 
-  // 4. compute the (prefixed) worktree dir + the fixed branch.
+  // 3. compute the (prefixed) worktree dir + the fixed branch.
   const wtPath = defaultFeatureWorktree(parent, `${DIR_PREFIX}${safeSlug}`);
   const branch = `${BRANCH_PREFIX}${safeSlug}`;
 
-  // 5. confinement guard (engine-local): refuse a path that escapes the parent.
+  // 4. confinement guard (engine-local): refuse a path that escapes the parent.
   try {
     assertUnderParent(wtPath, parent);
   } catch {
     return { exitCode: EXIT_WRONG_STATE };
   }
 
-  // 6. collision/idempotency gate: an existing dir is VALIDATED, never assumed. A
+  // 5. collision/idempotency gate: an existing dir is VALIDATED, never assumed. A
   // clean match (our worktree on our branch) is reused without a second add; any
   // mismatch is refused with no mutation.
   if (deps.existsSync(wtPath)) {
     return validateExistingWorktree(deps, wtPath, branch);
   }
 
-  // 7. create the engine-local worktree. A `--` separates options from the two
+  // 6. create the engine-local worktree. A `--` separates options from the two
   // positional operands (`<path> <commit-ish>`) so an option-like `base` (e.g. a
   // config `base_branch` beginning with `-`) can never be misparsed as a git option
   // — `git worktree add`'s operands are NOT pathspecs, so `--literal-pathspecs`
