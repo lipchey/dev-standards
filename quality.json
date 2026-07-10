@@ -65,8 +65,5 @@
       }
     ],
     "audit": []
-  },
-  "workflow": {
-    "enabled": false
   }
 }

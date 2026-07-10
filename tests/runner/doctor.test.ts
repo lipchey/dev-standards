@@ -25,7 +25,6 @@ function baseManifest(overrides: Partial<Manifest> = {}): Manifest {
     workspaces: [{ name: 'root', path: '.', stack: 'node-service', package_manager: 'npm' }],
     filesets: [],
     tiers: { staged: [], fast: [], full: [] },
-    workflow: { enabled: false },
     ...overrides,
   };
 }

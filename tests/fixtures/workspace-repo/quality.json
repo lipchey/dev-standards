@@ -20,6 +20,5 @@
     ],
     "full": [ { "name": "ok", "argv": ["node", "../../stubs/ok.mjs"], "timeout_seconds": 5 } ],
     "audit": []
-  },
-  "workflow": { "enabled": false }
+  }
 }

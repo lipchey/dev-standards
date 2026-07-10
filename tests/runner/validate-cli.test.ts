@@ -33,7 +33,6 @@ const validManifest: Manifest = {
     fast: [{ name: 'typecheck', argv: ['npm', 'run', 'typecheck'], timeout_seconds: 30 }],
     full: [],
   },
-  workflow: { enabled: false },
 };
 
 function writeTempManifest(contents: string): { manifestPath: string; cleanup: () => void } {

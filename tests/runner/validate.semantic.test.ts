@@ -37,7 +37,6 @@ const baseManifest: Manifest = {
     fast: [{ name: 'typecheck', argv: ['npm', 'run', 'typecheck'], timeout_seconds: 30 }],
     full: [],
   },
-  workflow: { enabled: false },
 };
 
 function makeManifest(): Manifest {
