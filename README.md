@@ -52,3 +52,11 @@ prints one stderr warning and moves on. Because that warning is easy to miss,
 The event's `reason` field carries env-provided free text (`DS_BYPASS_REASON`, spawn
 errno), truncated to 200 chars. **Keep no secrets in `DS_BYPASS_REASON`** — it is
 persisted to the log verbatim.
+
+Two readers sit over that sink. For a calibration session use the text report
+(`node tools/quality-stats.mjs`). For a "how are the gates doing" glance, generate the
+self-contained visual dashboard — one offline HTML file, no server or deps:
+
+```
+node tools/quality-report.mjs --path <events.jsonl> --out quality-report.html [--days N] [--open]
+```

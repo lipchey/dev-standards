@@ -14,6 +14,12 @@ decisions. Effectiveness telemetry design: `docs/effectiveness-plan.md`.
 
 ## Session steps
 
+0. **Generate + open the visual report** for a quick shape-of-the-data pass
+   before the detail work: `node tools/quality-report.mjs --path
+   ~/.local/share/dev-standards/events.jsonl --out /tmp/quality-report.html
+   --open`. Skim the KPI cards, the daily pass/blocked/aborted bars, and which
+   checks carry `⚑ flip` / `✂ prune` badges — then dig into the exact numbers
+   with quality-stats below.
 1. Run quality-stats; read the candidate sections.
 2. **Disposition every catch-candidate**: real catch / false positive /
    noise. This is a human judgment; only dispositioned catches count in

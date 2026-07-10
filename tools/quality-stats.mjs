@@ -124,6 +124,12 @@ export function normalizeEvent(obj) {
       startedAtMs,
       finishedAtMs: Number.isFinite(finishedAtMs) ? finishedAtMs : null,
       head_sha: typeof obj.head_sha === 'string' ? obj.head_sha : null,
+      /* exit/aborted describe the whole RUN's outcome (RunEvent, runner telemetry): exit is
+         the process exit code (null on abort/crash), aborted the abort flag. Tolerated
+         loosely — absent/non-number exit → null, non-true aborted → false — so an older
+         writer that omits them is never re-classified as malformed. */
+      exit: typeof obj.exit === 'number' ? obj.exit : null,
+      aborted: obj.aborted === true,
       repo: obj.repo,
       branch,
       results,
@@ -169,6 +175,14 @@ function collectCatches(occs) {
     }
   }
   return pairs;
+}
+
+/* A startedAt is inside a window: on/after the cutoff and not in the future relative to
+   `now`. Both ends inclusive — an event exactly on either edge is inside, and a
+   future-dated event (clock skew/tamper) is excluded. Shared by aggregate's flip/prune
+   windows and the visual report's pre-filter so the rule lives in exactly one place. */
+export function inWindow(startedAtMs, cutoff, now) {
+  return startedAtMs >= cutoff && startedAtMs <= now;
 }
 
 /* ---- aggregate -------------------------------------------------------------
@@ -298,7 +312,7 @@ export function aggregate(events, options = {}) {
     /* Flip: a report-only check whose window shows a real catch and zero
        operational noise. Catch adjacency is computed WITHIN the window so a fail
        from before the window does not manufacture an in-window catch. */
-    const sinceOccs = nonSkipped.filter((o) => o.startedAtMs >= sinceCutoff && o.startedAtMs <= now);
+    const sinceOccs = nonSkipped.filter((o) => inWindow(o.startedAtMs, sinceCutoff, now));
     const windowCatches = countCatches(sinceOccs);
     const windowNoise = sinceOccs.filter((o) => NOISE_STATUSES.has(o.status)).length;
     if (latestMode === 'report-only' && windowCatches >= 1 && windowNoise === 0) {
@@ -309,7 +323,7 @@ export function aggregate(events, options = {}) {
        (0 fail, 0 bypassed) inside the prune window. A bypassed run DID flag
        something a human waved through, and a timeout-only check never actually
        evaluated — neither is prunable, so both are excluded by construction. */
-    const pruneOccs = nonSkipped.filter((o) => o.startedAtMs >= pruneCutoff && o.startedAtMs <= now);
+    const pruneOccs = nonSkipped.filter((o) => inWindow(o.startedAtMs, pruneCutoff, now));
     let pPass = 0;
     let pFail = 0;
     let pBypass = 0;

@@ -205,12 +205,29 @@ dev-standards шипить шаблон `agents/gate-misses-template.md`; кон
 | 8.3 | `tools/quality-stats.mjs` + тести (фікстурний JSONL, malformed/version/вікна) | core | M |
 | 8.4 | `gate-misses-template.md` (вкл. runtime-правило і правила закриття) + копія в пілот + амендмент codex-chain Step 4.5 | core + пілот + глобальні скіли | S |
 | 8.5 | `docs/CALIBRATION.md` + перша калібрувальна сесія (= flip-рішення на даних) | core + пілот | S |
+| 8.6 | `tools/quality-report.mjs` — self-contained HTML-дашборд над тим самим sink (model + client-render + фільтри + stacked byDay + checks/catches) + тести | core | M |
 
 Порядок: **8.1 → 8.2 → 8.4 — усі ДО observation-тижня** (телеметрія без
 8.1 бруднить статистику, а misses мають накопичуватись тим самим тижнем);
 8.3 будь-коли після 8.2; 8.5 після ~тижня накопичених даних. Кожен
 core-крок — стандартний цикл: fix upstream → push+tag → pin bump →
 bootstrap → `./verify --fast`.
+
+### 8.6 — Visual report (`tools/quality-report.mjs`)
+
+Human-friendly шар над тим самим `events.jsonl`: один self-contained HTML —
+без сервера, npm-депів, CDN (відкривається офлайн, переживає re-clone). Уся
+агрегація (вікна, catch-adjacency, flip/prune, run-outcome, latestMode)
+рахується в Node через експортовані чисті фн `quality-stats`; вбудований
+клієнтський JS лише фільтрує slim per-run рядки і сумує — цифри не розходяться
+з текстовим звітом. `buildReportModel` пре-фільтрує події у вікно
+(`cutoff <= startedAt <= now`) ДО `aggregate`; run-outcome береться з
+persisted `exit`/`aborted` (`pass`/`blocked`/`aborted`), ніколи не з
+re-derived block-rule. Ін'єкція знешкоджена (кожен `<` серіалізується як
+JS-escape, а не голий символ; вставка в DOM лише через `textContent`);
+`--out` відмовляється перетерти sink і пише
+атомарно. CLI: `node tools/quality-report.mjs --path <events.jsonl>
+--out <report.html> [--days N] [--open]`.
 
 ## Acceptance (Фаза 8 закрита, коли)
 

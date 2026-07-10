@@ -14,6 +14,7 @@ import {
   countCatches,
   resolveTelemetryPath,
   parseDays,
+  inWindow,
 } from '../../tools/quality-stats.mjs';
 
 /* The .mjs tool is dep-free and exports no types; these builders mirror the
@@ -135,6 +136,27 @@ test('normalizeEvent: a valid event with null branch normalizes to a null branch
   const res = normalizeEvent(ev(iso(T), 'r', null, [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 5, mode: 'blocking' }]));
   assert.ok(res.event);
   assert.equal(res.event.branch, null);
+});
+
+test('normalizeEvent: surfaces the run outcome fields exit/aborted, tolerating absent/bad values', () => {
+  const base = ev(iso(T), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 5, mode: 'blocking' }]) as Record<string, unknown>;
+  const clean: any = normalizeEvent(base); // the ev builder sets exit:0, aborted:false
+  assert.equal(clean.event.exit, 0);
+  assert.equal(clean.event.aborted, false);
+
+  const abortedRun: any = normalizeEvent({ ...base, exit: null, aborted: true });
+  assert.equal(abortedRun.event.exit, null, 'a null exit rides through as null');
+  assert.equal(abortedRun.event.aborted, true);
+
+  const junk: any = normalizeEvent({ ...base, exit: 'nope', aborted: 'yes' });
+  assert.equal(junk.event.exit, null, 'a non-number exit → null, not malformed');
+  assert.equal(junk.event.aborted, false, 'aborted is true ONLY on a strict boolean true');
+
+  const { exit: _e, aborted: _a, ...noOutcome } = base;
+  const legacy: any = normalizeEvent(noOutcome);
+  assert.ok(legacy.event, 'an older writer that omits exit/aborted is still valid, not malformed');
+  assert.equal(legacy.event.exit, null);
+  assert.equal(legacy.event.aborted, false);
 });
 
 /* ---- aggregate: catch-candidates, key separation, windows ---- */
@@ -360,6 +382,15 @@ test('formatReport: a bypass reason with a newline and ANSI is JSON-escaped onto
 });
 
 /* ---- small pure helpers ---- */
+
+test('inWindow: inclusive at both ends; rejects pre-cutoff and future-dated', () => {
+  const now = T;
+  const cutoff = T - 7 * DAY;
+  assert.equal(inWindow(cutoff, cutoff, now), true, 'exactly at the cutoff is inside');
+  assert.equal(inWindow(now, cutoff, now), true, 'exactly at now is inside');
+  assert.equal(inWindow(cutoff - 1, cutoff, now), false, '1ms before the cutoff is out');
+  assert.equal(inWindow(now + 1, cutoff, now), false, '1ms in the future is out');
+});
 
 test('p50: median with even-length averaging', () => {
   assert.equal(p50([]), null);
