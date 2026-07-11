@@ -40,7 +40,7 @@ import { assertSafeRepoPath, FindingsValidationError, readFindings, mutateFindin
 import { isNoTouch } from './no-touch.ts';
 import { runProcess } from '../../runner/src/exec.ts';
 import type { RunProcessResult } from '../../runner/src/exec.ts';
-import { realWorktreeDeps, setupWorktreeTooling, WORKTREE_TOOLING_PATHS } from './worktree.ts';
+import { realWorktreeDeps, setupWorktreeTooling, isWorktreeTooling } from './worktree.ts';
 import type { DeepReviewContext, RunDescriptor } from './descriptor.ts';
 import type { Deadline } from './deadline.ts';
 
@@ -246,17 +246,6 @@ function parseDirtyPaths(out: string): string[] {
     if (p !== '') paths.push(p);
   }
   return paths;
-}
-
-// True if `p` is (under) the engine's OWN worktree-tooling footprint — the symlinks
-// setupWorktreeTooling creates (node_modules / .tools) and the submodule it wires. These
-// are engine artifacts, never user work: a consumer .gitignore that lists them as
-// DIRECTORIES (`node_modules/`, `dist/`) does not match the SYMLINKS, so they surface as
-// dirty. The scope gate must not count them as out-of-slice work (else fix-mode is
-// unrunnable in a consumer), and it stays safe because the stage/commit are ALWAYS scoped
-// to explicit slice paths — tooling can never enter the delta or the commit regardless.
-function isWorktreeTooling(p: string): boolean {
-  return WORKTREE_TOOLING_PATHS.some((t) => p === t || p.startsWith(`${t}/`));
 }
 
 // §F6/G3 restores the INDEX for exactly the slice paths to the pre-`add` snapshot, WITHOUT

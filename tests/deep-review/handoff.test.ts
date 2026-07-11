@@ -154,6 +154,20 @@ test('blocked: a dirty worktree (git status --porcelain non-empty) -> EXIT_WRONG
   assert.match(result.machineError?.message ?? '', /dirty/);
 });
 
+test('tooling-only dirt does NOT block handoff (engine-created node_modules/.tools/submodule symlinks)', () => {
+  const { deps } = spyDeps({ status: '?? node_modules\n?? .tools\n M vendor/dev-standards\n' });
+  const result = decideHandoff(mkFile([mkFinding()]), deps);
+  assert.equal(result.exitCode, EXIT_OK, "the engine's own worktree-tooling footprint is not user dirt");
+  assert.equal(result.mode, 'standalone');
+});
+
+test('tooling dirt PLUS a real dirty file still blocks handoff', () => {
+  const { deps } = spyDeps({ status: '?? node_modules\n M src/app.ts\n' });
+  const result = decideHandoff(mkFile([mkFinding()]), deps);
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.match(result.machineError?.message ?? '', /dirty/);
+});
+
 // ── Mode gate + read failures ────────────────────────────────────────────────────
 
 test('mode gate: a review-only findings file -> EXIT_WRONG_STATE before ANY git read', () => {

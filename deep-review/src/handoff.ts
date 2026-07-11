@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { EXIT_OK, EXIT_FAILURE, EXIT_WRONG_STATE } from './types.ts';
 import type { FindingRecord, FindingsFileV2, FindingStatus, MachineError } from './types.ts';
 import { HANDOFF_BLOCKING_STATUSES } from './types.ts';
+import { isWorktreeTooling } from './worktree.ts';
 import type { Deadline } from './deadline.ts';
 
 // Bound the machine-readable stderr_tail (mirrors slice.ts / worktree.ts).
@@ -203,6 +204,21 @@ function standaloneInstruction(branch: string, summary: string): string {
 
 // ── The decision ────────────────────────────────────────────────────────────────
 
+// Dirty paths from `git status --porcelain` (v1), EXCLUDING the engine's own worktree-
+// tooling footprint (the node_modules / .tools / submodule symlinks a consumer .gitignore
+// lists as directories and so does not ignore — they always surface as dirty in a run
+// worktree). The path starts at column 3; a rename's "old -> new" keeps the new path.
+// Same exemption the slice scope gate applies, so handoff is not permanently blocked by
+// artifacts the engine created itself.
+function nonToolingDirtyPaths(status: string): string[] {
+  return status
+    .split('\n')
+    .map((line) => line.replace(/\s+$/, ''))
+    .filter((line) => line !== '')
+    .map((line) => line.slice(3).replace(/^.* -> /, ''))
+    .filter((p) => p !== '' && !isWorktreeTooling(p));
+}
+
 export function decideHandoff(findingsFile: FindingsFileV2, deps: HandoffDeps): HandoffResult {
   // 1. Mode gate FIRST — landing is a fix-flow step; a review-only run changes
   // nothing, so refuse BEFORE any git read.
@@ -233,7 +249,7 @@ export function decideHandoff(findingsFile: FindingsFileV2, deps: HandoffDeps): 
   } else if (verification.sha !== head) {
     reasons.push(`verification is stale: verified ${verification.sha}, HEAD is ${head} (re-run deep-review verify)`);
   }
-  if (status.trim() !== '') {
+  if (nonToolingDirtyPaths(status).length > 0) {
     reasons.push('the worktree is dirty (git status --porcelain is non-empty)');
   }
   if (reasons.length > 0) {

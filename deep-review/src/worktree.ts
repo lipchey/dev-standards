@@ -76,6 +76,13 @@ export const WORKTREE_TOOLING_PATHS: readonly string[] = [
   SUBMODULE_PATH,
 ];
 
+// True if a repo-relative dirty path IS (or is under) the engine's own worktree-tooling
+// footprint. Shared by the slice scope gate and the handoff clean-worktree gate so both
+// ignore engine-created artifacts identically (see WORKTREE_TOOLING_PATHS).
+export function isWorktreeTooling(p: string): boolean {
+  return WORKTREE_TOOLING_PATHS.some((t) => p === t || p.startsWith(`${t}/`));
+}
+
 // ── Effects seam ───────────────────────────────────────────────────────────────
 
 // The result of a fixed-argv spawn. `status` is the process exit code, or null when the process
