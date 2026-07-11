@@ -14,6 +14,7 @@ import {
   EXIT_OK,
   EXIT_FAILURE,
   EXIT_WRONG_STATE,
+  EXIT_PREFLIGHT,
 } from '../../deep-review/src/types.ts';
 import {
   initCoreRepo,
@@ -310,6 +311,29 @@ test('§F4 self-protection: a slice targeting the no-touch source (.agents/proje
     const slice = runVerb(worktree, ['commit-slice', 'f-001', '--findings', FINDINGS_REL], box.env);
     assert.equal(slice.status, EXIT_WRONG_STATE, slice.stderr);
     assert.equal(findingById(worktree, 'f-001')?.['status'], 'pending', 'the engine never edits the file that defines what is protected');
+  } finally {
+    cleanup(box);
+  }
+});
+
+test('§5.0 partial guide set (1/N present) -> select-worktree fails EXIT_PREFLIGHT naming the missing guides', () => {
+  const box = initCoreRepo();
+  try {
+    /* Strip the seeded canonical set down to a single guide — the pilot's original 1/7 state that
+       the old ">=1 .md" gate waved through. Preflight reads the working-tree dir, so no commit is
+       needed for select-worktree's guides check to see the partial set. */
+    const guidesDir = path.join(box.repo, '.agents/review-guides');
+    const names = fs.readdirSync(guidesDir).filter((n) => n.endsWith('.md')).sort();
+    assert.ok(names.length >= 2, 'fixture precondition: more than one canonical guide seeded');
+    for (const name of names.slice(1)) fs.rmSync(path.join(guidesDir, name));
+
+    const res = runVerb(box.repo, ['select-worktree', '--slug', 'e2e'], box.env);
+    assert.equal(res.status, EXIT_PREFLIGHT, res.stderr);
+    /* The §2.4 machine error is the LAST stderr line: it flags the incomplete set, names a missing
+       guide, and points at the seeder. */
+    assert.match(res.stderr, /review guides are incomplete/);
+    assert.match(res.stderr, new RegExp(names[1]!.replace(/\./g, '\\.')));
+    assert.match(res.stderr, /seed-review-guides\.sh/);
   } finally {
     cleanup(box);
   }

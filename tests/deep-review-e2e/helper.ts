@@ -90,6 +90,22 @@ export function writeExecutable(dir: string, rel: string, content: string): void
   fs.chmodSync(path.join(dir, rel), 0o755);
 }
 
+/* The canonical review-guide set the §5.0 preflight requires present in a fixture's
+   guides_dir — read from the REAL templates dir (the same one the engine resolves from
+   import.meta.url), never a hardcoded list, so fixtures track core automatically. */
+const TEMPLATES_DIR = path.join(REPO_ROOT, 'agents', 'review-guide-templates');
+
+export function canonicalGuideNames(): string[] {
+  return fs.readdirSync(TEMPLATES_DIR).filter((n) => n.endsWith('.md')).sort();
+}
+
+/* Seeds a fixture's guides_dir with the FULL canonical set as empty files — the preflight
+   checks availability BY NAME, never content. Every fix-mode fixture must call this so
+   select-worktree/commit-slice/verify/handoff clear the guides gate. */
+export function seedGuides(repo: string, guidesDirRel = '.agents/review-guides'): void {
+  for (const name of canonicalGuideNames()) writeFile(repo, path.join(guidesDirRel, name), '');
+}
+
 /* The committed source the AI "fixes": the slice edits src/app.ts from ORIGINAL to
    EDITED. The edit is what commit-slice validates + lands. */
 export const ORIGINAL = 'export const a = 1;\n';
@@ -200,7 +216,7 @@ export function initCoreRepo(opts: CoreFixtureOpts = {}): Sandbox {
   writeFile(repo, '.gitignore', '/reports/\n');
   writeFile(repo, 'quality.json', qualityJson({ budgetSeconds: opts.budgetSeconds, noTouchGlobsRef: opts.noTouchGlobsRef }));
   writeFile(repo, '.agents/project-facts.md', opts.projectFacts ?? DEFAULT_PROJECT_FACTS);
-  writeFile(repo, '.agents/review-guides/core.md', '# Core review guide\n\n- placeholder\n');
+  seedGuides(repo);
   writeFile(repo, 'src/app.ts', ORIGINAL);
   if (opts.verifyShim !== null) writeExecutable(repo, 'verify', opts.verifyShim ?? GREEN_SHIM);
   for (const [rel, content] of Object.entries(opts.extraFiles ?? {})) writeFile(repo, rel, content);
@@ -263,7 +279,7 @@ export function initConsumerRepo(opts: { stampFresh: boolean; slug?: string } ):
   writeFile(repo, '.gitignore', '/reports/\n');
   writeFile(repo, 'quality.json', qualityJson());
   writeFile(repo, '.agents/project-facts.md', DEFAULT_PROJECT_FACTS);
-  writeFile(repo, '.agents/review-guides/core.md', '# Core review guide\n\n- placeholder\n');
+  seedGuides(repo);
   writeFile(repo, 'src/app.ts', ORIGINAL);
   writeExecutable(repo, 'verify', GREEN_SHIM);
   git(repo, ['add', '-A'], env);

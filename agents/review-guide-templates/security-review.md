@@ -2,9 +2,9 @@
 
 Seed template - CATALOG SEED. Adapted as short, paraphrased excerpts from the
 `codex-security-skills` source recorded in `agents/skill-catalog.json`
-(`feeds_guides: ["security-review.md"]`). Unlike the other seeds it is referenced
-only by catalog metadata - no canonical skill body loads it by name yet - so it
-seeds the security lens an adopting repo wires into its own review chain.
+(`feeds_guides: ["security-review.md"]`). The `deep-review-refactor` skill loads
+it as a conditional lens, gated by the conditionality banner below - so it seeds
+the security lens an adopting repo wires into its own review chain.
 STARTING template: each adopting repo copies it into `.agents/review-guides/` and
 then owns its final body. The prompts below are review-only JUDGMENT PROMPTS for
 a human or reviewing agent - never an instruction to edit. Security is one place

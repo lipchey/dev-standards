@@ -201,7 +201,7 @@ function preflightFail(
   verb: string,
   deps: CliDeps,
 ): number | undefined {
-  const guidesDirAbs = config.guidesDir !== undefined ? resolve(env.cwd, config.guidesDir) : undefined;
+  const guidesDirAbs = resolve(env.cwd, config.guidesDir);
   const outcome = runPreflight(config, verb, guidesDirAbs);
   if (outcome.ok) return undefined;
   deps.stderr(`${JSON.stringify({ error: outcome.machineError })}\n`);

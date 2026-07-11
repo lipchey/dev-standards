@@ -261,7 +261,15 @@ bootstrap кейс); один slice реально приземлений у п�
    зараз файл untracked, а roadmap адресує лише частину знахідок): кожен
    finding → fixed / obsolete-after-removal / rejected+evidence /
    phase-N / BACKLOG; диспозицію закомітити.
-4. `docs/ADOPTION.md` (знімає onboarding gate з CLAUDE.md).
+4. `docs/ADOPTION.md` (знімає onboarding gate з CLAUDE.md). Адопшн ОБОВʼЯЗКОВО
+   включає авто-сідинг review-гайдів: (а) виклик
+   `vendor/dev-standards/scripts/seed-review-guides.sh <repo-root>` з
+   консюмерського `ds-bootstrap.sh` — ПІСЛЯ submodule update + build (сабмодуль
+   не ініціалізований → bootstrap падає гучно раніше за сідер, тож порядок
+   зафіксований); (б) fast-tier check у `quality.json`
+   `{"argv":["vendor/dev-standards/scripts/seed-review-guides.sh",".","--check"]}`
+   — детермінований гейт наявності гайдів. Сідинг = copy-if-absent, репо володіє
+   тілами гайдів.
 5. Рішення щодо артефактів: ДЕФОЛТ — ратифікувати чинний контракт
    build-on-demand + `.built-from`-stamp (він уже реалізований і
    перевірений); committed-bundles розглядати лише з повним планом
@@ -283,9 +291,11 @@ bootstrap кейс); один slice реально приземлений у п�
 
 1. **`quality.json`** — повністю проектний конфіг: стек, тіри/чеки/бюджети,
    філесети, policy, `deep_review` блок (schema-validated).
-2. **`.agents/review-guides/`** — проектна адаптація знань: copy+fill сідів
-   з `agents/review-guide-templates/` + capture проектних правил
-   gate-скілами (review-memory routing за скоупом).
+2. **`.agents/review-guides/`** — проектна адаптація знань: гайди приходять
+   СІДИНГОМ (`seed-review-guides.sh`, copy-if-absent) на bootstrap, репо
+   володіє їх тілами й доповнює їх під себе; повнота набору стережеться
+   `--check`-ом у fast-tier. Manual-copy НЕ є контрактом. Понад сіди — capture
+   проектних правил gate-скілами (review-memory routing за скоупом).
 3. **No-touch floor** — extend-only union: проект може додати зони, звузити
    BASELINE не може.
 

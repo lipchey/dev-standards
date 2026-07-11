@@ -22,10 +22,12 @@ only:
   issues and immediately fix the fixable ones in one command.
 
 This is the on-demand, deep layer. It pairs with the always-on
-`core-code-guidelines.md` baseline - the cheap rules every coding task applies -
-and owns the long tail beyond it: the edge cases the baseline deliberately defers
-so it can stay short and noise-free. The baseline handles routine work; breadth
-is this skill's job, on request only.
+`core-code-guidelines.md` baseline but does not assume it satisfied: the deep
+pass SUBSUMES the baseline - it re-checks the baseline's rules on the code under
+review (code can be written before the baseline existed, or slip past it) - and
+above that re-check owns the long tail: the edge cases the baseline deliberately
+defers so it can stay short and noise-free. The baseline handles routine work;
+this pass re-applies it and adds breadth, on request only.
 
 ## Mode: review-only (default)
 
@@ -38,12 +40,33 @@ Produce findings; change nothing. The runtime is six steps, in order:
    `tsc`, Knip, dependency-cruiser, or gitleaks already owns. This skill is
    judgment-only; it does not duplicate a gate.
 3. CodeGraph first for architecture, navigation, and impact questions.
-4. Judge against the repo-local guides - `architecture-deepening.md`,
-   `clean-architecture.md`, `refactoring-checklist.md`, and
-   `language-review-sources.md` - applied only to judgment areas: boundaries,
-   dependency direction, naming, cohesion, duplication, test design, behavior
-   preservation, and needless complexity. Rules are conditional: SOLID strong for
-   class-heavy TS, light for script-style TS pipelines, not for Bash or n8n glue.
+4. Judge against the repo-local review guides. The guides live in the guides dir
+   - `deep_review.guides_dir` in `quality.json`, default `.agents/review-guides/`
+   - seeded on bootstrap (copy-if-absent) and owned by the repo. Confirm the set
+   is complete BEFORE judging: run
+   `vendor/dev-standards/scripts/seed-review-guides.sh . --check` (the submodule
+   mounts at `vendor/dev-standards` by convention). Each canonical guide it
+   reports missing is itself a P1 finding ("review guides not seeded - run
+   `vendor/dev-standards/scripts/seed-review-guides.sh .`"); review-only proceeds
+   on whatever guides are present. (In `review-and-refactor`, an incomplete set
+   stops the run before `select-worktree`; the engine preflight enforces the same
+   fail-closed.) Apply the present guides in this order:
+   - (a) the baseline `core-code-guidelines.md` - ALWAYS, and explicitly: the
+     deep pass re-applies its rules on the code under review, it does not treat
+     them as already met.
+   - (b) `language-review-sources.md` - a router: load only the section for the
+     surface's stack, not the whole file.
+   - (c) the area guides (`clean-architecture.md`, `architecture-deepening.md`,
+     `refactoring-checklist.md`, `security-review.md`) - each per its own
+     conditionality banner.
+   - (d) any additional repo-owned `.md` in the guides dir - also judgment
+     sources.
+   - (e) `review-output-format.md` - output shape only (step 5), never a review
+     lens.
+   Apply them only to judgment areas: boundaries, dependency direction, naming,
+   cohesion, duplication, test design, behavior preservation, and needless
+   complexity. Rules are conditional: SOLID strong for class-heavy TS, light for
+   script-style TS pipelines, not for Bash or n8n glue.
 5. Output per `review-output-format.md`: prioritized findings - P1 breaks
    adoption, safety, or behavior; P2 is concrete correctness or maintainability;
    P3 is improvement or clarity - each with file/line, impact, risk level, and a

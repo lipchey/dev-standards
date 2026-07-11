@@ -20,7 +20,7 @@ export interface DeepReviewConfig {
   enabled: boolean;
   modes: Array<'review-only' | 'review-and-refactor'>;
   budget: { seconds: number; tokens?: number | null };
-  guidesDir: string | undefined;
+  guidesDir: string;
   noTouchGlobsRef: string | undefined;
   verifyAfterFix: '--fast' | '--full' | undefined;
   reportsDir: string;
@@ -37,7 +37,8 @@ export function loadConfig(filePath: string): DeepReviewConfig {
     enabled: deepReview?.enabled ?? false,
     modes: deepReview?.modes ?? [],
     budget: deepReview?.budget ?? { seconds: DEFAULT_BUDGET_SECONDS },
-    guidesDir: deepReview?.guides_dir,
+    // Defaulted HERE so seeder, skill body and engine can never disagree on where guides live.
+    guidesDir: deepReview?.guides_dir ?? '.agents/review-guides',
     noTouchGlobsRef: deepReview?.no_touch_globs_ref,
     verifyAfterFix: deepReview?.verify_after_fix,
     reportsDir: result.manifest.paths.reports,
