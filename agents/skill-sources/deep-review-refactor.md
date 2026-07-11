@@ -1,6 +1,6 @@
 ---
 name: deep-review-refactor
-description: Manual-only repo-local deep code/architecture review (review-only) and behavior-preserving review-driven refactor (review-and-refactor); judges by repo-local review guides, never edits the executable surface, never lands to base itself.
+description: Repo-local deep code/architecture review (review-only) and behavior-preserving review-driven refactor (review-and-refactor); judges by repo-local review guides, never edits the executable surface, never lands to base itself. Runs only with explicit user consent, but OFFER it automatically when feature work completes - ask once whether to review that branch's changes (scope = diff vs base, not the whole repo).
 ---
 
 # deep-review-refactor - canonical skill body
@@ -13,13 +13,22 @@ wrappers are committed statically and guarded by `tests/runner/skill-wrappers-st
 
 ## When to use / trigger
 
-Manual-only. A human explicitly asks for a deep pass; the skill never fires on
-every diff, and never on ordinary implementation or verification work. Two modes
-only:
+Consent-gated: the skill never RUNS without an explicit user go-ahead, never
+fires on every diff, and never on ordinary implementation or verification work.
+The OFFER, however, is automatic: when feature work completes - the feature
+branch or task is about to be committed as done, merged, or handed off - ask
+the user ONCE whether to run deep-review-refactor scoped to that work's
+changes. Scope for that offer = the files changed vs the merge base with the
+base branch (`git diff --name-only "$(git merge-base <base> HEAD)"`, default
+base `main`, plus new untracked files of the feature), NOT the whole repo;
+judge those files with enough surrounding context for the architecture calls.
+Declined = do not re-ask for the same feature. A human can still invoke the
+skill manually at any scope. Two modes only:
 
 - `review-only` (default) - prioritized findings, change nothing.
-- `review-and-refactor` (explicit ask, e.g. `/deep-review --fix`) - find the
-  issues and immediately fix the fixable ones in one command.
+- `review-and-refactor` (explicit ask, e.g. `/deep-review --fix`, or upfront
+  fix consent from Run setup below) - find the issues and immediately fix the
+  fixable ones in one command.
 
 This is the on-demand, deep layer. It pairs with the always-on
 `core-code-guidelines.md` baseline but does not assume it satisfied: the deep
@@ -28,6 +37,65 @@ review (code can be written before the baseline existed, or slip past it) - and
 above that re-check owns the long tail: the edge cases the baseline deliberately
 defers so it can stay short and noise-free. The baseline handles routine work;
 this pass re-applies it and adds breadth, on request only.
+
+## Run setup (both modes) - two upfront asks + the Codex cross-run
+
+Runs FIRST, immediately on invocation, interactive sessions only. In a
+delegated-worker or headless context (no user to ask; workers never call
+external agents) skip this whole section, run at the defaults (xhigh is moot,
+report-only), and say so in the report.
+
+1. ONE user prompt (AskUserQuestion or the harness equivalent) carrying BOTH
+   questions, before any other work:
+   - **Codex cross-run effort**: `xhigh` (default) or `ultra` (much longer,
+     deeper). This ask IS the per-run ultra confirmation the global Codex
+     gates require - declined or unanswered means xhigh; never auto-escalate.
+   - **After findings**: `report only` (default) or `fix all confirmed
+     fixable findings` - consent here continues straight into
+     `review-and-refactor` after the merged report, with no second ask. An
+     explicit `--fix` invocation already answers this question - ask only
+     the effort one.
+2. Launch the Codex cross-run IN THE BACKGROUND, then do the mode steps in
+   parallel with it. The cross-run is ALWAYS a read-only review, regardless
+   of the fix answer:
+
+   ```bash
+   PONYTAIL_DEFAULT_MODE=off codex exec -c sandbox_mode="read-only" \
+     -c model_reasoning_effort="<xhigh|ultra>" \
+     -o <findings-file> - < <prompt-file> > <run-log> 2>&1
+   ```
+
+   The prompt file instructs Codex to run this skill's review-only pass
+   independently: read `.agents/project-facts.md`, then the guides per step
+   4's ordered semantics (baseline always -> router lens -> area guides per
+   their conditionality banners -> repo-owned extras), same scope as the
+   main pass, findings per `review-output-format.md` with file:line +
+   evidence, and "Report only - do not modify any files". Feed the prompt on
+   stdin from a file (never a shell-quoted arg); redirect stdout straight to
+   the log (never through a pipe filter - it buffers to EOF and reads as a
+   hang).
+3. Independence guard: finish and WRITE DOWN the main pass's findings
+   (step 5) BEFORE reading the Codex findings file.
+4. Merge phase, after step 5: wait for the cross-run (liveness = the log
+   grows; ~3 min of silence -> check the process; stalled -> kill, retry
+   once, then proceed on the main pass alone and note it; an ultra run
+   legitimately takes much longer than xhigh - growing log means alive, not
+   hung). Then adversarially verify EVERY Codex finding against the code:
+   VALID / INVALID / PARTIAL plus one line of evidence - "Codex said so" is
+   not evidence. The final report is the union: the main pass's findings +
+   VALID (and evidence-adjusted PARTIAL) Codex findings, deduped, each
+   labeled with provenance (`own` / `codex` / `both`) and, for Codex-sourced
+   ones, the verdict; INVALID findings appear at the end with their one-line
+   reasons so the rejection is auditable.
+5. Branch on the fix answer: report-only -> stop after the merged report
+   (step 6). Fix consent -> continue into `review-and-refactor` on the
+   merged set; Codex-sourced findings enter the fix phase ONLY with a VALID
+   verdict, and `classify` still decides fixable-now vs no-touch vs
+   needs-plan. Codex unavailable (no CLI, worker context, both retries
+   dead) -> skip or drop the cross-run, note it, continue single-model.
+
+One cross-run per request - it shares the run's §Budget; no second Codex
+round inside the same deep-review invocation.
 
 ## Mode: review-only (default)
 
@@ -72,9 +140,11 @@ Produce findings; change nothing. The runtime is six steps, in order:
    P3 is improvement or clarity - each with file/line, impact, risk level, and a
    recommended smallest refactor slice. A finding that needs redesign is described
    as a plan, not an edit.
-6. Stop after findings. No edits, no commits.
+6. Stop after findings. No edits, no commits. (One exception: Run setup
+   captured explicit fix consent - then the run continues into
+   `review-and-refactor` on the merged, verified set per §Run setup step 5.)
 
-## Mode: review-and-refactor (explicit ask)
+## Mode: review-and-refactor (explicit ask or run-setup fix consent)
 
 One command, run inside a git worktree: an internal review (phase 1, the
 `review-only` steps above) followed by a fix phase (phase 2), driven by the
