@@ -1,67 +1,103 @@
 {
+  "comment": "Provenance ledger for agents/review-guide-templates/. One entry per concrete upstream repo (Gate-P F4, guides-revamp 2026-07-11); multiple entries may feed one guide. INT-06 asserts set equality: templates dir *.md == union(feeds_guides) + core-code-guidelines.md (baseline, no upstream). 'rejected' entries are audit-only - do not re-add them as sources without new evidence.",
   "sources": [
     {
       "id": "ramziddin/solid-skills",
       "url": "https://github.com/ramziddin/solid-skills",
-      "license": "MIT",
-      "pinned_ref": "<verify-at-pin>",
-      "feeds_guides": ["refactoring-checklist.md", "clean-architecture.md"],
+      "license": "MIT (README §License; no root LICENSE file)",
+      "pinned_ref": "b113ce6871c05e4799b0edfa0d268bde8e04a8a6",
+      "paths": ["skills/solid/references/"],
+      "feeds_guides": [
+        "clean-architecture.md",
+        "refactoring-checklist.md",
+        "architecture-deepening.md"
+      ],
       "applicability": "strong:class-heavy-ts; light:script-ts; none:bash-n8n",
       "decision": "adapt-excerpts-only; do not import blindly (overfits NestJS/class-heavy)"
     },
     {
       "id": "mattpocock/skills",
       "url": "https://github.com/mattpocock/skills",
-      "license": "<verify-at-pin>",
-      "pinned_ref": "<verify-at-pin>",
+      "license": "MIT",
+      "pinned_ref": "391a2701dd948f94f56a39f7533f8eea9a859c87",
+      "paths": [
+        "docs/engineering/improve-codebase-architecture.md",
+        "docs/engineering/codebase-design.md",
+        "docs/engineering/domain-modeling.md"
+      ],
       "feeds_guides": ["architecture-deepening.md"],
       "applicability": "strong:ts-services-and-shared-modules; light:one-off-scripts",
-      "decision": "adapt-excerpts from improve-codebase-architecture (shallow modules, deletion test, locality, leverage)"
+      "decision": "ideas-only in practice (clone carries overview pages, not full skill bodies); deep-module vocabulary traces to Ousterhout - lineage named in the guide header"
     },
     {
       "id": "awesome-skills/code-review-skill",
-      "url": "<verify-at-pin>",
-      "license": "<verify-at-pin>",
-      "pinned_ref": "<verify-at-pin>",
-      "feeds_guides": ["language-review-sources.md"],
-      "applicability": "load only the language section matching the repo",
-      "decision": "adapt-excerpts; per-language dispatch only"
+      "url": "https://github.com/awesome-skills/code-review-skill",
+      "license": "MIT",
+      "pinned_ref": "f2fd4e57d9b9475d1dff05dc228adb0ee05dd5d8",
+      "paths": [
+        "SKILL.md",
+        "reference/typescript.md",
+        "reference/react.md",
+        "reference/python.md",
+        "reference/code-quality-universal.md",
+        "reference/common-bugs-checklist.md",
+        "reference/cross-cutting/async-concurrency-patterns.md",
+        "reference/security-review-guide.md",
+        "reference/code-review-best-practices.md",
+        "assets/review-checklist.md",
+        "assets/pr-review-template.md"
+      ],
+      "feeds_guides": [
+        "language-review-sources.md",
+        "security-review.md",
+        "review-output-format.md"
+      ],
+      "applicability": "load only the language section matching the surface under review",
+      "decision": "adapt-excerpts; per-language dispatch only; no lenses for stacks consumers do not use"
     },
+    {
+      "id": "wondelai/skills",
+      "url": "https://github.com/wondelai/skills",
+      "license": "MIT",
+      "pinned_ref": "326b3801223ad277ae7082ff85435ba1d36e1903",
+      "paths": ["clean-architecture/SKILL.md", "clean-architecture/references/"],
+      "feeds_guides": ["clean-architecture.md"],
+      "applicability": "strong:class-heavy-ts and shared modules; weigh against the anti-overfit banner",
+      "decision": "adapt-excerpts (dependency rule, boundaries, entities/use-cases, component principles); resolves the former clean-hexagonal-architecture-community placeholder"
+    },
+    {
+      "id": "affaan-m/everything-claude-code",
+      "url": "https://github.com/affaan-m/everything-claude-code",
+      "license": "MIT",
+      "pinned_ref": "40927950c49f6e742d341e20ff7b9b7e1e7bfff5",
+      "paths": ["skills/hexagonal-architecture/SKILL.md"],
+      "feeds_guides": ["clean-architecture.md"],
+      "applicability": "strong:class-heavy-ts; secondary to wondelai/skills",
+      "decision": "adapt-excerpts (ports-first workflow, composition root, per-boundary contract tests, hexagonal anti-patterns); kept because the rewrite actually used this material"
+    },
+    {
+      "id": "agamm/claude-code-owasp",
+      "url": "https://github.com/agamm/claude-code-owasp",
+      "license": "MIT",
+      "pinned_ref": "f5dfa3d66da1fdfeb36b7428c35b17abaff6465b",
+      "paths": [".claude/skills/owasp-security/"],
+      "feeds_guides": ["security-review.md"],
+      "applicability": "security lens only; emphasis by surface per the guide banner",
+      "decision": "adapt-excerpts (OWASP Top-10:2025 mapping, authn/authz, crypto, supply chain, JS/TS+Bash+Python quirks); resolves the former codex-security-skills placeholder"
+    }
+  ],
+  "rejected": [
     {
       "id": "wshobson/commands",
-      "url": "https://github.com/wshobson/commands",
-      "license": "<verify-at-pin>",
-      "pinned_ref": "<verify-at-pin>",
-      "feeds_guides": ["refactoring-checklist.md"],
-      "applicability": "reviewer/workflow candidate, not a gate",
-      "decision": "evaluate refactor-clean + tech-debt; reviewer-only"
+      "reason": "2026-07-11 user + Fable review: code-GENERATION command prompts, not review judgment; smell material subsumed by solid-skills code-smells.md; the tech-debt / execution-order sections in refactoring-checklist.md stand as own material over industry-standard (Fowler) vocabulary"
     },
     {
-      "id": "playmoreai/golbin-agent-skills",
-      "url": "<verify-at-pin>",
-      "license": "<verify-at-pin>",
-      "pinned_ref": "<verify-at-pin>",
-      "feeds_guides": ["review-output-format.md"],
-      "applicability": "plan-compliance review",
-      "decision": "adapt-excerpts from review-implementation"
+      "id": "playmoreai/golbin-agent-skills (golbin/agent-skills)",
+      "reason": "2026-07-11 user + Fable review: unlicensed repo (no LICENSE file) and one generic process idea; the spec-vs-code coverage section in review-output-format.md is independently written"
     },
     {
-      "id": "clean-hexagonal-architecture-community",
-      "url": "<verify-at-pin>",
-      "license": "<verify-at-pin>",
-      "pinned_ref": "<verify-at-pin>",
-      "feeds_guides": ["clean-architecture.md"],
-      "applicability": "reject if too generic or framework-mismatched",
-      "decision": "reject-or-adapt; evaluate per source"
-    },
-    {
-      "id": "codex-security-skills",
-      "url": "<verify-at-pin>",
-      "license": "<verify-at-pin>",
-      "pinned_ref": "<verify-at-pin>",
-      "feeds_guides": ["security-review.md"],
-      "applicability": "security reviews only",
-      "decision": "adapt-excerpts; security scope only"
+      "id": "getsentry/skills (security-review)",
+      "reason": "2026-07-11 Fable review: reference material derives from the OWASP Cheat Sheet Series under CC BY-SA 4.0 (ShareAlike) - no text may enter these templates; structure ideas independently reworded in security-review.md §Report discipline"
     }
   ]
 }
