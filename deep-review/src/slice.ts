@@ -40,7 +40,7 @@ import { assertSafeRepoPath, FindingsValidationError, readFindings, mutateFindin
 import { isNoTouch } from './no-touch.ts';
 import { runProcess } from '../../runner/src/exec.ts';
 import type { RunProcessResult } from '../../runner/src/exec.ts';
-import { realWorktreeDeps, setupWorktreeTooling } from './worktree.ts';
+import { realWorktreeDeps, setupWorktreeTooling, WORKTREE_TOOLING_PATHS } from './worktree.ts';
 import type { DeepReviewContext, RunDescriptor } from './descriptor.ts';
 import type { Deadline } from './deadline.ts';
 
@@ -246,6 +246,17 @@ function parseDirtyPaths(out: string): string[] {
     if (p !== '') paths.push(p);
   }
   return paths;
+}
+
+// True if `p` is (under) the engine's OWN worktree-tooling footprint — the symlinks
+// setupWorktreeTooling creates (node_modules / .tools) and the submodule it wires. These
+// are engine artifacts, never user work: a consumer .gitignore that lists them as
+// DIRECTORIES (`node_modules/`, `dist/`) does not match the SYMLINKS, so they surface as
+// dirty. The scope gate must not count them as out-of-slice work (else fix-mode is
+// unrunnable in a consumer), and it stays safe because the stage/commit are ALWAYS scoped
+// to explicit slice paths — tooling can never enter the delta or the commit regardless.
+function isWorktreeTooling(p: string): boolean {
+  return WORKTREE_TOOLING_PATHS.some((t) => p === t || p.startsWith(`${t}/`));
 }
 
 // §F6/G3 restores the INDEX for exactly the slice paths to the pre-`add` snapshot, WITHOUT
@@ -510,12 +521,15 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
 
     // Step 3 — deterministic scope gate. The live worktree's dirty set (staged +
     // unstaged) MUST be a subset of the slice; any out-of-slice dirt means the change
-    // is not isolated, so refuse with NO test run and NO mutation.
+    // is not isolated, so refuse with NO test run and NO mutation. The engine's OWN
+    // worktree-tooling footprint (isWorktreeTooling: the node_modules/.tools symlinks +
+    // the wired submodule) is excluded — it is engine-created, never user work, and the
+    // scoped stage/commit below can never sweep it in.
     const dirty = parseDirtyPaths(
       runGit(deps, ['status', '--porcelain', '-z', '--no-renames', '--untracked-files=all'], 'status', deps.cwd),
     );
     for (const p of dirty) {
-      if (!sliceSet.has(p)) return { exitCode: EXIT_WRONG_STATE };
+      if (!sliceSet.has(p) && !isWorktreeTooling(p)) return { exitCode: EXIT_WRONG_STATE };
     }
 
     // Step 4 — snapshot the slice index (§F6), then stage EXACTLY the slice (never
@@ -527,7 +541,12 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
     indexSnapshot = runGit(deps, ['--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...slice], 'ls-files', deps.cwd);
     stagedSlice = slice;
     runGit(deps, ['--literal-pathspecs', 'add', '--', ...slice], 'add', deps.cwd);
-    const delta = runGit(deps, ['diff', '--cached', '--binary'], 'diff', deps.cwd);
+    // Scope the captured delta to the slice paths (not a bare `diff --cached`): the scope
+    // gate now EXEMPTS the engine's own tooling footprint, so a staged tooling entry could
+    // otherwise leak into the validation delta while the path-scoped commit below excludes
+    // it — validating a tree the commit never produces. `-- <slice>` keeps the delta ==
+    // the slice, matching the scoped add/commit.
+    const delta = runGit(deps, ['--literal-pathspecs', 'diff', '--cached', '--binary', '--', ...slice], 'diff', deps.cwd);
 
     // Step 5 — validate the slice in a ONE-SHOT worktree (the live tree is never
     // touched by the untrusted test); teardown is guaranteed in runValidation.

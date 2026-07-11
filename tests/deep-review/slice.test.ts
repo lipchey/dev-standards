@@ -424,6 +424,24 @@ test('scope gate: a dirty path OUTSIDE slice_files -> refused BEFORE any test ru
   assert.equal(readFindings(fpath).findings[0]?.status, 'pending');
 });
 
+test('scope gate: the engine\'s OWN worktree-tooling footprint (node_modules/.tools/submodule) is NOT out-of-slice dirt', () => {
+  const repo = repoWithEditedSlice();
+  // Simulate the footprint setupWorktreeTooling leaves in a consumer worktree: the
+  // node_modules/.tools symlinks and the wired submodule surface as dirty because a
+  // trailing-slash .gitignore (node_modules/, dist/) does not match a symlink.
+  writeFileIn(repo, 'node_modules/pkg/index.js', 'x\n');
+  writeFileIn(repo, '.tools/bin', 'x\n');
+  writeFileIn(repo, 'vendor/dev-standards/runner/dist/x', 'x\n');
+  const reports = reportsRoot();
+  const fpath = findingsPathIn(reports);
+  writeV2(fpath, validFile([validFinding()]));
+  const result = commitSlice('f-001', fpath, sliceDeps(repo, reports, { runProcess: () => okVerdict }));
+  assert.equal(result.exitCode, EXIT_OK, 'tooling dirt does not block the slice');
+  const committed = git(repo, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']).trim().split('\n').filter(Boolean);
+  assert.deepEqual(committed, ['src/app.ts'], 'only the slice is committed; tooling is never swept in');
+  assert.equal(readFindings(fpath).findings[0]?.status, 'fixed');
+});
+
 test('path-safety gate: an unsafe slice_files path -> status "invalid", no commit', () => {
   const repo = repoWithEditedSlice();
   const reports = reportsRoot();

@@ -62,6 +62,20 @@ const SYMLINK_TARGETS = [
   '.tools',
 ] as const;
 
+// The engine's OWN worktree-tooling footprint as it appears in `git status` at the
+// SUPERPROJECT level: the symlinked `node_modules` / `.tools`, plus the submodule
+// itself (reported dirty by its internal `runner/dist` / `deep-review/dist` symlinks).
+// setupWorktreeTooling creates these, so the slice scope gate must not count them as
+// out-of-slice user work — a consumer whose .gitignore lists these as DIRECTORIES
+// (`node_modules/`, `dist/`) does not ignore the SYMLINKS (a trailing-slash pattern
+// matches only directories), so they surface as dirty and would block every slice.
+// Derived from SYMLINK_TARGETS (drop the in-submodule dist entries, which never appear
+// as superproject paths) unioned with the submodule root.
+export const WORKTREE_TOOLING_PATHS: readonly string[] = [
+  ...SYMLINK_TARGETS.filter((rel) => !rel.startsWith(`${SUBMODULE_PATH}/`)),
+  SUBMODULE_PATH,
+];
+
 // ── Effects seam ───────────────────────────────────────────────────────────────
 
 // The result of a fixed-argv spawn. `status` is the process exit code, or null when the process
