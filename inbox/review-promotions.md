@@ -45,6 +45,7 @@ deleted - the history is the second-use evidence.
 - [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - tests: `skill-wrappers-static.test.ts` lstat-checks only the final SKILL.md — the deleted generator rejected every symlinked path component; add ancestor-symlink mutation cases per testing guide (correction)
 - [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - core comment sweep: the 70ade5a→add5420 range adds ~149 `//` TS comment lines incl. dividers/narration — convert to block form and prune per the comments guide (correction)
 - [ ] 2026-07-10 ai-prompter Phase-4 gate-C (Codex xhigh) - confined report writer: the realpath-check-then-temp+rename pattern (shared by `runner/src/report.ts` and `tools/diff-cover.mjs`'s `writeConfinedJson`) has an ancestor-symlink TOCTOU window; unify into one core helper using openat/no-follow (or a held dir handle) rather than duplicating the vulnerable pattern (correction)
+- [ ] 2026-07-12 ai-prompter code-review-plugin-audit - deep-review context-gathering + one language-review-sources cross-cutting bug-class bullet: on the changed hunks, blame the PRE-change lines (`git blame <base> -L`) / pickaxe removed code (`git log -S/-G`) to flag a diff that silently reverts or re-breaks a previously-fixed bug (historical-regression class) — CodeGraph and the Codex cross-run read only current-state code and structurally cannot see it. Keep it a single prompt line, not a new lens (addition)
 
 ## Promoted
 
