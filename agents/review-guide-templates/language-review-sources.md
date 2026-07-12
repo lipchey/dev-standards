@@ -89,6 +89,12 @@ top of whichever section you loaded, on any stack.
   others? Both cause churn and staleness.
 - **Over-broad reads** — Check: does the code load a whole collection or file to
   use a slice? Push the filter/limit to the source (DB query, `readline`).
+- **Historical regression** — Check: blame the PRE-change lines
+  (`git blame <base> -L`) or pickaxe the removed code (`git log -S/-G`) — did a
+  prior commit deliberately set it the other way (a bug fix, a guard, a
+  workaround)? Re-breaking or reverting that intent is a regression the
+  current-state view — CodeGraph included — cannot see. Blaming the post-change
+  lines shows only this diff, not the intent it overwrites.
 
 ---
 

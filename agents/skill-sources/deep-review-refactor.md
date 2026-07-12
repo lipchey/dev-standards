@@ -103,6 +103,11 @@ Produce findings; change nothing. The runtime is six steps, in order:
 
 1. Context. Read `.agents/project-facts.md` (layer DAG, domain terms, sensitive
    and no-touch zones, known false positives), then `AGENTS.md` and `CLAUDE.md`.
+   For the changed hunks, also read their history — blame the PRE-change lines
+   (`git blame <base> -L`) or pickaxe the removed code (`git log -S/-G`) — since
+   a diff that reverts or re-breaks a line a prior fix-commit set is a
+   historical-regression finding (`language-review-sources.md` Cross-cutting)
+   that CodeGraph and current-state review structurally cannot see.
 2. Deterministic first. Run or inspect the existing deterministic reports -
    `./verify --fast` or `reports/quality/` - and never repeat a finding ESLint,
    `tsc`, Knip, dependency-cruiser, or gitleaks already owns. This skill is
