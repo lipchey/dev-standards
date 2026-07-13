@@ -65,3 +65,41 @@ export function stagedFiles(diffFilter = 'ACMR', cwd: string, timeoutMs?: number
     timeoutMs,
   );
 }
+
+/* fix-staged skips files that also appear here: formatting the whole working file then
+   `git add`-ing it would sweep unstaged hunks into the commit. */
+export function unstagedFiles(cwd: string, timeoutMs?: number): string[] {
+  return gitFileList(['diff', '--name-only', '-z'], cwd, timeoutMs);
+}
+
+/* `--` stops a path being parsed as an option; `--literal-pathspecs` stops a name with glob magic
+   (`a[b].ts`, `*`) from matching OTHER files — otherwise re-staging could sweep unrelated edits. */
+export function addPaths(paths: string[], cwd: string, timeoutMs?: number): void {
+  if (paths.length === 0) return;
+  gitFileList(['--literal-pathspecs', 'add', '--', ...paths], cwd, timeoutMs);
+}
+
+/* Of `paths`, only those the index records as a regular file (blob mode 100644/100755). A staged
+   symlink (120000) or gitlink (160000) is excluded so the formatter can't be handed a symlink whose
+   target lives outside the repo — writing through it would corrupt data `git checkout` cannot
+   restore. `git ls-files -s -z` prints "<mode> <sha> <stage>\t<path>" per NUL-separated record. */
+export function stagedRegularFiles(paths: string[], cwd: string, timeoutMs?: number): string[] {
+  if (paths.length === 0) return [];
+  const regular: string[] = [];
+  for (const entry of gitFileList(['--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...paths], cwd, timeoutMs)) {
+    const tab = entry.indexOf('\t');
+    const space = entry.indexOf(' ');
+    if (tab < 0 || space < 0) continue;
+    const mode = entry.slice(0, space);
+    if (mode === '100644' || mode === '100755') regular.push(entry.slice(tab + 1));
+  }
+  return regular;
+}
+
+/* Revert working-tree changes to the index for exactly these paths — the fix-staged rollback.
+   Lossless only because callers restrict it to files with no unstaged changes. `--literal-pathspecs`
+   keeps a glob-magic filename from reverting unrelated files. */
+export function restoreWorktree(paths: string[], cwd: string, timeoutMs?: number): void {
+  if (paths.length === 0) return;
+  gitFileList(['--literal-pathspecs', 'checkout', '--', ...paths], cwd, timeoutMs);
+}

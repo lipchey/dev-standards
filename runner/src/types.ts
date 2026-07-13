@@ -39,6 +39,13 @@ export interface Workspace {
   package_manager: 'npm' | 'pnpm' | 'yarn' | 'none';
 }
 
+/* `fileset` must be a git_staged fileset; runs only when policy.format_fix_staged_allowed is true. */
+export interface FormatConfig {
+  argv: string[];
+  fileset: string;
+  timeout_seconds: number;
+}
+
 export interface Manifest {
   version: 1;
   repo: string;
@@ -66,6 +73,7 @@ export interface Manifest {
     full: Check[];
     audit?: Check[];
   };
+  format?: FormatConfig;
   deep_review?: {
     enabled: boolean;
     trigger?: 'manual-only';

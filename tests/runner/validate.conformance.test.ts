@@ -393,6 +393,7 @@ test('schema declares root properties in canonical order', () => {
     'workspaces',
     'filesets',
     'tiers',
+    'format',
     'deep_review',
   ]);
 });

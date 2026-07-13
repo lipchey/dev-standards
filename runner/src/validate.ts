@@ -26,7 +26,10 @@ type RuleName =
   | 'check-name-unique'
   | 'workspace-name-unique'
   | 'glob-dialect'
-  | 'diff-filter-scope';
+  | 'diff-filter-scope'
+  | 'format-fileset-reference'
+  | 'format-fileset-source'
+  | 'format-fileset-filter';
 
 type UniquenessRule = 'fileset-name-unique' | 'check-name-unique' | 'workspace-name-unique';
 
@@ -54,7 +57,11 @@ const TOP_LEVEL_REQUIRED = [
   'filesets',
   'tiers',
 ] as const;
-const TOP_LEVEL_ALLOWED = [...TOP_LEVEL_REQUIRED, 'deep_review'] as const;
+const TOP_LEVEL_ALLOWED = [...TOP_LEVEL_REQUIRED, 'format', 'deep_review'] as const;
+const FORMAT_KEYS = ['argv', 'fileset', 'timeout_seconds'] as const;
+// A/C/M/R all resolve to an existing regular file; D/T/U/X/B would hand the formatter a
+// deleted, type-changed, or conflicted path, so a format fileset's filter must stay within these.
+const FORMAT_SAFE_FILTER = new Set(['A', 'C', 'M', 'R']);
 
 const BUDGET_KEYS = ['staged_seconds', 'fast_seconds', 'full_seconds', 'audit_seconds'] as const;
 const POLICY_KEYS = [
@@ -269,7 +276,20 @@ function validateStructure(root: Record<string, unknown>, errors: ValidationErro
   if (Object.hasOwn(root, 'workspaces')) validateWorkspaces(root['workspaces'], errors);
   if (Object.hasOwn(root, 'filesets')) validateFilesets(root['filesets'], errors);
   if (Object.hasOwn(root, 'tiers')) validateTiers(root['tiers'], errors);
+  if (Object.hasOwn(root, 'format')) validateFormat(root['format'], errors);
   if (Object.hasOwn(root, 'deep_review')) validateDeepReview(root['deep_review'], errors);
+}
+
+function validateFormat(value: unknown, errors: ValidationError[]): void {
+  const format = requireRecord(value, 'format', errors);
+  if (format === undefined) return;
+  requireKeys(format, 'format', FORMAT_KEYS, errors);
+  rejectUnknownKeys(format, 'format', FORMAT_KEYS, errors);
+  if (Object.hasOwn(format, 'argv')) validateStringArray(format['argv'], 'format.argv', 1, errors);
+  if (Object.hasOwn(format, 'fileset')) validateNonEmptyString(format['fileset'], 'format.fileset', errors);
+  if (Object.hasOwn(format, 'timeout_seconds')) {
+    validatePositiveInteger(format['timeout_seconds'], 'format.timeout_seconds', errors);
+  }
 }
 
 function validateVersion(value: unknown, errors: ValidationError[]): void {
@@ -518,7 +538,37 @@ function validateSemantics(root: Record<string, unknown>, errors: ValidationErro
   validateTierBudgets(root, errors);
   validateTierCheckSemantics(root, filesetNames, errors);
   validateFilesetSemantics(root, errors);
+  validateFormatSemantics(root, errors);
   validateWorkspaceUniqueness(root, errors);
+}
+
+function validateFormatSemantics(root: Record<string, unknown>, errors: ValidationError[]): void {
+  const format = root['format'];
+  if (!isRecord(format)) return;
+  const filesetName = format['fileset'];
+  if (typeof filesetName !== 'string') return; // structural pass already flagged a bad fileset name
+  const filesets = root['filesets'];
+  if (!isUnknownArray(filesets)) return; // filesets section broken; reference is uncheckable
+  const target = filesets.find((entry) => isRecord(entry) && entry['name'] === filesetName);
+  if (target === undefined || !isRecord(target)) {
+    addError(errors, 'format.fileset', 'format-fileset-reference',
+      `format.fileset references undeclared fileset "${filesetName}"`, filesetName);
+    return;
+  }
+  if (target['source'] !== 'git_staged') {
+    addError(errors, 'format.fileset', 'format-fileset-source',
+      `format.fileset "${filesetName}" must have source "git_staged"`, filesetName);
+  }
+  const diffFilter = target['diff_filter'];
+  if (typeof diffFilter === 'string') {
+    const unsafe = [...diffFilter].filter((letter) => !FORMAT_SAFE_FILTER.has(letter));
+    if (unsafe.length > 0) {
+      addError(errors, 'format.fileset', 'format-fileset-filter',
+        `format fileset "${filesetName}" diff_filter must use only A/C/M/R; the formatter cannot ` +
+          `run on ${unsafe.join('')} (deleted/type-changed/conflicted) paths`,
+        diffFilter);
+    }
+  }
 }
 
 function collectDeclaredFilesetNames(

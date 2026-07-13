@@ -8,6 +8,7 @@ import { runCheck } from './exec.ts';
 import { assertWithinBudget } from './budget.ts';
 import { writeReport } from './report.ts';
 import { doctor } from './doctor.ts';
+import { runFixStaged } from './fix-staged.ts';
 import { appendRunEvent, buildRunEvent, gitContext, resolveSinkPath } from './telemetry.ts';
 import type { Check, CheckResult, Manifest, TierName } from './types.ts';
 
@@ -48,8 +49,15 @@ function main(argv: string[]): number {
   }
 
   if (scope === 'fix-staged') {
-    process.stderr.write('fix-staged is reserved and not implemented in Phase 1a\n');
-    return EXIT_USAGE;
+    // Its own boundary (this runs before the tier try below): a git fault inside becomes a clean
+    // CLI error, never a stack trace.
+    try {
+      return runFixStaged(manifest, root);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`error running fix-staged: ${detail}\n`);
+      return 1;
+    }
   }
 
   // Tier runs touch git and reports; keep environment faults as clean stderr.
