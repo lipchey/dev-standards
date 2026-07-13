@@ -39,6 +39,7 @@ deleted - the history is the second-use evidence.
 
 ## Pending
 
+- [ ] 2026-07-13 ai-prompter repo-foundation T9 - docs/templates: generic prose hardcodes the `reports/quality` output path; consumers can relocate it via quality.json `paths.*` (ai-prompter now uses `.artifacts/reports/quality`) — reference `paths.reports`/`paths.baselines` instead of the literal (correction)
 - [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - runner: validate `{files:...}`-expanded operands against glob metacharacters (`[ ] * ?`) — ESLint treats CLI file args as globs, so a bracket-named staged file is silently mis-resolved (addition)
 - [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - runner: tier deadline equality boundary — `remainingMs()` floors sub-ms headroom to 0 and the budget assertion fires only on strictly-greater elapsed; make `left <= 0` a tier-level failure with regression coverage (addition)
 - [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - deep-review secret-scan: binary path contract mismatch (`tools/run-gitleaks` expected vs `.tools/gitleaks` consumers install) and catch-all errno treated as absence — unify the path contract and fail closed on anything but ENOENT (correction)
