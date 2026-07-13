@@ -140,6 +140,7 @@ const DEFAULT_PROJECT_FACTS = `# Project facts
 export interface QualityOpts {
   budgetSeconds?: number | undefined;
   noTouchGlobsRef?: string | undefined;
+  verifyEntry?: string | undefined;
 }
 
 /* A minimal VALID quality manifest with deep_review enabled for
@@ -156,6 +157,7 @@ export function qualityJson(opts: QualityOpts = {}): string {
     guides_dir: '.agents/review-guides',
   };
   if (opts.noTouchGlobsRef !== undefined) deepReview['no_touch_globs_ref'] = opts.noTouchGlobsRef;
+  if (opts.verifyEntry !== undefined) deepReview['verify_entry'] = opts.verifyEntry;
   const manifest = {
     version: 1,
     repo: 'e2e-fixture',
@@ -183,6 +185,9 @@ export interface CoreFixtureOpts {
   /* Verify-shim body, or null to OMIT the shim entirely (drives the spawn-fault ->
      infra-blocked case: the validation worktree has no `verify` to spawn). */
   verifyShim?: string | null;
+  /* Relocate the verify shim to this repo-relative path and set deep_review.verify_entry
+     to match (default: the shim is written at the root `verify`, no verify_entry key). */
+  verifyEntry?: string;
   projectFacts?: string;
   noTouchGlobsRef?: string;
   /* Extra committed files (rel -> content), staged into the initial commit. */
@@ -214,11 +219,11 @@ export function initCoreRepo(opts: CoreFixtureOpts = {}): Sandbox {
   initRepoDir(root, repo, env);
 
   writeFile(repo, '.gitignore', '/reports/\n');
-  writeFile(repo, 'quality.json', qualityJson({ budgetSeconds: opts.budgetSeconds, noTouchGlobsRef: opts.noTouchGlobsRef }));
+  writeFile(repo, 'quality.json', qualityJson({ budgetSeconds: opts.budgetSeconds, noTouchGlobsRef: opts.noTouchGlobsRef, verifyEntry: opts.verifyEntry }));
   writeFile(repo, '.agents/project-facts.md', opts.projectFacts ?? DEFAULT_PROJECT_FACTS);
   seedGuides(repo);
   writeFile(repo, 'src/app.ts', ORIGINAL);
-  if (opts.verifyShim !== null) writeExecutable(repo, 'verify', opts.verifyShim ?? GREEN_SHIM);
+  if (opts.verifyShim !== null) writeExecutable(repo, opts.verifyEntry ?? 'verify', opts.verifyShim ?? GREEN_SHIM);
   for (const [rel, content] of Object.entries(opts.extraFiles ?? {})) writeFile(repo, rel, content);
 
   git(repo, ['add', '-A'], env);

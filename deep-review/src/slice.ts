@@ -50,9 +50,6 @@ import type { Deadline } from './deadline.ts';
 // reconciliation trailer-scan (an engine-local git-trailer convention).
 export const SLICE_TRAILER_KEY = 'Deep-Review-Slice';
 
-// The verify shim's filename at a worktree root (mirrors ./verify).
-const VERIFY_ENTRY = 'verify';
-
 // Per git-spawn timeout cap (ms); the run deadline tightens it further per call.
 const GIT_CAP_MS = 120_000;
 
@@ -82,6 +79,9 @@ export interface SpawnResult {
 // SOLE findings writer (the confinement root is bound on `reportsRootAbs`).
 export interface SliceDeps {
   cwd: string;
+  // The config-resolved verify shim path (default `verify`), spawned in the throwaway
+  // validation worktree as `<tmp>/<entry>`.
+  entry: string;
   // The verified run descriptor (identity gate ran at the CLI edge). null only if
   // the gate was bypassed — the engine then fails closed.
   descriptor: RunDescriptor | null;
@@ -97,7 +97,7 @@ export interface SliceDeps {
     options: { cwd: string; input?: string; timeout?: number },
   ) => SpawnResult;
   runProcess: (input: { argv: string[]; cwd: string; timeoutMs: number }) => RunProcessResult;
-  // Wire the throwaway worktree's tooling so `<tmp>/verify` resolves (a consumer
+  // Wire the throwaway worktree's tooling so `<tmp>/<entry>` resolves (a consumer
   // worktree symlinks the main checkout's built dist / node_modules / .tools; a core
   // repo is a no-op).
   setupTooling: (wtPath: string) => void;
@@ -154,6 +154,7 @@ function defaultTmpWorktreePath(): string {
 export function realSliceDeps(cwd: string, ctx: DeepReviewContext, noTouchSet: readonly string[] = []): SliceDeps {
   return {
     cwd,
+    entry: ctx.verifyEntry,
     descriptor: ctx.descriptor,
     deadline: ctx.deadline,
     reportsRootAbs: ctx.reportsRootAbs,
@@ -419,7 +420,7 @@ function runValidation(deps: SliceDeps, delta: string, scope: '--fast' | '--full
     applyDelta(deps, tmp, delta);
     deps.setupTooling(tmp);
     const result = deps.runProcess({
-      argv: [path.join(tmp, VERIFY_ENTRY), scope],
+      argv: [path.join(tmp, deps.entry), scope],
       cwd: tmp,
       timeoutMs: deps.deadline.remainingMs(),
     });

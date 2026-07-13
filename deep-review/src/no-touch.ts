@@ -49,6 +49,10 @@ export interface BuildNoTouchSetDeps {
   // is optional, so an explicit `undefined` is accepted under
   // exactOptionalPropertyTypes).
   noTouchGlobsRef?: string | undefined;
+  /* The configured verify shim (deep_review.verify_entry, default `verify`). Added to the
+     baseline floor in EVERY mode so a relocated shim gets the same protection as the literal
+     `verify` baseline entry (see buildNoTouchSet). Omitted by legacy callers -> baseline only. */
+  verifyEntry?: string | undefined;
   /* Injected file read (the caller resolves repo-relative -> absolute). A throw
      (missing/unreadable) is caught: downgraded to the baseline alone in
      'review-only' mode, re-thrown as NoTouchSourceError in 'fix' mode. */
@@ -151,6 +155,12 @@ function realpathOfDeepestExisting(realpath: (p: string) => string, target: stri
  * outside repoRootAbs throws NoTouchSourceError in EITHER mode. */
 export function buildNoTouchSet(deps: BuildNoTouchSetDeps): string[] {
   const set = new Set<string>(NO_TOUCH_BASELINE);
+  // The configured verify shim is the engine's own gate; protect it in EVERY mode like the
+  // baseline `verify` literal — so a relocated shim (e.g. scripts/verify) can neither be
+  // classified fixable-now (which would deadlock handoff on a pending it can never commit) nor
+  // rewritten by a slice to `exit 0` and self-approve. Default `verify` is already in the
+  // baseline (deduped). Added to the seed so the review-only read-failure early return covers it.
+  if (deps.verifyEntry !== undefined) set.add(canonicalizeRef(deps.verifyEntry));
   const mode = deps.mode ?? 'review-only';
 
   const ref =
@@ -214,7 +224,8 @@ export function buildNoTouchSet(deps: BuildNoTouchSetDeps): string[] {
 // protected. Without this, a two-slice bypass is possible: slice #1 edits project-facts
 // to remove a no-touch zone, slice #2 then edits the now-unprotected file. These are
 // UNIONED into the fix-mode set at the CLI edge (never into NO_TOUCH_BASELINE, which the
-// review-only check-path shares). Returned as CANONICAL repo-relative globs.
+// review-only check-path shares). Returned as CANONICAL repo-relative globs. (The verify
+// shim is protected separately, in EVERY mode, via buildNoTouchSet's verifyEntry.)
 //
 // G2: the ref is canonicalized (fragment stripped, `.`/`..` collapsed, leading `./`
 // dropped) so a config value like `./.agents/project-facts.md` or

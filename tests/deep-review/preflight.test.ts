@@ -21,6 +21,7 @@ function cfg(over: Partial<DeepReviewConfig> = {}): DeepReviewConfig {
     guidesDir: '.agents/review-guides',
     noTouchGlobsRef: undefined,
     verifyAfterFix: undefined,
+    verifyEntry: 'verify',
     reportsDir: 'reports/quality',
     ...over,
   };

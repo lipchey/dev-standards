@@ -164,6 +164,7 @@ function validDeepReview(): NonNullable<Manifest['deep_review']> {
     modes: ['review-only', 'review-and-refactor'],
     budget: { seconds: 1800, tokens: null },
     verify_after_fix: '--fast',
+    verify_entry: 'scripts/verify',
     no_touch_globs_ref: '.agents/project-facts.md#no-touch-zones',
     guides_dir: '.agents/review-guides',
   };
@@ -236,4 +237,12 @@ test('deep_review.budget.seconds <= 0 fails at deep_review.budget.seconds', () =
   block.budget = { seconds: 0 };
   setDeepReview(manifest, block);
   expectError(validate(manifest), { path: 'deep_review.budget.seconds' });
+});
+
+test('deep_review.verify_entry empty string fails at deep_review.verify_entry with rule min-length', () => {
+  const manifest = makeManifest();
+  const block = validDeepReview();
+  (block as { verify_entry?: string }).verify_entry = '';
+  setDeepReview(manifest, block);
+  expectError(validate(manifest), { path: 'deep_review.verify_entry', rule: 'min-length' });
 });

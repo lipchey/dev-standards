@@ -62,6 +62,7 @@ function verifyDeps(over: Partial<VerifyDeps> & { shim?: SpawnResult; calls?: Re
   return {
     cwd: over.cwd ?? WORKTREE,
     scope: over.scope ?? '--fast',
+    entry: over.entry ?? 'verify',
     findingsPath: over.findingsPath ?? '/reports/findings.json',
     deadline: over.deadline ?? createDeadline(900),
     spawn: over.spawn ?? stubSpawn(over.shim ?? { status: 0, stdout: '', stderr: '' }, calls, over.head),
@@ -132,6 +133,14 @@ test('fixed argv from the worktree root: file = <cwd>/verify, args = [scope], cw
   assert.deepEqual(call.args, ['--full']);
   assert.equal(call.options.cwd, WORKTREE);
   assert.equal(typeof call.options.timeout, 'number', 'the spawn is deadline-bounded');
+});
+
+test('deps.entry drives the shim path: a non-default entry spawns <cwd>/<entry>, not a hardcoded verify', () => {
+  const calls: RecordedCall[] = [];
+  runFinalVerify(verifyDeps({ entry: 'scripts/verify', shim: { status: 1, stdout: '', stderr: '' }, calls }));
+  const call = calls.find((c) => c.file !== 'git');
+  assert.ok(call);
+  assert.equal(call.file, path.join(WORKTREE, 'scripts/verify'));
 });
 
 // ── F3 HEAD capture before spawn + F2 revision CAS ──────────────────────────────
@@ -321,12 +330,13 @@ test('F1/F2: a findings-lock held by a LIVE process surfaces as EXIT_FINDINGS_CO
   assert.equal(runCli(['verify', '--findings', fpath], cli.deps), EXIT_FINDINGS_CONFLICT);
 });
 
-test('realVerifyDeps wires cwd + scope + findingsPath + ctx deadline', () => {
+test('realVerifyDeps wires cwd + scope + findingsPath + ctx deadline + ctx verifyEntry', () => {
   const deadline = createDeadline(900);
-  const d = realVerifyDeps('/some/cwd', '--full', '/reports/f.json', { canonicalRoot: '/some/cwd', reportsRootAbs: '/reports', deadline, descriptor: null });
+  const d = realVerifyDeps('/some/cwd', '--full', '/reports/f.json', { canonicalRoot: '/some/cwd', reportsRootAbs: '/reports', deadline, descriptor: null, verifyEntry: 'scripts/verify' });
   assert.equal(d.cwd, '/some/cwd');
   assert.equal(d.scope, '--full');
   assert.equal(d.findingsPath, '/reports/f.json');
   assert.equal(d.deadline, deadline);
+  assert.equal(d.entry, 'scripts/verify');
   assert.equal(typeof d.mutate, 'function');
 });

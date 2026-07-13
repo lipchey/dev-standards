@@ -99,6 +99,7 @@ const DEEP_REVIEW_KEYS = [
   'modes',
   'budget',
   'verify_after_fix',
+  'verify_entry',
   'no_touch_globs_ref',
   'guides_dir',
 ] as const;
@@ -498,6 +499,9 @@ function validateDeepReview(value: unknown, errors: ValidationError[]): void {
   if (Object.hasOwn(deepReview, 'budget')) validateDeepReviewBudget(deepReview['budget'], errors);
   if (Object.hasOwn(deepReview, 'verify_after_fix')) {
     validateEnum(deepReview['verify_after_fix'], 'deep_review.verify_after_fix', DEEP_REVIEW_VERIFY, errors);
+  }
+  if (Object.hasOwn(deepReview, 'verify_entry')) {
+    validateNonEmptyString(deepReview['verify_entry'], 'deep_review.verify_entry', errors);
   }
   if (Object.hasOwn(deepReview, 'no_touch_globs_ref')) {
     validateNonEmptyString(deepReview['no_touch_globs_ref'], 'deep_review.no_touch_globs_ref', errors);

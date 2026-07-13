@@ -96,6 +96,62 @@ test('happy vertical: classify -> commit-slice (green, trailer) -> verify -> han
   }
 });
 
+test('relocated verify_entry (scripts/verify, no root verify): the slice validation AND the final gate spawn the configured shim end-to-end', () => {
+  const box = initCoreRepo({ verifyEntry: 'scripts/verify' });
+  try {
+    assert.equal(fs.existsSync(path.join(box.repo, 'verify')), false, 'no root verify shim — only scripts/verify exists');
+    const { worktree } = preparedRun(box);
+
+    // commit-slice runs the per-slice validation in a throwaway worktree; a GREEN "fixed"
+    // proves `<tmp>/scripts/verify` was found and executed (a missing shim -> infra-blocked).
+    const slice = runVerb(worktree, ['commit-slice', 'f-001', '--findings', FINDINGS_REL], box.env);
+    assert.equal(slice.status, EXIT_OK, `commit-slice failed: ${slice.stderr}`);
+    assert.equal(findingById(worktree, 'f-001')?.['status'], 'fixed');
+
+    // The final verify gate spawns `<worktree>/scripts/verify` and stamps on GREEN.
+    const ver = runVerb(worktree, ['verify', '--findings', FINDINGS_REL, '--scope', '--fast'], box.env);
+    assert.equal(ver.status, EXIT_OK, `verify failed: ${ver.stderr}`);
+    const record = JSON.parse(fs.readFileSync(path.join(worktree, FINDINGS_REL), 'utf8')) as { verification: { sha: string } | null };
+    assert.notEqual(record.verification, null, 'the relocated shim stamped a GREEN verification');
+  } finally {
+    cleanup(box);
+  }
+});
+
+test('relocated verify_entry: classify DEFERS a finding targeting scripts/verify as no-touch (review-only wiring — a fixable-now would deadlock handoff on a pending it can never commit)', () => {
+  const box = initCoreRepo({ verifyEntry: 'scripts/verify' });
+  try {
+    const worktree = selectWorktree(box.repo, box.env);
+    placeFindings(worktree, findingsFile([finding({ file: 'scripts/verify', slice_files: ['scripts/verify'] })]));
+    const cls = runVerb(worktree, ['classify', '--findings', FINDINGS_REL], box.env);
+    assert.equal(cls.status, EXIT_OK, cls.stderr);
+    assert.equal(findingById(worktree, 'f-001')?.['classification'], 'no-touch', 'the relocated shim is deferred, not fixable-now');
+    assert.equal(findingById(worktree, 'f-001')?.['status'], 'no-touch');
+  } finally {
+    cleanup(box);
+  }
+});
+
+test('relocated verify_entry: commit-slice REFUSES a slice targeting scripts/verify even against a lying findings file (fix-mode wiring — the gate cannot be rewritten to self-approve)', () => {
+  const box = initCoreRepo({ verifyEntry: 'scripts/verify' });
+  try {
+    const worktree = selectWorktree(box.repo, box.env);
+    const desc = readRunDescriptor(worktree, box.env);
+    placeFindings(
+      worktree,
+      findingsFile(
+        [finding({ file: 'scripts/verify', slice_files: ['scripts/verify'], classification: 'fixable-now', status: 'pending' })],
+        { run_id: desc.run_id, base_sha: desc.base_sha },
+      ),
+    );
+    const slice = runVerb(worktree, ['commit-slice', 'f-001', '--findings', FINDINGS_REL], box.env);
+    assert.equal(slice.status, EXIT_WRONG_STATE, slice.stderr);
+    assert.equal(findingById(worktree, 'f-001')?.['status'], 'pending', 'the engine never rewrites its own verify gate');
+  } finally {
+    cleanup(box);
+  }
+});
+
 test('out-of-slice dirty -> refuse (scope gate), no commit, no findings mutation', () => {
   const box = initCoreRepo();
   try {

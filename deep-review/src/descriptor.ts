@@ -38,6 +38,7 @@ export interface DeepReviewContext {
   reportsRootAbs: string; // realpath(resolve(root, paths.reports))
   deadline: Deadline;
   descriptor: RunDescriptor | null;
+  verifyEntry: string; // relative path of the verify shim spawned by the final gate + slice validation
 }
 
 // A descriptor-layer failure carrying a human-legible reason (surfaced by the caller as a §2.4

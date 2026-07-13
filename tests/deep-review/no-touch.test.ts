@@ -342,3 +342,31 @@ test('F4: the self-protected paths match as no-touch (a fix slice can never targ
   assert.equal(isNoTouch('quality.json', set), true, 'the manifest is no-touch in fix mode');
   assert.equal(isNoTouch('.agents/project-facts.md', set), true, 'the no-touch source file is no-touch in fix mode');
 });
+
+// ── verify_entry protection: the configured shim is baseline no-touch in EVERY mode ──
+
+test('a relocated verify_entry (scripts/verify) is no-touch in BOTH modes — parity with the baseline `verify`, so classify defers it AND a fix slice cannot rewrite the gate to self-approve', () => {
+  for (const mode of ['review-only', 'fix'] as const) {
+    const set = buildNoTouchSet({
+      verifyEntry: 'scripts/verify',
+      readFile: () => '',
+      warn: () => {},
+      mode,
+      repoRootAbs: '/repo',
+      realpath: (p) => p,
+    });
+    assert.equal(isNoTouch('scripts/verify', set), true, `scripts/verify is no-touch in ${mode}`);
+  }
+});
+
+test('verify_entry is canonicalized (a ./scripts/verify config value still matches the canonical slice path)', () => {
+  const set = buildNoTouchSet({
+    verifyEntry: './scripts/verify',
+    readFile: () => '',
+    warn: () => {},
+    mode: 'review-only',
+    repoRootAbs: '/repo',
+    realpath: (p) => p,
+  });
+  assert.equal(isNoTouch('scripts/verify', set), true, 'the leading ./ is stripped so it matches');
+});

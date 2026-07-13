@@ -47,6 +47,7 @@ function validDeepReview(): Record<string, unknown> {
     modes: ['review-only', 'review-and-refactor'],
     budget: { seconds: 1800, tokens: null },
     verify_after_fix: '--fast',
+    verify_entry: 'scripts/verify',
     no_touch_globs_ref: '.agents/project-facts.md#no-touch-zones',
     guides_dir: '.agents/review-guides',
   };
@@ -230,6 +231,15 @@ const batteryCases: readonly BatteryCase[] = [
     mutate: (m) => {
       const deepReview = validDeepReview();
       deepReview['budget'] = { seconds: 0 };
+      setDeepReview(m, deepReview);
+    },
+    expectValid: false,
+  },
+  {
+    label: 'deep_review-verify-entry-empty-invalid',
+    mutate: (m) => {
+      const deepReview = validDeepReview();
+      deepReview['verify_entry'] = '';
       setDeepReview(m, deepReview);
     },
     expectValid: false,

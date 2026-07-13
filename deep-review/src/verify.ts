@@ -8,7 +8,8 @@
 // MachineError naming step "verify".
 //
 // The shim spawn is the SAME §2 contract as before: FIXED ARGV (`[scope]`, scope ∈
-// {--fast,--full}), an ABSOLUTE entry path (`<cwd>/verify`), `cwd` = the worktree
+// {--fast,--full}), an ABSOLUTE entry path (`<cwd>/<verifyEntry>`, `verifyEntry` from
+// `deep_review.verify_entry`, default `verify`), `cwd` = the worktree
 // root, `shell: false`. Phase 5 adds exactly two deltas: (1) the spawn timeout is
 // bounded by the run deadline; (2) on GREEN the engine writes
 // `verification: {sha: HEAD, scope, completed_at}` through the sole findings mutator
@@ -26,9 +27,6 @@ import type { Deadline } from './deadline.ts';
 // Bound the machine-readable stderr_tail (mirrors slice.ts / worktree.ts / handoff.ts).
 const STDERR_TAIL_MAX = 2000;
 
-// The verify shim's filename at the worktree root (mirrors ./verify).
-const VERIFY_ENTRY = 'verify';
-
 // ── Effects seam ───────────────────────────────────────────────────────────────
 
 // The result of a fixed-argv spawn. `status` is the process exit code, or null when
@@ -40,14 +38,15 @@ export interface SpawnResult {
   stderr: string;
 }
 
-// The injected effects. `spawn` runs BOTH the verify shim (file = `<cwd>/verify`) and
+// The injected effects. `spawn` runs BOTH the verify shim (file = `<cwd>/<entry>`) and
 // the fixed-argv git HEAD read (file = `git`), never a shell; `scope` is the
-// ALREADY-VALIDATED scope flag the CLI resolved. `mutate` is the sole findings
-// writer; `findingsPath` is the run's findings file; `deadline` bounds the spawn;
-// `now` stamps `completed_at`.
+// ALREADY-VALIDATED scope flag the CLI resolved; `entry` is the config-resolved verify
+// shim path (default `verify`). `mutate` is the sole findings writer; `findingsPath` is
+// the run's findings file; `deadline` bounds the spawn; `now` stamps `completed_at`.
 export interface VerifyDeps {
   cwd: string;
   scope: '--fast' | '--full';
+  entry: string;
   findingsPath: string;
   deadline: Deadline;
   spawn: (file: string, args: readonly string[], options: { cwd: string; timeout?: number }) => SpawnResult;
@@ -97,6 +96,7 @@ export function realVerifyDeps(
   return {
     cwd,
     scope,
+    entry: ctx.verifyEntry,
     findingsPath,
     deadline: ctx.deadline,
     spawn: defaultSpawn,
@@ -143,7 +143,7 @@ function headReadError(error: unknown): VerifyResult {
 // Runs the final verify gate. The shim is spawned ONCE with fixed argv `[scope]`, an
 // ABSOLUTE entry path, cwd = the worktree root, shell:false, deadline-bounded.
 export function runFinalVerify(deps: VerifyDeps): VerifyResult {
-  const entry = path.join(deps.cwd, VERIFY_ENTRY);
+  const entry = path.join(deps.cwd, deps.entry);
 
   // §F3 capture HEAD + §F2 capture the findings revision BEFORE the shim spawn. The verify
   // verdict only holds for the tree at `preHead`; if HEAD moves while the shim runs (a

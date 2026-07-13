@@ -172,6 +172,7 @@ const redVerdict: RunProcessResult = { kind: 'red', exitCode: 1, stdout: '', std
 const opVerdict: RunProcessResult = { kind: 'operational', exitCode: null, stdout: '', stderrTail: 'spawn ENOENT' };
 
 interface DepsOver {
+  entry?: SliceDeps['entry'];
   runProcess?: SliceDeps['runProcess'];
   setupTooling?: SliceDeps['setupTooling'];
   tmpWorktreePath?: SliceDeps['tmpWorktreePath'];
@@ -196,6 +197,7 @@ function freshTmpPath(): string {
 function sliceDeps(repo: string, reports: string, over: DepsOver = {}): SliceDeps {
   return {
     cwd: repo,
+    entry: over.entry ?? 'verify',
     descriptor: over.descriptor === undefined ? dummyDescriptor({ initial_head_sha: head(repo) }) : over.descriptor,
     deadline: createDeadline(900),
     reportsRootAbs: reports,
@@ -312,6 +314,23 @@ test('test_ref resolution: verify:fast -> the validation run gets scope "--fast"
     assert.ok(seen[0]?.endsWith('/verify'), 'the verify shim is the argv[0]');
     assert.equal(seen[1], expected, `${ref} -> ${expected}`);
   }
+});
+
+test('deps.entry drives the validation shim path: a non-default entry becomes argv[0], not a hardcoded verify', () => {
+  const repo = repoWithEditedSlice();
+  const reports = reportsRoot();
+  const fpath = findingsPathIn(reports);
+  writeV2(fpath, validFile([validFinding()]));
+  let seen: string[] = [];
+  const deps = sliceDeps(repo, reports, {
+    entry: 'scripts/verify',
+    runProcess: (input) => {
+      seen = input.argv;
+      return okVerdict;
+    },
+  });
+  assert.equal(commitSlice('f-001', fpath, deps).exitCode, EXIT_OK);
+  assert.ok(seen[0]?.endsWith('/scripts/verify'), `entry threaded into argv[0], got ${seen[0]}`);
 });
 
 // ── Reconciliation (ancestry-bounded) ───────────────────────────────────────────
@@ -676,13 +695,14 @@ test('G6: a teardown failure on the GREEN path warns but still commits (verdict 
 
 // ── realSliceDeps wiring ────────────────────────────────────────────────────────
 
-test('realSliceDeps: threads cwd + ctx (descriptor/deadline/reportsRootAbs) + the no-touch set', () => {
+test('realSliceDeps: threads cwd + ctx (descriptor/deadline/reportsRootAbs/verifyEntry) + the no-touch set', () => {
   const deadline = createDeadline(900);
   const descriptor = dummyDescriptor();
-  const d = realSliceDeps('/some/cwd', { canonicalRoot: '/some/cwd', reportsRootAbs: '/some/reports', deadline, descriptor }, ['tools/**']);
+  const d = realSliceDeps('/some/cwd', { canonicalRoot: '/some/cwd', reportsRootAbs: '/some/reports', deadline, descriptor, verifyEntry: 'scripts/verify' }, ['tools/**']);
   assert.equal(d.cwd, '/some/cwd');
   assert.equal(d.reportsRootAbs, '/some/reports');
   assert.equal(d.descriptor, descriptor);
+  assert.equal(d.entry, 'scripts/verify');
   assert.deepEqual(d.noTouchSet, ['tools/**']);
   assert.equal(typeof d.runProcess, 'function');
   assert.equal(typeof d.mutate, 'function');

@@ -151,6 +151,7 @@ function buildContext(
     reportsRootAbs: resolve(env.cwd, config.reportsDir),
     deadline,
     descriptor,
+    verifyEntry: config.verifyEntry,
   };
 }
 
@@ -163,6 +164,7 @@ function buildContext(
 function buildSet(env: ResolvedEnv, config: DeepReviewConfig): string[] {
   return buildNoTouchSet({
     noTouchGlobsRef: config.noTouchGlobsRef,
+    verifyEntry: config.verifyEntry,
     readFile: (p: string): string => env.readFile(resolve(env.cwd, p)),
     warn: env.warn,
     mode: 'review-only',
@@ -177,10 +179,12 @@ function buildSet(env: ResolvedEnv, config: DeepReviewConfig): string[] {
 // the engine is about to edit the repo on the strength of this set). The ref is
 // confined under the realpath'd repo root in both directions. §F4: the engine's own
 // policy inputs (`quality.json` + the resolved no-touch source file) are UNIONED in as
-// no-touch, so a slice can never edit the files that define what is protected.
+// no-touch, so a slice can never edit the files that define what is protected. (The verify
+// shim is protected in every mode via buildNoTouchSet's verifyEntry, above.)
 function buildFixSet(env: ResolvedEnv, config: DeepReviewConfig): string[] {
   const set = buildNoTouchSet({
     noTouchGlobsRef: config.noTouchGlobsRef,
+    verifyEntry: config.verifyEntry,
     readFile: (p: string): string => env.readFile(resolve(env.cwd, p)),
     warn: env.warn,
     mode: 'fix',

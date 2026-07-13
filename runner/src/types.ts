@@ -80,6 +80,7 @@ export interface Manifest {
     modes?: Array<'review-only' | 'review-and-refactor'>;
     budget?: { seconds: number; tokens?: number | null };
     verify_after_fix?: '--fast' | '--full';
+    verify_entry?: string;
     no_touch_globs_ref?: string;
     guides_dir?: string;
   };
