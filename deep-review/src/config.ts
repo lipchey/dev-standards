@@ -13,18 +13,29 @@ import { loadManifest } from '../../runner/src/manifest.ts';
 const DEFAULT_BUDGET_SECONDS = 900;
 
 // verify_entry is spawned as path.join(cwd, entry) AND is protected as no-touch by
-// canonical repo-relative slash-path matching; an absolute, backslash-bearing, or
-// `..`-escaping value would spawn a binary outside the worktree and/or slip the no-touch
-// match (a `..\` / `C:\` value normalizes differently under path.win32 than the posix
-// slice paths the matcher compares against). The manifest schema only shape-checks
-// (non-empty string, mirroring paths.reports whose confinement is a runtime concern), so
-// reject the escape here, at the single projection point that owns the default. A backslash
-// is rejected outright: the verify shim toolchain is POSIX (bash), so no legitimate entry
-// needs one, and allowing it only reopens the win32 traversal ambiguity.
+// canonical repo-relative slash-path matching; reject anything that would spawn outside the
+// worktree or make the spawned path and the no-touch pattern disagree:
+//   - absolute / `..`-escaping -> spawns a binary outside the worktree, slips the match;
+//   - backslash -> `..\` / `C:\` normalizes differently under path.win32 than the posix
+//     slice paths the matcher compares against (the shim toolchain is POSIX bash, so no
+//     legitimate entry needs one);
+//   - trailing separator -> `path.posix.normalize` keeps it, so the no-touch pattern
+//     `scripts/verify/` never matches the slice path `scripts/verify`, and the spawned
+//     `<cwd>/scripts/verify/` fails with ENOTDIR (a silent verification gap).
+// The manifest schema only shape-checks (non-empty string, mirroring paths.reports whose
+// confinement is a runtime concern), so reject here — the single projection point that owns
+// the default. LIMITATION: the no-touch match is LEXICAL (like quality.json / the
+// project-facts ref / the baseline `verify`); a consumer that makes verify_entry a SYMLINK
+// to an unprotected in-repo file leaves that target editable — keep the shim a regular file.
 function requireRepoRelative(filePath: string, entry: string): string {
-  if (path.isAbsolute(entry) || entry.includes('\\') || entry.split('/').includes('..')) {
+  if (
+    path.isAbsolute(entry) ||
+    entry.includes('\\') ||
+    entry.endsWith('/') ||
+    entry.split('/').includes('..')
+  ) {
     throw new Error(
-      `manifest at ${filePath} is invalid: deep_review.verify_entry must be a repo-relative path without '..' segments or backslashes, got ${JSON.stringify(entry)}`,
+      `manifest at ${filePath} is invalid: deep_review.verify_entry must be a repo-relative path without '..' segments, backslashes, or a trailing slash, got ${JSON.stringify(entry)}`,
     );
   }
   return entry;

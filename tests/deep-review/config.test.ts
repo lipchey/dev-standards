@@ -88,7 +88,7 @@ test('deep_review with an explicit verify_entry -> loadConfig keeps it verbatim'
   }
 });
 
-for (const bad of ['/abs/verify', '../escape/verify', 'a/../../etc/verify', '..\\win\\verify', 'scripts\\verify']) {
+for (const bad of ['/abs/verify', '../escape/verify', 'a/../../etc/verify', '..\\win\\verify', 'scripts\\verify', 'scripts/verify/']) {
   test(`verify_entry that is absolute or escapes the worktree is rejected: ${bad}`, () => {
     const dir = mkdtempSync(join(tmpdir(), 'ds-config-'));
     try {
