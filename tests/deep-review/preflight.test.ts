@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runPreflight } from '../../deep-review/src/preflight.ts';
+import { loadReviewGuides } from '../../deep-review/src/guides.ts';
 import type { PreflightDeps } from '../../deep-review/src/preflight.ts';
 import type { DeepReviewConfig } from '../../deep-review/src/config.ts';
 import { REVIEW_GUIDE_TEMPLATES_DIR } from '../../deep-review/src/guides.ts';
@@ -166,4 +167,36 @@ test('an unavailable package template directory fails closed', () => {
   if (outcome.ok) return;
   assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
   assert.match(outcome.machineError.message, /canonical guide templates unavailable/);
+});
+
+test('guide load fails when a canonical template is missing or has a blank body', () => {
+  const names = [
+    'architecture-deepening.md',
+    'clean-architecture.md',
+    'core-code-guidelines.md',
+    'language-review-sources.md',
+    'refactoring-checklist.md',
+    'review-output-format.md',
+    'security-review.md',
+  ];
+  const withoutOne = loadReviewGuides('/no-overlay', {
+    templatesDir: '/templates',
+    listMarkdownFiles: () => names.slice(1),
+    readFile: () => 'body',
+  });
+  assert.equal(withoutOne.ok, false);
+
+  const withBlankBody = loadReviewGuides('/no-overlay', {
+    templatesDir: '/templates',
+    listMarkdownFiles: () => [...names],
+    readFile: (filePath) => (filePath.endsWith('core-code-guidelines.md') ? '  \n' : 'body'),
+  });
+  assert.equal(withBlankBody.ok, false);
+
+  const complete = loadReviewGuides('/no-overlay', {
+    templatesDir: '/templates',
+    listMarkdownFiles: () => [...names],
+    readFile: () => 'body',
+  });
+  assert.equal(complete.ok, true);
 });

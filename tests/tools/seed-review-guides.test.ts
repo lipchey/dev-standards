@@ -195,19 +195,19 @@ test('invalid roots, removed guide flags, and extra operands fail with usage sta
   });
 });
 
-test('atomic seeding removes only destination-specific stale temps', () => {
+test('seeding never deletes pre-existing temp-lookalike files - they are consumer-owned', () => {
   withRoot((root) => {
     const directory = path.join(root, INSTANCE_DOCS_REL);
     fs.mkdirSync(directory, { recursive: true });
     const firstName = FIRST_INSTANCE_DOC_NAME;
-    const staleTemp = path.join(directory, `${firstName}.tmp.${STALE_PROCESS_ID}`);
+    const consumerLookalike = path.join(directory, `${firstName}.tmp.${STALE_PROCESS_ID}`);
     const foreignLookalike = path.join(directory, 'draft.md.tmp.keep');
-    fs.writeFileSync(staleTemp, 'truncated');
+    fs.writeFileSync(consumerLookalike, 'consumer bytes');
     fs.writeFileSync(foreignLookalike, 'mine');
 
     const result = run([root]);
     assert.equal(result.status, EXIT_SUCCESS, result.stderr);
-    assert.equal(fs.existsSync(staleTemp), false);
+    assert.equal(fs.readFileSync(consumerLookalike, 'utf8'), 'consumer bytes');
     assert.equal(fs.readFileSync(foreignLookalike, 'utf8'), 'mine');
     assertInstanceDocContentsMatchTemplates(root);
   });

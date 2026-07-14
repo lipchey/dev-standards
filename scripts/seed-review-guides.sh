@@ -54,7 +54,10 @@ instance_docs_dir="$consumer_root_abs/$INSTANCE_DOCS_DIR_REL"
 
 # Lexical containment alone is not enough: a symlinked docs dir would route
 # writes (and check reads) outside the consumer — e.g. `.claude -> ~/.claude`
-# would seed into the user's global tooling.
+# would seed into the user's global tooling. Scope: this closes the PASSIVE
+# hazard (a pre-existing symlink). An ACTIVE racer swapping the dir between
+# check and write is accepted residual risk — anything positioned to run that
+# race already executes arbitrary code via the repo's hooks/npm scripts.
 require_docs_dir_confined() {
   if [ -L "$instance_docs_dir" ]; then
     echo "instance-doc dir is a symlink: $INSTANCE_DOCS_DIR_REL" >&2
@@ -130,6 +133,18 @@ seeded_count=0
 kept_count=0
 seeded_names=''
 
+# Only the temp THIS run created may ever be cleaned up: a name-pattern sweep
+# would delete consumer-owned lookalikes (`CHECKLIST.md.tmp.notes`) and a
+# concurrent seeder's live temp. The trap covers signal/unexpected exits;
+# every regular path clears the variable after its own rm.
+active_temporary_path=''
+cleanup_active_temporary() {
+  if [ -n "$active_temporary_path" ]; then
+    rm -f "$active_temporary_path"
+  fi
+}
+trap cleanup_active_temporary EXIT
+
 copy_if_absent() {
   source_path="$1"
   destination_path="$2"
@@ -139,31 +154,32 @@ copy_if_absent() {
     return
   fi
 
-  # Per-destination cleanup avoids deleting repo-owned files that merely resemble temps.
-  rm -f "$destination_path.tmp."* 2>/dev/null || true
   # mktemp (O_EXCL, random suffix) closes the pre-planted-temp race a
   # predictable `$$` name leaves open; the copy then writes only into a file
   # this run itself created.
   temporary_path=$(mktemp "$destination_path.tmp.XXXXXX") \
     || { echo "temp create failed: $display_name" >&2; exit "$EXIT_USAGE"; }
+  active_temporary_path="$temporary_path"
   if ! cp "$source_path" "$temporary_path"; then
-    rm -f "$temporary_path"
+    rm -f "$temporary_path"; active_temporary_path=''
     echo "copy failed: $display_name" >&2
     exit "$EXIT_USAGE"
   fi
   chmod 644 "$temporary_path"
-  # No-clobber publish: a destination that appeared after the absence check is
-  # consumer-owned and must win; BSD/GNU `mv -n` both exit 0 on skip, so the
-  # surviving temp is the only signal the publish lost the race.
-  if ! mv -n "$temporary_path" "$destination_path"; then
-    rm -f "$temporary_path"
+  # link(2) is the portable ATOMIC no-clobber publish: `mv -n` re-checks then
+  # renames, so a destination created between its check and the rename is
+  # silently overwritten. ln either publishes or fails; a destination that
+  # appeared after the absence check is consumer-owned and wins.
+  if ln "$temporary_path" "$destination_path" 2>/dev/null; then
+    rm -f "$temporary_path"; active_temporary_path=''
+  else
+    rm -f "$temporary_path"; active_temporary_path=''
+    if [ -e "$destination_path" ] || [ -L "$destination_path" ]; then
+      kept_count=$((kept_count + 1))
+      return
+    fi
     echo "publish failed: $display_name" >&2
     exit "$EXIT_USAGE"
-  fi
-  if [ -e "$temporary_path" ] || [ -L "$temporary_path" ]; then
-    rm -f "$temporary_path"
-    kept_count=$((kept_count + 1))
-    return
   fi
   seeded_count=$((seeded_count + 1))
   if [ -n "$seeded_names" ]; then

@@ -7,6 +7,18 @@ import { join } from 'node:path';
 const PACKAGE_ROOT_URL = new URL('../../', import.meta.url);
 const BODY_SEPARATOR = '\n\n';
 
+/* The seven-guide contract: a partial or blank-body checkout must fail preflight,
+   not silently review with a thinner rulebook. */
+export const REQUIRED_TEMPLATE_NAMES = [
+  'architecture-deepening.md',
+  'clean-architecture.md',
+  'core-code-guidelines.md',
+  'language-review-sources.md',
+  'refactoring-checklist.md',
+  'review-output-format.md',
+  'security-review.md',
+] as const;
+
 export const REVIEW_GUIDE_TEMPLATES_DIR = join(
   fileURLToPath(PACKAGE_ROOT_URL),
   'agents',
@@ -72,16 +84,21 @@ export function loadReviewGuides(
   } catch {
     return { ok: false, templatesDir: templatesDirectory };
   }
-  if (templateNames.length === 0) return { ok: false, templatesDir: templatesDirectory };
+  const availableNames = new Set(templateNames);
+  for (const requiredName of REQUIRED_TEMPLATE_NAMES) {
+    if (!availableNames.has(requiredName)) return { ok: false, templatesDir: templatesDirectory };
+  }
 
   const guidesByName = new Map<string, LoadedReviewGuide>();
   try {
     for (const templateName of templateNames) {
       const templatePath = join(templatesDirectory, templateName);
+      const templateBody = readFile(templatePath);
+      if (templateBody.trim() === '') return { ok: false, templatesDir: templatesDirectory };
       mergeSource(guidesByName, templateName, {
         kind: 'package-template',
         path: templatePath,
-        body: readFile(templatePath),
+        body: templateBody,
       });
     }
   } catch {
