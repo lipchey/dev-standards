@@ -18,6 +18,10 @@ export default tseslint.config(
   ...frontend({ files: ["apps/web/**/*.tsx", "apps/site/**/*.tsx"] }),
   ...frontendVite({ files: ["apps/web/**/*.tsx"] }),
   ...frontendNext({ files: ["apps/site/**/*.tsx"] }),
+  ...constantsHome({
+    files: ["packages/*/src/**/*.ts", "apps/*/src/**/*.{ts,tsx}"],
+    ignores: ["**/src/constants/**", "**/constants.ts", "**/*.d.ts"],
+  }),
   { /* repo-local overrides: no-restricted-imports boundaries, etc. */ },
 );
 ```

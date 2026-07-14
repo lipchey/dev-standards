@@ -147,6 +147,24 @@ test('consumer worktree reuse: a SYMLINKED dist (left by the pre-copy engine) is
   }
 });
 
+test('consumer worktree reuse: a gutted dist (empty dir, no bundle/stamp) is refused as stale tooling', () => {
+  const box = initConsumerRepo({ stampFresh: true });
+  try {
+    assert.equal(runVerb(box.repo, ['select-worktree', '--slug', 'e2e'], box.env).status, EXIT_OK);
+    const dist = path.join(box.worktreePath, 'vendor/dev-standards/runner/dist');
+    /* Gut the snapshot: a real dir that exists but carries neither the bundle entrypoint nor a
+       stamp must be refused at reuse instead of surfacing later as a confusing verify exit 127. */
+    fs.rmSync(dist, { recursive: true, force: true });
+    fs.mkdirSync(dist, { recursive: true });
+
+    const res = runVerb(box.repo, ['select-worktree', '--slug', 'e2e'], box.env);
+    assert.equal(res.status, EXIT_WRONG_STATE, res.stdout || res.stderr);
+    assert.match(res.stderr, /stale tooling/);
+  } finally {
+    cleanup(box);
+  }
+});
+
 test('consumer worktree, STALE build stamp -> loud failure with bootstrap instruction + rollback', () => {
   const box = initConsumerRepo({ stampFresh: false });
   try {

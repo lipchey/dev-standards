@@ -22,7 +22,8 @@ function isPrimitiveLiteralInit(node) {
   if (!node) return false;
   if (node.type === "TSAsExpression") return isPrimitiveLiteralInit(node.expression);
   if (node.type === "Literal") {
-    if ("regex" in node) return false; // a regex literal is not a value constant
+    /* a regex literal is not a value constant */
+    if ("regex" in node) return false;
     const kind = typeof node.value;
     return kind === "number" || kind === "string" || kind === "boolean";
   }

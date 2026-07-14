@@ -33,8 +33,8 @@ mutate mid-run.
    the tier that judges the merge. Set in `deep-review/src/cli.ts` (verify scope
    fallback) and `templates/consumer/quality.starter.json`
    (`deep_review.verify_after_fix`); the config key still overrides per repo.
-2. **Copy, not symlink, the worktree dist** (landed on branch W1,
-   `deep-review/src/worktree.ts`). The run worktree receives its own copied `dist/`,
+2. **Copy, not symlink, the worktree dist** (`deep-review/src/worktree.ts`,
+   `setupWorktreeTooling`). The run worktree receives its own copied `dist/`,
    not a symlink into the main checkout, so the fix phase verifies against a frozen
    build isolated from concurrent rebuilds.
 3. **Same-lens fix-diff review** (skill body `deep-review-refactor.md`): before

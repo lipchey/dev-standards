@@ -68,8 +68,10 @@ const COPY_TARGETS = [
   { rel: 'vendor/dev-standards/runner/dist', entrypoint: 'verify-runner.mjs' },
   { rel: 'vendor/dev-standards/deep-review/dist', entrypoint: 'deep-review-runner.mjs' },
 ] as const;
-// node_modules / .tools are pin-INDEPENDENT (a re-bootstrap at another pin never rewrites them), so
-// they stay symlinks to the main checkout.
+// node_modules / .tools stay symlinks to the main checkout: they are usually stable across pins
+// (package-lock rarely moves between them), unlike the dists a re-bootstrap always rewrites. A
+// concurrent root `npm ci` IS still a shared-mutation window through these links — accepted
+// trade-off; per-worktree install is the upgrade path if it ever bites.
 const SYMLINK_TARGETS = ['node_modules', '.tools'] as const;
 
 // The engine's OWN worktree-tooling footprint as it appears in `git status` at the
@@ -441,16 +443,22 @@ export function setupWorktreeTooling(deps: WorktreeDeps, wtPath: string): void {
 }
 
 // Reuse-time liveness: the symlinked tooling must still resolve (a consumer worktree whose main
-// checkout moved would have dangling symlinks) AND each dist must be a COPIED real dir. A SYMLINKED
-// dist is tooling from the PRE-COPY engine, still exposed to the concurrent-bootstrap race, so it is
-// STALE — refuse reuse. A repo with no gitlink is trivially alive.
+// checkout moved would have dangling symlinks) AND each dist must be a USABLE copied snapshot —
+// a real (non-symlink) dir whose bundle entrypoint exists and whose stamp equals this worktree's
+// pin. A SYMLINKED dist is tooling from the PRE-COPY engine, still exposed to the concurrent-
+// bootstrap race — and it would pass the entrypoint/stamp probes THROUGH the link, so the lstat
+// check stays first. An empty dir, a stray file, or a stale/missing stamp is equally dead —
+// refusing here beats a confusing verify exit 127 later. A repo with no gitlink is trivially alive.
 function toolingAlive(deps: WorktreeDeps, wtPath: string): boolean {
   const pinned = pinnedSubmoduleSha(deps, wtPath);
   if (pinned === null) return true;
   const symlinksResolve = SYMLINK_TARGETS.every((rel) => deps.existsSync(path.join(wtPath, rel)));
   const distsAreSnapshots = COPY_TARGETS.every((t) => {
     const distPath = path.join(wtPath, t.rel);
-    return deps.existsSync(distPath) && !isSymlinkPath(deps, distPath);
+    if (!deps.existsSync(distPath) || isSymlinkPath(deps, distPath)) return false;
+    if (!deps.existsSync(path.join(distPath, t.entrypoint))) return false;
+    const stamp = (readFileMaybe(deps, path.join(distPath, DIST_STAMP)) ?? '').trim();
+    return stamp === pinned;
   });
   return symlinksResolve && distsAreSnapshots;
 }

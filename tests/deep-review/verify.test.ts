@@ -185,7 +185,7 @@ test('F2: verify threads the pre-spawn findings revision into the stamp mutate',
   assert.equal(seen, 7, 'the stamp write is CAS-guarded on the pre-spawn revision');
 });
 
-// ── CLI scope resolution (--scope ?? deep_review.verify_after_fix ?? --fast) ──────
+// ── CLI scope resolution (--scope ?? deep_review.verify_after_fix ?? --full) ──────
 
 const REPO_QUALITY = fileURLToPath(new URL('../../quality.json', import.meta.url));
 

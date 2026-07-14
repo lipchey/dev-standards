@@ -221,6 +221,13 @@ The no-touch set is the UNION of two parts:
 A path in either set is never edited - it is emitted as a plan instead.
 `.claude/project-facts.md` can only extend the baseline, never shrink it.
 
+Consumers SHOULD list their POLICY SOURCES - `.claude/code-conventions.md`,
+`.claude/project-facts.md` itself, `.claude/CHECKLIST.md`, and the
+`deep_review.guides_dir` overlay dir - in their No-Touch Zones: the fix phase's
+self-review judges by them, so a fix slice must never be able to weaken the
+policy it is judged against. (Baking these into the skill-owned baseline is
+tracked in BACKLOG.md.)
+
 ## Landing is not the skill's job (ADR-012)
 
 The skill never merges to base itself. Its autonomy ends at a committed worktree

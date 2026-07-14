@@ -48,6 +48,14 @@ test(`flags a TS as-const primitive literal (${RULE_ID})`, () => {
   assert.ok(flagged("const TIMEOUT = 500 as const;"));
 });
 
+test(`flags a boolean literal const (${RULE_ID})`, () => {
+  assert.ok(flagged("const ENABLED = true;"));
+});
+
+test(`flags a unary-plus numeric literal const (${RULE_ID})`, () => {
+  assert.ok(flagged("const OFFSET = +1;"));
+});
+
 // ── GREEN: the review-owned ceilings and legitimate homes ───────────────────────
 
 test("derived (arithmetic) initializer is not flagged", () => {

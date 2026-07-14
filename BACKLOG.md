@@ -133,3 +133,25 @@ Independent of the in-flight core-hardening batch (which already leaves
   `.built-from` stamp is **insufficient** for core — active core dev changes
   HEAD on every commit and leaves uncommitted edits, so a content-fingerprint
   of build inputs is needed, not a revision stamp. Owned by Phase 6 §5.
+
+## Deep-review hardening backlog (2026-07-14 systemic-gaps Gate C, non-blocking)
+
+- **Bake policy sources into the engine no-touch baseline.** `no-touch.ts`
+  protects the executable surface but not the policy the new self-review gate
+  judges by (`.claude/code-conventions.md`, `.claude/project-facts.md`, the
+  `deep_review.guides_dir` overlays): a fix slice could weaken policy before
+  judging itself. Interim: consumers list those paths in their project-facts
+  No-Touch Zones (pilot does as of the v0.14.0 adoption). Fix: add them to the
+  skill-owned baseline + attempted-policy-edit slice tests.
+- **Same-pin rebuild window in the dist snapshot.** `snapshotDist` stamps are
+  `rev-parse HEAD`; a concurrent re-bootstrap at the SAME pin (e.g. dirty-tree
+  rebuild) can swap bundle content mid-copy without moving the stamp. Needs a
+  bootstrap/copy lock or a content fingerprint (same mechanism as the core
+  verify freshness item above). Documented ceiling in `snapshotDist`.
+- **Persist the fix-diff self-review verdict.** The skill's final self-review
+  is orchestrator prose; a standing violation has no engine state, so nothing
+  mechanically blocks a later `verify`+`handoff`. Fix: a self-review verdict
+  bound to HEAD in the findings file, required green by `verify`/`handoff`.
+- **node_modules/.tools symlinks are a shared-mutation window.** Root `npm ci`
+  in a concurrent bootstrap rebuilds them under a running worktree. Accepted
+  trade-off (documented at `SYMLINK_TARGETS`); per-worktree install if it bites.
