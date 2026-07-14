@@ -240,3 +240,39 @@ test('a failing copy publishes no partial file or temp and a later seed recovers
     }
   });
 });
+
+test('check rejects non-regular docs: directory and dangling symlink read as missing', () => {
+  withRoot((root) => {
+    assert.equal(run([root]).status, EXIT_SUCCESS);
+    const directory = path.join(root, INSTANCE_DOCS_REL);
+    fs.rmSync(path.join(directory, FIRST_INSTANCE_DOC_NAME));
+    fs.mkdirSync(path.join(directory, FIRST_INSTANCE_DOC_NAME));
+    fs.rmSync(path.join(directory, SECOND_INSTANCE_DOC_NAME));
+    fs.symlinkSync(path.join(root, 'nowhere.md'), path.join(directory, SECOND_INSTANCE_DOC_NAME));
+
+    const result = run([root, '--check']);
+    assert.equal(result.status, EXIT_INCOMPLETE);
+    assert.match(result.stderr, new RegExp(`missing instance doc: ${FIRST_INSTANCE_DOC_NAME}`));
+    assert.match(result.stderr, new RegExp(`missing instance doc: ${SECOND_INSTANCE_DOC_NAME}`));
+  });
+});
+
+test('a symlinked instance-docs dir is rejected in both modes and nothing is written through it', () => {
+  withRoot((root) => {
+    const outsideTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-outside-'));
+    try {
+      fs.symlinkSync(outsideTarget, path.join(root, INSTANCE_DOCS_REL));
+
+      const seedResult = run([root]);
+      assert.equal(seedResult.status, EXIT_USAGE);
+      assert.match(seedResult.stderr, /instance-doc dir is a symlink/);
+      assert.deepEqual(fs.readdirSync(outsideTarget), []);
+
+      const checkResult = run([root, '--check']);
+      assert.equal(checkResult.status, EXIT_USAGE);
+      assert.match(checkResult.stderr, /instance-doc dir is a symlink/);
+    } finally {
+      fs.rmSync(outsideTarget, { recursive: true, force: true });
+    }
+  });
+});

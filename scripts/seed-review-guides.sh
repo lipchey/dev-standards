@@ -52,6 +52,27 @@ case "$INSTANCE_DOCS_DIR_REL" in
 esac
 instance_docs_dir="$consumer_root_abs/$INSTANCE_DOCS_DIR_REL"
 
+# Lexical containment alone is not enough: a symlinked docs dir would route
+# writes (and check reads) outside the consumer — e.g. `.claude -> ~/.claude`
+# would seed into the user's global tooling.
+require_docs_dir_confined() {
+  if [ -L "$instance_docs_dir" ]; then
+    echo "instance-doc dir is a symlink: $INSTANCE_DOCS_DIR_REL" >&2
+    exit "$EXIT_USAGE"
+  fi
+  if [ -d "$instance_docs_dir" ]; then
+    resolved_docs_dir=$(cd "$instance_docs_dir" && pwd -P) \
+      || { echo "instance-doc dir unreadable: $INSTANCE_DOCS_DIR_REL" >&2; exit "$EXIT_USAGE"; }
+    case "$resolved_docs_dir" in
+      "$consumer_root_abs"|"$consumer_root_abs"/*) ;;
+      *)
+        echo "instance-doc dir escapes consumer-root: $resolved_docs_dir" >&2
+        exit "$EXIT_USAGE"
+        ;;
+    esac
+  fi
+}
+
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
 agents_templates_dir=$(cd "$script_dir/../agents" 2>/dev/null && pwd -P) \
   || { echo "templates dir not found: $script_dir/../agents" >&2; exit "$EXIT_USAGE"; }
@@ -79,12 +100,15 @@ while [ "$instance_index" -lt "$instance_doc_count" ]; do
 done
 
 if [ "$check_mode" = true ]; then
+  require_docs_dir_confined
   missing_count=0
   instance_index=0
   while [ "$instance_index" -lt "$instance_doc_count" ]; do
     instance_name=${instance_destination_names[$instance_index]}
     destination_path="$instance_docs_dir/$instance_name"
-    if [ ! -e "$destination_path" ] && [ ! -L "$destination_path" ]; then
+    # [ -f ] dereferences: a consumer-owned symlink to a real file passes,
+    # while a directory, FIFO or dangling symlink must fail the gate.
+    if [ ! -f "$destination_path" ]; then
       echo "missing instance doc: $instance_name" >&2
       missing_count=$((missing_count + 1))
     fi
@@ -99,7 +123,9 @@ if [ "$check_mode" = true ]; then
   exit 0
 fi
 
+require_docs_dir_confined
 mkdir -p "$instance_docs_dir"
+require_docs_dir_confined
 seeded_count=0
 kept_count=0
 seeded_names=''
@@ -115,16 +141,29 @@ copy_if_absent() {
 
   # Per-destination cleanup avoids deleting repo-owned files that merely resemble temps.
   rm -f "$destination_path.tmp."* 2>/dev/null || true
-  temporary_path="$destination_path.tmp.$$"
+  # mktemp (O_EXCL, random suffix) closes the pre-planted-temp race a
+  # predictable `$$` name leaves open; the copy then writes only into a file
+  # this run itself created.
+  temporary_path=$(mktemp "$destination_path.tmp.XXXXXX") \
+    || { echo "temp create failed: $display_name" >&2; exit "$EXIT_USAGE"; }
   if ! cp "$source_path" "$temporary_path"; then
     rm -f "$temporary_path"
     echo "copy failed: $display_name" >&2
     exit "$EXIT_USAGE"
   fi
-  if ! mv "$temporary_path" "$destination_path"; then
+  chmod 644 "$temporary_path"
+  # No-clobber publish: a destination that appeared after the absence check is
+  # consumer-owned and must win; BSD/GNU `mv -n` both exit 0 on skip, so the
+  # surviving temp is the only signal the publish lost the race.
+  if ! mv -n "$temporary_path" "$destination_path"; then
     rm -f "$temporary_path"
     echo "publish failed: $display_name" >&2
     exit "$EXIT_USAGE"
+  fi
+  if [ -e "$temporary_path" ] || [ -L "$temporary_path" ]; then
+    rm -f "$temporary_path"
+    kept_count=$((kept_count + 1))
+    return
   fi
   seeded_count=$((seeded_count + 1))
   if [ -n "$seeded_names" ]; then
