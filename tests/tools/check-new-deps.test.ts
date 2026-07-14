@@ -241,6 +241,12 @@ test('evaluate: a dep removal carrying a lockfileVersion-2 lockfile is operation
   );
 });
 
+test('evaluate: a valid-JSON but non-object staged manifest is operational (not a silent ok)', () => {
+  for (const bad of [[], 'x', 42, true] as unknown[]) {
+    assert.throws(() => evaluate({ stagedManifest: bad }), OperationalError);
+  }
+});
+
 test('evaluate: a lockfile whose packages is missing or non-object is operational', () => {
   assert.throws(
     () => evaluate({ stagedManifest: { dependencies: {} }, stagedLockfile: { lockfileVersion: 3 }, lockfileStaged: true }),

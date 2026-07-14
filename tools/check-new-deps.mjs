@@ -19,8 +19,8 @@
  *
  * Exit contract: 0 = ok / nothing to check; 1 = findings (one
  * `check-new-deps: <message>` line each on stdout); 2 = operational failure
- * (git error incl. not-a-repo, unparseable manifest/lockfile JSON,
- * lockfileVersion !== 3, malformed `packages`) — message on stderr, blocks in
+ * (git error incl. not-a-repo, unparseable or non-object manifest/lockfile
+ * JSON, lockfileVersion !== 3, malformed `packages`) — message on stderr, blocks in
  * ANY mode, never a silent pass. Not `bypassable`: a process-global bypass
  * reason must not silence a supply-chain finding.
  *
@@ -133,6 +133,13 @@ export function evaluate({
   const findings = [];
   if (lockfileStaged) assertLockfileShape(stagedLockfile);
   if (stagedManifest === null || stagedManifest === undefined) return findings;
+  /* D5 symmetry: a valid-JSON-but-non-object manifest (`[]`, `"x"`, `42`) is
+     malformed. Without this it slips past — `section()` coerces a non-object to
+     `{}`, so zero new deps are found and the tool prints "ok", contradicting the
+     stated "unparseable/non-object manifest is operational" contract. */
+  if (typeof stagedManifest !== 'object' || Array.isArray(stagedManifest)) {
+    throw new OperationalError('staged package.json is not a JSON object');
+  }
 
   const base = baseManifest ?? {};
   const baseNames = baseNameSet(base);
