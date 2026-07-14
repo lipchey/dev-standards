@@ -53,8 +53,13 @@ prints one stderr warning and moves on. Because that warning is easy to miss,
 `./verify --doctor` prints the resolved sink path and flags an unwritable sink.
 
 The event's `reason` field carries env-provided free text (`DS_BYPASS_REASON`, spawn
-errno), truncated to 200 chars. **Keep no secrets in `DS_BYPASS_REASON`** — it is
-persisted to the log verbatim.
+errno). `DS_BYPASS_REASON` is sanitized once at its ingestion point
+(`runner/src/redact.ts`, redact-then-cap): it is best-effort secret-redacted against a
+deterministic pattern deny-list, then capped to 200 chars — *before* it fans out, so
+both sinks (the persisted verify report and the telemetry event) receive the
+already-sanitized value; the telemetry-side 200-char cap stays as defense-in-depth for
+reasons of any origin. The deny-list is best-effort, not a full scanner, so **keep no
+secrets in `DS_BYPASS_REASON`** — redaction is insurance, not permission.
 
 Two readers sit over that sink. For a calibration session use the text report
 (`node tools/quality-stats.mjs`). For a "how are the gates doing" glance, generate the

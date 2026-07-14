@@ -92,6 +92,30 @@ test('an undeclared nonzero exit still bypasses normally (operational rung leave
   assert.equal(result.exitCode, 2);
 });
 
+// Bug caught: a secret pasted into DS_BYPASS_REASON reaching the report/telemetry verbatim —
+// ingestion-point redaction (N3) means the relaxed finding's reason is already sanitized.
+// Token is runtime-built (pilot gitleaks scans the vendored core tree, tests included).
+test('reason with a token-shaped string is redacted at ingestion', () => {
+  const token = ['ghp', 'a'.repeat(28)].join('_');
+  const result = withBypassReason(`pushing hotfix, token ${token} in env`, () =>
+    runCheck(input(check([process.execPath, stub('fail.mjs')], { bypassable: true }))),
+  );
+  assert.equal(result.status, 'bypassed');
+  assert.ok(result.reason?.includes('[REDACTED]'));
+  assert.ok(!result.reason?.includes('ghp_'));
+});
+
+// Bug caught: an over-length reason bloating the persisted report — the 200-char cap now applies
+// at ingestion, not only in the telemetry sink copy.
+test('reason longer than 200 chars is capped at ingestion', () => {
+  const long = 'reason '.repeat(50); // 350 benign chars
+  const result = withBypassReason(long, () =>
+    runCheck(input(check([process.execPath, stub('fail.mjs')], { bypassable: true }))),
+  );
+  assert.equal(result.status, 'bypassed');
+  assert.ok((result.reason?.length ?? 0) <= 200);
+});
+
 // Bug caught: a SIGKILLed check (no exit code) collapsing into a plain fail that could be bypassed.
 test('signal-killed child (null exit) is status error, never bypassed', () => {
   const result = withBypassReason('trust me', () =>

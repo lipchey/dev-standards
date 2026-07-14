@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { CheckResult } from './types.ts';
+import { BYPASS_REASON_MAX } from './redact.ts';
 
 /* Effectiveness telemetry: one append-only JSONL line per verify run, home-dir sunk
    and fail-open (see docs/effectiveness-plan.md §1/§2). Deliberately simpler than
@@ -22,8 +23,10 @@ export interface RunEvent {
   results: CheckResult[];
 }
 
-// env-provided free text (DS_BYPASS_REASON, spawn errno) is length-capped in the event copy.
-const REASON_MAX = 200;
+/* Primary redact+cap of DS_BYPASS_REASON happens at ingestion (redact.ts / exec.ts). This
+   sink-side cap is defense-in-depth: telemetry serializes CheckResults of ANY origin (spawn
+   errno reasons, results never routed through the bypass ingestion path), so it reuses the
+   single-owner BYPASS_REASON_MAX rather than trusting the value to have been bounded upstream. */
 const GIT_TIMEOUT_MS = 2000;
 
 /* DS_TELEMETRY_PATH: unset (or empty) → default home-dir sink; the literal "off" →
@@ -42,8 +45,8 @@ export function resolveSinkPath(env: NodeJS.ProcessEnv = process.env): string | 
    (report.ts still persists the full reason). */
 export function buildRunEvent(fields: Omit<RunEvent, 'v'>): RunEvent {
   const results = fields.results.map((r) =>
-    r.reason !== undefined && r.reason.length > REASON_MAX
-      ? { ...r, reason: r.reason.slice(0, REASON_MAX) }
+    r.reason !== undefined && r.reason.length > BYPASS_REASON_MAX
+      ? { ...r, reason: r.reason.slice(0, BYPASS_REASON_MAX) }
       : r,
   );
   return { v: 1, ...fields, results };

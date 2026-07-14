@@ -120,8 +120,15 @@ Bypass-семантика (передумова) ВИКОНАНА: `runner/src/e
 непорожній `DS_BYPASS_REASON` і повертає `status:'bypassed'` + `reason`; звіт
 персистить повний `CheckResult`, тож reason зберігається цілим
 (`report.ts:18-20`); 7 тестів у `tests/runner/exec.bypass.test.ts`.
-Статус 4.1: tool done, wiring done (пілот); лишилось N3 — reason cap+redact/scan
-hardening на обох sink-ах (див. N3 адопшн-плану) і калібрування.
+Статус 4.1: tool done, wiring done (пілот), hardening done (N3 2026-07-14):
+`DS_BYPASS_REASON` санітизується в точці інгесту (`runner/src/redact.ts`,
+redact→cap 200) — обидва sink-и (звіт `report.ts`, телеметрія `telemetry.ts`)
+отримують уже санітизоване значення; телеметрійний cap (той самий
+`BYPASS_REASON_MAX`) лишається sink-side defense-in-depth. Редакція —
+СВІДОМО best-effort deny-list патернів (детермінований, dep-free, НЕ
+gitleaks-спавн: report-write не має залежати від доступності зовнішнього
+бінарника), тому правило «keep no secrets in DS_BYPASS_REASON» лишається
+чинним. Лишилось: калібрування (флип — лише за docs/CALIBRATION.md).
 
 ### 4.2 Diff-coverage у full (M)
 
@@ -130,22 +137,42 @@ hardening на обох sink-ах (див. N3 адопшн-плану) і кал
 рядків. ПРОВОДКА — ВИКОНАНА пілотом (reality-sync 2026-07-14, N2): продюсер
 `npm run test:coverage` (`@vitest/coverage-v8`, JSON-репортер →
 `.artifacts/coverage`) і чек `diff-coverage` (report-only, `--threshold 70`)
-живуть у full-тірі пілота. Лишилась звірка двох
-контрактних пунктів нижче з фактичною семантикою тула (Gate C 2026-07-14):
-файл без coverage-entry → loud fail для `--include`-файлів, не «0%»
-(`computeCoverage`); порожній діапазон → `N/A` з exit 0, не «гучний fail»
-(нерозв'язний base падає гучно). Вирівняти тул або контракт — рішення в
-low-level плані N3. Обов'язковий вхідний контракт (без нього чек — тиха
-брехня):
-- Продюсер: `vitest --coverage` з JSON-репортером у пілоті (провайдер —
-  залежність Фази 3.1); визначений шлях + freshness-перевірка звіту.
-- Файли, відсутні в coverage-даних = 0% покриття, не «пропущено».
-- Base-ref правило за контекстом: pre-push → `origin/main...HEAD`; CI push →
-  `event.before`; нерозв'язний або неочікувано порожній діапазон →
-  гучний fail, не мовчазний pass; shallow-історію дофетчити.
-- Тимчасовий coverage-вивід — в ignored/confined директорію, прибирати.
+живуть у full-тірі пілота. Контракт ЗВІРЕНО з фактичною семантикою тула й РАТИФІКОВАНО ЗА ТУЛОМ
+(N3 2026-07-14, рішення D1-D4 low-level плану):
+- Продюсер: vitest `--coverage` (v8, JSON-репортер) → `.artifacts/coverage`,
+  `all: true`, vitest `include`/`exclude` вирівняні з `--include`/`--exclude`
+  чека (реконсиляція списків — частина контракту); freshness-guard у тулі
+  (`loadCoverage`, mtime ≤ 10 хв) — відсутній/стухлий звіт = гучний fail
+  exit 2, ще до git-діфа; НОВИЙ звіт при цьому не пишеться (артефакт
+  попереднього успішного рана, якщо був, лишається на місці — exit 2
+  ніколи не видаляє старий `diff-coverage.json`).
+- Decision table `computeCoverage` (точна семантика, не спрощення):
+  (1) файл матчить `--exclude` → скіп (виграє над усім); (2) інакше
+  coverage-entry присутній → міряється (`--include` не звіряється);
+  (3) інакше файл матчить `--include` → операційний fail exit 2 (місконфіг:
+  при `all: true` це досяжно лише розсинхроном include/exclude між
+  vitest-конфігом і argv чека — «0%» тихо псував би метрику, loud fail
+  виявляє місконфіг; живий доказ: дрейф exclude-шляхів у пілоті
+  (`corpus/download.ts`, `**/*.spec.ts`) — виправлений у N3-rollout);
+  (4) інакше скіп (не source-файл).
+- Base-ref: дефолт `origin/main` (pre-push семантика; PR CI коректний за
+  fetch-depth 0). Нерозв'язний base / без merge-base → ОДНА recovery-спроба
+  fetch (shallow-клон → `--unshallow`, повний і без depth-ліміту; інакше
+  `--deepen=50`; часовий ліміт дає runner-ний `timeout_seconds` чека, не
+  тул) → гучний fail (exit 2). ПОРОЖНІЙ діапазон (`rev-list base..HEAD`
+  пустий — HEAD не має комітів поза base: HEAD==origin/main або позаду
+  нього) = легітимний steady-state → N/A exit 0, звіт ПИШЕТЬСЯ
+  (base+headSha — аудит-слід); гучний fail тут був би перманентним
+  операційним шумом. N/A-гілка діє лише ПІСЛЯ успішного resolveBase і
+  свіжого loadCoverage. CI push `event.before` — ПАРКОВАНО в BACKLOG,
+  вирішувати разом із blocking-флипом за CALIBRATION.
+- Coverage-вивід confined і прибираний: `.artifacts/` gitignored, vitest
+  `clean: true`; запис звіту atomic+confined (`writeConfinedJson`).
+- CLI-обгортка закрита real-git тестами (`tests/tools/diff-cover.cli.test.ts`):
+  порожній діапазон, нерозв'язний base, stale-coverage-до-rev-list,
+  end-to-end вимірювання % з порогом.
 Поріг старт 70%; exclude: types, config, generated, glue. `report-only` →
-blocking після калібрування.
+blocking СТРОГО за `docs/CALIBRATION.md`.
 
 ### 4.3 Доктрина цінних тестів (S) — judgment-рівень
 

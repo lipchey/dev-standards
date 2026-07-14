@@ -2,6 +2,17 @@
 
 Non-blocking, dated. Newest first.
 
+## 2026-07-14 — diff-coverage: CI push `event.before` base-ref wiring (N3, parked)
+
+`diff-cover.mjs` defaults to `origin/main` (pre-push semantics; PR CI is
+correct at fetch-depth 0). A CI push-to-main run measures an empty range →
+N/A: the same commits were already measured by the local pre-push full tier.
+Wiring `event.before` (workflow env → `--base-ref`) only matters once CI
+becomes an enforcement surface — decide TOGETHER WITH the blocking flip per
+`docs/CALIBRATION.md`, not before (edge cases: all-zero `before` on a new
+branch, force-push history loss). (N3 low-level plan D3; mirrors the N1
+PR-CI index bridge parking.)
+
 ## 2026-07-14 — PR-CI index bridge for check-new-deps (N1 Gate P, parked)
 
 `check-new-deps` reads git index-blobs only, so in PR CI (clean checkout,

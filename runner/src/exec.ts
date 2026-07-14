@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncOptions, SpawnSyncReturns } from 'node:child_process';
 import type { Check, CheckMode, CheckResult, TierName } from './types.ts';
+import { capAndRedactBypassReason } from './redact.ts';
 
 export interface RunCheckInput {
   check: Check;
@@ -201,7 +202,7 @@ export function runCheck(input: RunCheckInput): CheckResult {
 
   /* Genuine finding-fail (nonzero exit). A bypassable check with a non-empty reason is relaxed
      to 'bypassed', keeping the exit code; every other case (and every non-bypassable check) fails. */
-  const bypassReason = process.env.DS_BYPASS_REASON?.trim();
+  const bypassReason = capAndRedactBypassReason(process.env.DS_BYPASS_REASON);
   if (check.bypassable === true && bypassReason) {
     return { ...base, status: 'bypassed', exitCode: result.status, reason: bypassReason };
   }

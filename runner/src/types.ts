@@ -107,7 +107,7 @@ export interface CheckResult {
   exitCode: number | null;
   durationMs: number;
   mode: CheckMode;
-  /* For 'bypassed': the trimmed DS_BYPASS_REASON that relaxed the finding.
+  /* For 'bypassed': the trimmed, secret-redacted, 200-capped DS_BYPASS_REASON that relaxed the finding.
      For 'error': the errno code, signal, or spawn-error message. Absent otherwise. */
   reason?: string;
 }

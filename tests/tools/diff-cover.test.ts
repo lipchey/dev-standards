@@ -221,6 +221,19 @@ test('computeCoverage: multiple statements on one line → covered if any is hit
   assert.equal(result.total, 100);
 });
 
+test('computeCoverage: a coverage-present file outside --include is still measured', () => {
+  // Decision-table branch 2: a present coverage entry is measured without consulting
+  // --include (present wins; --include only guards ABSENT entries). Would regress if the
+  // tool started gating present entries on an --include match.
+  const result = computeCoverage(
+    { 'src/a.ts': [5] },
+    { 'src/a.ts': cov([[5, 5, 1]]) },
+    { includes: ['other/**'] },
+  );
+  assert.equal(result.total, 100);
+  assert.deepEqual(result.files.map((f) => f.path), ['src/a.ts']);
+});
+
 test('computeCoverage: an --include source file absent from coverage is a loud fail', () => {
   assert.throws(
     () =>
