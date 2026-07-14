@@ -1,0 +1,19 @@
+# Weekly npm dependency PRs, minor+patch grouped into one PR to cut review
+# noise; majors stay individual. Deliberate replacement for an `npm audit`
+# tier check (noisy, transitive, network-bound — rejected): the platform does
+# the work. Version updates only — vulnerability coverage comes from
+# Dependabot alerts + security updates, enabled per
+# vendor/dev-standards/docs/ADOPTION.md.
+# Consumer-owned after seeding — non-npm consumers swap the ecosystem entry
+# for their stack (e.g. github-actions); an empty `updates:` is invalid.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch

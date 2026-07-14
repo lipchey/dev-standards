@@ -120,6 +120,19 @@ Judgment prompts:
   boundary) rather than internal implementation details that break on a harmless
   refactor? Mocks that mirror the internal call sequence are the specific
   anti-pattern - they pin the implementation and make refactoring expensive.
+- Is the test's oracle independent of the implementation? Independence is about
+  derivation, not authorship: an expected value captured from the output of the
+  implementation under test (snapshot, logged result) is a tautology - it pins
+  whatever the code happens to do, not the spec - no matter who recorded it. An
+  oracle derived from the specification, hand computation, or an independent
+  source is legitimate even within the same run. Tautology signal: high line
+  coverage paired with a low mutation score.
+- For parser/serializer/round-trip/money paths: would a property-based test
+  (fast-check in JS/TS, for example) state the invariant better than hand-picked
+  examples? A complement to a spec/golden oracle, not a replacement - a parser
+  and serializer can share the same misreading of the spec and still round-trip
+  green. Optional lens: suggest it where it pays off, never mandate the
+  dependency or gate on it.
 - Is at least the primary failure/edge case tested, not only the happy path?
 - For a bug fix: is there a regression test that reproduces the original bug and
   now passes - red before the fix, green after? A fix without a guarding test is

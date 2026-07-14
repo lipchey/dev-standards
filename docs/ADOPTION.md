@@ -38,10 +38,12 @@ scripts/ds-install.sh /path/to/consumer [--ref vX.Y.Z] [--eslint]
 | `vendor/dev-standards` | Submodule gitlink (the pin). |
 | `scripts/ds-bootstrap.sh`, `scripts/verify`, `scripts/deep-review`, `scripts/install-gitleaks.sh`, `tools/run-gitleaks` | Bootstrap + guarded shims + pinned scanner. |
 | `.githooks/{pre-commit,pre-push}`, `.github/workflows/verify.yml` | Local + CI gate wiring. |
+| `.github/dependabot.yml` | Weekly grouped npm version-update PRs (platform-side; deliberate replacement for an npm-audit tier check). Consumer-owned: non-npm consumers swap the ecosystem entry for their stack (e.g. `github-actions`). |
 | `quality.json` | Your gate manifest (starts minimal — see below). |
 | `.claude/{CHECKLIST,code-conventions,gate-misses,project-facts}.md` | Instance docs (copy-if-absent; fill them in). |
 | `.claude/review-guides/` | Optional additive overlays (empty by default). |
 | `.claude/skills/deep-review-refactor/SKILL.md` | Static pointer to the canonical skill body. |
+| `AGENTS.md` | Pointer to `CLAUDE.md` for agents that read only AGENTS.md (never a second source of truth). |
 
 Copy-if-absent everywhere: a filled consumer file is never overwritten. The
 managed `CLAUDE.md` section and the `.gitignore` entries are appended only when
@@ -61,6 +63,22 @@ project-specific gates start empty, so `./scripts/verify` passes immediately.
 2. Fill the four `.claude/` instance docs (layer DAG, no-touch zones,
    conventions, checklist, gate-miss ledger).
 3. Extend, don't override, via `.claude/review-guides/` — see tuning below.
+
+## GitHub platform settings
+
+Configured in the GitHub repo UI, not in `quality.json` or the verify gates —
+platform-managed protections and signals that complement the repo-owned gates
+(of the three, only Push Protection actually blocks anything).
+
+- **Secret Scanning Push Protection** (repo Settings → Code security) — a
+  server-side layer complementary to the repo-owned gitleaks gate in CI
+  (`verify.yml`), not a replacement. Free for public repos; private repos need
+  GitHub Secret Protection.
+- **CodeQL default setup** for GitHub-hosted consumers — requires Actions, and
+  public visibility or a GitHub Code Security license.
+- **Dependabot alerts + security updates** — the seeded `dependabot.yml` covers
+  version updates only; vulnerability alerts and security-fix PRs are separate
+  settings-side features — enable both.
 
 ## Per-project tuning — three legal surfaces
 
@@ -96,6 +114,19 @@ Each bump re-runs the consumer's `ds-bootstrap.sh` (rebuild + re-stamp) and
 that consumer back to its old pin by default; `--keep-on-failure` instead leaves
 the failed state in place for debugging (the run still exits non-zero and prints
 a manual restore recipe).
+
+**Migrating consumers seeded before v0.10.0:** copy-if-absent seeds new files
+only on a fresh install — a pin bump touches only the gitlink, so it never
+back-fills `.github/dependabot.yml` or `AGENTS.md` (and `--check` fails until
+the dependabot file exists). After bumping the pin, run the seeder once from the
+consumer root to create whatever is missing:
+
+```sh
+vendor/dev-standards/scripts/seed-consumer.sh .
+```
+
+Then review and commit both new files — the seeder never commits, and the pin
+bump commits only the gitlink.
 
 ## Fix-upstream loop
 

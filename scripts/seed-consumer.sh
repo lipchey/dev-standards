@@ -81,6 +81,7 @@ if [ "$check_mode" = true ]; then
   done
 
   [ -f "$consumer_root_abs/quality.json" ] || { echo "check: missing quality.json" >&2; ok=false; }
+  [ -f "$consumer_root_abs/.github/dependabot.yml" ] || { echo "check: missing .github/dependabot.yml" >&2; ok=false; }
 
   hooks_path=$(git -C "$consumer_root_abs" config --local --get core.hooksPath 2>/dev/null || true)
   [ "$hooks_path" = ".githooks" ] || { echo "check: core.hooksPath is '$hooks_path' (expected .githooks)" >&2; ok=false; }
@@ -170,6 +171,8 @@ copy_if_absent "$templates_dir/tools/run-gitleaks"          "$consumer_root_abs/
 copy_if_absent "$templates_dir/githooks/pre-commit"         "$consumer_root_abs/.githooks/pre-commit"         755
 copy_if_absent "$templates_dir/githooks/pre-push"           "$consumer_root_abs/.githooks/pre-push"           755
 copy_if_absent "$templates_dir/github/verify.yml"           "$consumer_root_abs/.github/workflows/verify.yml" 644
+copy_if_absent "$templates_dir/github/dependabot.yml"       "$consumer_root_abs/.github/dependabot.yml"       644
+copy_if_absent "$templates_dir/AGENTS.md"                   "$consumer_root_abs/AGENTS.md"                    644
 copy_if_absent "$templates_dir/claude-skills/deep-review-refactor/SKILL.md" \
                "$consumer_root_abs/.claude/skills/deep-review-refactor/SKILL.md" 644
 

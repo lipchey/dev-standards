@@ -32,7 +32,13 @@ decisions. Effectiveness telemetry design: `docs/effectiveness-plan.md`.
    - **prune / demote** a check — 0 fails over the prune window is only a
      candidate signal; pruning a test or coverage gate additionally
      requires mutation/replay evidence that surviving gates catch the
-     concrete mutations ("never failed" is not evidence — testing guide);
+     concrete mutations ("never failed" is not evidence — testing guide).
+     Sanctioned mutation-evidence tool (JS/TS): StrykerJS, run on-demand at
+     the prune decision and never wired into tiers; `--incremental` is
+     acceleration between sessions only — the decision itself needs a fresh
+     or `--incremental --force` run scoped to the guarded invariant, since
+     incremental mode reuses prior results for unchanged mutants — exactly
+     the ones a prune decision asks about;
    - **tune** `quality.json` (budgets, filesets, tiers) where durations or
      misses point at a structural gap;
    - **route misses**: consumer fixes applied in-session; core routes

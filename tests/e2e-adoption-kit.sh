@@ -36,6 +36,17 @@ expect_fail() {
 
 echo "=== setup: core-work clone + local bare upstream"
 git clone -q "$CORE" "$E2E/core-work"
+# core-work is a clone of the real repo, so it carries the real v* tags
+# (v0.9.3 > v0.9.1-test); ds-install's default-ref sort -V would pick one and
+# install a stale snapshot. Delete every inherited tag, then re-tag v0.8.0
+# synthetically on the root commit: section B needs a resolvable
+# predates-the-kit ref, and the ambient v0.8.0 may be absent in a shallow or
+# tag-filtered checkout. It never wins sort -V (v0.8.0 < every fixture tag).
+for t in $(git -C "$E2E/core-work" tag); do
+  git -C "$E2E/core-work" tag -d "$t" > /dev/null
+done
+git -C "$E2E/core-work" tag v0.8.0 \
+  "$(git -C "$E2E/core-work" rev-list --max-parents=0 HEAD | tail -n1)"
 rsync -a --exclude .git --exclude node_modules --exclude .codegraph \
       --exclude .handoff "$CORE/" "$E2E/core-work/"
 git -C "$E2E/core-work" add -A
@@ -65,6 +76,8 @@ expect "A node_modules exists" test -d "$A/node_modules"
 expect "A overlay dir empty" test -z "$(ls -A "$A/.claude/review-guides" 2>/dev/null)"
 expect "A CLAUDE.md managed marker" grep -q "dev-standards:managed-section" "$A/CLAUDE.md"
 expect "A quality.json repo rendered" grep -q '"repo": "consumer-a"' "$A/quality.json"
+expect "A dependabot.yml seeded" test -f "$A/.github/dependabot.yml"
+expect "A AGENTS.md pointer seeded" grep -q "CLAUDE.md" "$A/AGENTS.md"
 staged_oid=$(git -C "$A" ls-files -s -- vendor/dev-standards | awk '{print $2}')
 want_oid=$(git -C "$E2E/core-work" rev-parse 'v0.9.1-test^{commit}')
 if [ "$staged_oid" = "$want_oid" ]; then ok "A gitlink staged at default (latest) tag"; else bad "A gitlink: $staged_oid != $want_oid"; fi
@@ -72,6 +85,10 @@ git -C "$A" add -A
 git -C "$A" -c user.email=t@t -c user.name=t commit -qm "chore: adopt dev-standards"
 if "$INSTALL" "$A" > "$E2E/a-rerun.log" 2>&1; then ok "A idempotent re-run exit 0"; else bad "A re-run (see a-rerun.log)"; fi
 expect "A re-run created nothing" test -z "$(grep '^created:' "$E2E/a-rerun.log" || true)"
+mv "$A/.github/dependabot.yml" "$A/.github/dependabot.yml.bak"
+expect_fail "A --check red without dependabot.yml" "$INSTALL" "$A" --check
+mv "$A/.github/dependabot.yml.bak" "$A/.github/dependabot.yml"
+expect "A --check green after restore" "$INSTALL" "$A" --check
 
 echo "=== B: failure paths"
 mkconsumer "$E2E/consumer-dirty"; touch "$E2E/consumer-dirty/untracked.txt"
