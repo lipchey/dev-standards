@@ -158,7 +158,7 @@ test('fail-open: an unwritable sink never throws and emits one stderr warning', 
     (process.stderr as NodeJS.WriteStream).write = ((chunk: string | Uint8Array): boolean => {
       captured += chunk.toString();
       return true;
-    }) as typeof process.stderr.write;
+    });
     try {
       appendRunEvent(event(), { DS_TELEMETRY_PATH: sink }); // must not throw
     } finally {

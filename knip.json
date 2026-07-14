@@ -1,0 +1,13 @@
+{
+  "entry": [
+    "runner/src/validate-quality-manifest.ts",
+    "runner/src/migrate-quality-manifest.ts",
+    "tools/*.mjs",
+    "eslint/consumer-template.eslint.config.js",
+    "tests/**/*.test.ts",
+    "tests/eslint/*.test.mjs"
+  ],
+  "ignore": ["tests/fixtures/**", "tests/eslint/fixtures/**", "tests/stubs/**"],
+  "ignoreBinaries": ["tests/e2e-adoption-kit.sh"],
+  "ignoreUnresolved": ["runner/src/verify-runner.ts"]
+}

@@ -65,31 +65,42 @@ wrapper-ів зелений, wrapper-и в пілоті статичні.
 
 ## Фаза 3 — Детерміністичні аналізатори в тірах (M)
 
-Найдешевший важіль якості AI-генерованого коду. Це НЕ лише конфіг: у пілота
-сьогодні нема жодної залежності/конфігурації аналізаторів.
+Найдешевший важіль якості AI-генерованого коду.
 
-1. Передумови в пілоті: запінені devDeps + конфіги — ESLint (typed,
-   `typed_eslint_in_precommit: true` у policy), knip, coverage-provider
-   (для Фази 4.2), відтворювана інсталяція gitleaks; lockfile-зміни.
-2. Філесети: у пілота зараз лише `repo_all`-фileset — додати `git_staged`
-   (staged-скоуп для ESLint у pre-commit).
-3. Бюджети: правило валідатора `sum(timeout_seconds) ≤ бюджет тіра`;
-   staged 15s уже повністю з'їдений typecheck(15s) — рекалібрувати бюджети
-   разом із додаванням чеків.
-4. Розкладка: `staged` + ESLint по staged fileset; `fast` = typecheck +
-   vitest + ESLint; `full` = + knip + gitleaks. Нові чеки заходять
-   `mode: report-only` → blocking СТРОГО за правилом `docs/CALIBRATION.md`
-   (≥1 dispositioned real catch + нуль операційного шуму — НЕ «тихий тиждень»).
-5. Точка енфорсменту: full ніхто не ганяє автоматично (pre-push = fast,
-   CI у пілота нема) — shipping-гейти мають реально стояти на шляху:
-   або перенести їх у fast, або pre-push → full, або CI-гейт у пілоті.
-   Вирішити в low-level плані фази.
+> Reality-sync 2026-07-14 (N2): передумова «у пілота нема жодної залежності/
+> конфігурації аналізаторів» ЗАСТАРІЛА. Пілот (ai-prompter, pin v0.11.1) уже
+> проведений САМ (`quality.json` — легальна поверхня тюнінгу консюмера), тож
+> кроки 3.1–3.5 виконані пілотом; що лишалось — core-сторона — виконано N2.
+
+1. Передумови в пілоті — **ВИКОНАНО пілотом:** ESLint ^9 devDep + flat
+   `eslint.config.js` + `typed_eslint_in_precommit: true`; knip ^5 + `knip.json`;
+   coverage-provider `@vitest/coverage-v8` + JSON-репортер → `.artifacts/coverage`
+   (для Фази 4.2); gitleaks через `.tools/gitleaks` (checksum-інсталер).
+2. Філесети — **ВИКОНАНО пілотом:** додано `git_staged`-філесети (`staged_ts`,
+   `staged_site_ts`, `manifests_staged`, `staged_format`); чек `eslint-staged`
+   скоупиться `{files:staged_ts}`.
+3. Бюджети — **ВИКОНАНО пілотом:** рекалібровано staged 90s / fast 215s /
+   full 380s (валідаторне правило `sum(timeout_seconds) ≤ бюджет тіра` зелене).
+4. Розкладка — **ВИКОНАНО пілотом:** `eslint-staged` у staged, `eslint` у
+   fast+full; `knip` (report-only) і `gitleaks` (report-only) у full. Нові чеки
+   заходять `mode: report-only` → blocking СТРОГО за правилом `docs/CALIBRATION.md`.
+5. Точка енфорсменту — **ВИРІШЕНА:** pre-push → `--full`; консюмерський CI
+   (`verify.yml`) ганяє full на PR і push (gitleaks-крок blocking). Питання
+   «full ніхто не ганяє автоматично» закрите.
 6. Baselines/ratchets НЕ реалізовувати, поки не з'явиться перший report-only
    чек, якому реально потрібен baseline (YAGNI — слот у схемі вже є).
 
+**Лишалось і виконано N2 (core-сторона):** ядро себе не лінтило і не мало knip —
+додано core-self-lint (`eslint.config.js`, чек `eslint` у fast+full, report-only)
++ матеріалізація knip (devDep + `knip.json` + full-tier чек, report-only).
+Рішення ESLint 9-vs-10: **лишаємось на 9** — `eslint-plugin-jsx-a11y` (latest
+6.10.2, peer ≤^9) і `eslint-plugin-react-hooks@6` (peer ≤^9; ^10 лише в 7.x)
+блокують 10; попутно peerDep-чесність (`">=9.38.0"` → `"^9.38.0"`).
+
 **Acceptance:** кожен аналізатор ДОКАЗОВО спавниться (запис у
-`reports/quality/`), хуки вкладаються в бюджети, нуль false-positive блоків
-за тиждень.
+`reports/quality/`), хуки вкладаються в бюджети, флип report-only → blocking —
+лише за правилом `docs/CALIBRATION.md` (dispositioned real catch + нуль
+операційного шуму).
 
 ## Фаза 4 — Enforcement «новий код = нові тести» (M)
 
@@ -103,18 +114,23 @@ wrapper-ів зелений, wrapper-и в пілоті статичні.
 покритий тестами (`tests/tools/check-companion-tests.test.ts`): staged diff
 додає/змінює файли під src-глобами, а серед staged нема жодного тест-файла →
 fail з підказкою; `skip_if_empty` по src-філесету (не стріляє на doc-only
-коміти). Лишилась ПРОВОДКА — тіри пілота (staged).
+коміти). ПРОВОДКА — ВИКОНАНА пілотом (reality-sync 2026-07-14, N2): чек
+`companion-tests` живе в staged-тірі пілота (bypassable, op-exit `[2]`, 5s).
 Bypass-семантика (передумова) ВИКОНАНА: `runner/src/exec.ts:204-206` читає
 непорожній `DS_BYPASS_REASON` і повертає `status:'bypassed'` + `reason`; звіт
 персистить повний `CheckResult`, тож reason зберігається цілим
 (`report.ts:18-20`); 7 тестів у `tests/runner/exec.bypass.test.ts`.
-Статус 4.1: tool done, wiring pending, без передумов у ядрі.
+Статус 4.1: tool done, wiring done (пілот); лишилось N3 — reason cap+redact/scan
+hardening на обох sink-ах (див. N3 адопшн-плану) і калібрування.
 
 ### 4.2 Diff-coverage у full (M)
 
 `tools/diff-cover.mjs` (dep-free) — аналізатор УЖЕ реалізований і покритий
 тестами (`tests/tools/diff-cover.test.ts`): покриття ТІЛЬКИ доданих/змінених
-рядків. Лишилась ПРОВОДКА (coverage-продюсер + тіри) ПЛЮС звірка двох
+рядків. ПРОВОДКА — ВИКОНАНА пілотом (reality-sync 2026-07-14, N2): продюсер
+`npm run test:coverage` (`@vitest/coverage-v8`, JSON-репортер →
+`.artifacts/coverage`) і чек `diff-coverage` (report-only, `--threshold 70`)
+живуть у full-тірі пілота. Лишилась звірка двох
 контрактних пунктів нижче з фактичною семантикою тула (Gate C 2026-07-14):
 файл без coverage-entry → loud fail для `--include`-файлів, не «0%»
 (`computeCoverage`); порожній діапазон → `N/A` з exit 0, не «гучний fail»

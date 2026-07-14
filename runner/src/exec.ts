@@ -102,7 +102,7 @@ export function runProcess(input: { argv: string[]; cwd: string; timeoutMs: numb
   return { kind: 'red', exitCode: result.status, stdout, stderrTail };
 }
 
-const FILES_TOKEN = /^\{files:([A-Za-z0-9_-]+)\}$/;
+const FILES_TOKEN = /^\{files:([\w-]+)\}$/;
 
 // Expanded repo filenames must not become options or response files; manifest args are trusted.
 const OPTION_LIKE_OPERAND = /^[-@]/;

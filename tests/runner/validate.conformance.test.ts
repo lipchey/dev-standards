@@ -252,7 +252,9 @@ for (const batteryCase of batteryCases) {
     batteryCase.mutate(candidate);
 
     const handResult = validate(candidate);
-    const schemaVerdict = validateFn(candidate);
+    /* ajv sync validate returns boolean; `=== true` erases the async-Promise arm
+       of its call signature so the verdict interpolates as a plain boolean. */
+    const schemaVerdict = validateFn(candidate) === true;
     const errorDump =
       `hand errors:\n${JSON.stringify(handResult.errors, null, 2)}\n` +
       `schema errors:\n${JSON.stringify(validateFn.errors, null, 2)}`;
@@ -260,7 +262,7 @@ for (const batteryCase of batteryCases) {
     assert.equal(
       handResult.ok,
       schemaVerdict,
-      `hand validator (${String(handResult.ok)}) and schema (${String(schemaVerdict)}) disagree.\n${errorDump}`,
+      `hand validator (${handResult.ok}) and schema (${schemaVerdict}) disagree.\n${errorDump}`,
     );
     assert.equal(
       handResult.ok,
@@ -269,6 +271,38 @@ for (const batteryCase of batteryCases) {
     );
   });
 }
+
+/* Characterization of describeValue through the public validate() boundary: the
+   helper was rewritten (typeof switch) with a byte-identical-output requirement,
+   and nothing else pins the exact message text. Covers every JSON-reachable
+   shape; bigint/symbol/undefined/function cannot arrive through JSON.parse. */
+const DESCRIBE_CASES: Array<{ label: string; value: unknown; expected: string }> = [
+  { label: 'number', value: 3, expected: 'must be a string, got 3' },
+  { label: 'boolean', value: true, expected: 'must be a string, got true' },
+  { label: 'null', value: null, expected: 'must be a string, got null' },
+  { label: 'array', value: [], expected: 'must be a string, got an array' },
+  { label: 'object', value: {}, expected: 'must be a string, got an object' },
+];
+for (const { label, value, expected } of DESCRIBE_CASES) {
+  test(`describeValue characterization: ${label} in a string field`, () => {
+    const candidate = cloneRootManifest();
+    (candidate as unknown as Record<string, unknown>)['repo'] = value;
+    const result = validate(candidate);
+    assert.equal(result.ok, false);
+    const err = result.errors.find((e) => e.path === 'repo');
+    assert.ok(err, `expected an error at "repo"; got:\n${JSON.stringify(result.errors, null, 2)}`);
+    assert.equal(err.message, expected);
+  });
+}
+test('describeValue characterization: string in an object field', () => {
+  const candidate = cloneRootManifest();
+  (candidate as unknown as Record<string, unknown>)['budgets'] = 'x';
+  const result = validate(candidate);
+  assert.equal(result.ok, false);
+  const err = result.errors.find((e) => e.path === 'budgets');
+  assert.ok(err, `expected an error at "budgets"; got:\n${JSON.stringify(result.errors, null, 2)}`);
+  assert.equal(err.message, 'must be an object, got "x"');
+});
 
 // The workflow subsystem is gone: a top-level `workflow` key must be rejected as an
 // unknown additional property by BOTH the hand validator and Ajv (exact assertion).

@@ -1,6 +1,6 @@
 import type { TierName } from './types.ts';
 
-export type RunnerScope = TierName | 'doctor' | 'fix-staged';
+type RunnerScope = TierName | 'doctor' | 'fix-staged';
 
 export type CliInvocation =
   | { ok: true; manifestPath: string; scope: RunnerScope }

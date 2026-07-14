@@ -4,15 +4,11 @@
    parserOptions stay yours (the presets never re-establish them). */
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
-import {
-  core,
-  regexp,
-  test,
-  node,
-  frontend,
-  frontendVite,
-  frontendNext,
-} from "dev-standards/eslint";
+import globals from "globals";
+/* Per-stack presets (node, frontend, frontendVite, frontendNext) are imported
+   only when their block below is uncommented — an unused import is itself a
+   lint error in the seeded file. */
+import { core, regexp, test } from "dev-standards/eslint";
 
 export default tseslint.config(
   { ignores: ["**/dist", "vendor", "node_modules", ".artifacts"] },
@@ -26,13 +22,25 @@ export default tseslint.config(
   ...core,
   ...test,
   ...regexp,
-  /* Node stacks — scope to your source dirs (delete for a pure frontend):
-     ...node({ files: ["src/**/*.ts"] }), */
-  /* Frontend — scope to your app dirs (delete for a pure node service). frontend
-     OWNS the react-hooks rules, so do not add a separate react-hooks block:
-     ...frontend({ files: ["src/**/*.tsx"] }),
-     ...frontendVite({ files: ["src/**/*.tsx"] }),   // Vite app only
-     ...frontendNext({ files: ["app/**/*.tsx"] }),   // Next site only */
-  /* JS config files sit outside tsconfig — typed rules crash on them. */
-  { files: ["**/*.{js,mjs,cjs}"], ...tseslint.configs.disableTypeChecked },
+  // Node stacks — add `node` to the dev-standards/eslint import and scope to your
+  // source dirs (delete for a pure frontend):
+  //   ...node({ files: ["src/**/*.ts"] }),
+  // Frontend — add `frontend`/`frontendVite`/`frontendNext` to the import and scope
+  // to your app dirs (delete for a pure node service). frontend OWNS the react-hooks
+  // rules, so do not add a separate react-hooks block:
+  //   ...frontend({ files: ["src/**/*.tsx"] }),
+  //   ...frontendVite({ files: ["src/**/*.tsx"] }),   // Vite app only
+  //   ...frontendNext({ files: ["app/**/*.tsx"] }),   // Next site only
+  /* JS config files sit outside tsconfig — typed rules crash on them. globals.node
+     keeps no-undef quiet on `process` etc.; merge the languageOptions so this block
+     does not clobber disableTypeChecked's parser reset (bare `languageOptions: { globals }`
+     would leave projectService on and crash every JS file outside tsconfig). */
+  {
+    files: ["**/*.{js,mjs,cjs}"],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      ...tseslint.configs.disableTypeChecked.languageOptions,
+      globals: globals.node,
+    },
+  },
 );

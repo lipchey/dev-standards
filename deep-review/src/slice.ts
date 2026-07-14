@@ -66,7 +66,7 @@ const STDERR_TAIL_MAX = 2000;
 
 // The result of a fixed-argv git spawn. `status` is the process exit code, or null
 // when the process failed to spawn / was killed.
-export interface SpawnResult {
+interface SpawnResult {
   status: number | null;
   stdout: string;
   stderr: string;

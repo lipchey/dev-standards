@@ -45,12 +45,12 @@ const SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies'];
    whitespace class, so leading/trailing space or a trailing newline never
    matches (JS `$` without the `m` flag is end-of-input only, not before \n). */
 const NUM = '(?:0|[1-9]\\d*)';
-const PRE_ID = '(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)';
+const PRE_ID = '(?:0|[1-9]\\d*|\\d*[a-z-][0-9a-z-]*)';
 const PRERELEASE = `(?:-${PRE_ID}(?:\\.${PRE_ID})*)`;
-const BUILD = '(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)';
+const BUILD = '(?:\\+[0-9a-z-]+(?:\\.[0-9a-z-]+)*)';
 const TRIPLE = `${NUM}\\.${NUM}\\.${NUM}${PRERELEASE}?${BUILD}?`;
-const EXACT_RE = new RegExp(`^${TRIPLE}$`);
-const RANGE_RE = new RegExp(`^[\\^~](?:${NUM}|${NUM}\\.${NUM}|${TRIPLE})$`);
+const EXACT_RE = new RegExp(`^${TRIPLE}$`, 'i');
+const RANGE_RE = new RegExp(`^[\\^~](?:0|[1-9]\\d*|${NUM}\\.${NUM}|${TRIPLE})$`, 'i');
 
 export function isAllowedSpec(spec, { exactOnly = false } = {}) {
   if (typeof spec !== 'string') return false;

@@ -19,12 +19,18 @@ after(() => {
   for (const root of tempRoots) fs.rmSync(root, { recursive: true, force: true });
 });
 
-const GRAMMAR_PASS = ['1.2.3', '1.2.3-beta.1', '^1.2.3', '^9', '^9.38', '~1.2.3', '~8', 'file:vendor/dev-standards'];
+const GRAMMAR_PASS = [
+  '1.2.3', '1.2.3-beta.1', '^1.2.3', '^9', '^9.38', '~1.2.3', '~8', 'file:vendor/dev-standards',
+  /* Case-insensitivity and build metadata are load-bearing: the grammar regexes
+     were rewritten with the `i` flag (lowercase classes) — dropping the flag
+     must turn these red. `^0` pins the flattened first RANGE_RE alternative. */
+  '1.2.3-Alpha.1', '1.2.3+SHA.ABC', '1.2.3-rc.1+Build.5', '^0',
+];
 const GRAMMAR_FAIL = [
   '*', '>=1.0.0', '<=2', '>1', '1', '1.2', '1.x', '^9.x', 'latest',
   'git+https://github.com/u/r.git', 'https://example.com/x.tgz', 'github:u/r',
   '^1 || ^2', '1.2.3 - 2.0.0', 'npm:other@^1', 'file:../elsewhere',
-  ' 1.2.3', '1.2.3 ', '1.2.3\n', '01.2.3', '1.2.3-', '^9.', '',
+  ' 1.2.3', '1.2.3 ', '1.2.3\n', '01.2.3', '1.2.3-', '^9.', '', '^01',
 ];
 
 test('grammar: allowed specs pass', () => {

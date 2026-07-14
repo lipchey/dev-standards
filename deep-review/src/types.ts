@@ -16,14 +16,14 @@ export const EXIT_USAGE = 2;
 export const EXIT_WRONG_STATE = 11;
 export const EXIT_NEEDS_HUMAN = 13;
 
-// Phase-5 fix-mode exit codes. Fixed numeric contract shared across the engine's
-// verbs: preflight refusal, run-identity mismatch, a live findings-lock contention,
-// a deadline overrun, and a fail-closed unavailable secret scanner. W2/W4 import
-// these names; the numbers must not drift.
+/* Phase-5 fix-mode exit codes. Fixed numeric contract shared across the engine's
+   verbs: preflight refusal, run-identity mismatch, a live findings-lock contention,
+   and a fail-closed unavailable secret scanner. W2/W4 import these names; the
+   numbers must not drift (17 is left unallocated — a deadline overrun surfaces as an
+   ordinary timeout, see deadline.ts). */
 export const EXIT_PREFLIGHT = 14;
 export const EXIT_DESCRIPTOR_MISMATCH = 15;
 export const EXIT_FINDINGS_CONFLICT = 16;
-export const EXIT_DEADLINE = 17;
 export const EXIT_SCANNER_UNAVAILABLE = 18;
 
 // The §2.4 machine-readable error payload emitted as the last line of stderr on a
@@ -48,7 +48,7 @@ export type SecretScanResult =
   | { status: 'hit'; findings: string }
   | { status: 'unavailable'; reason: string };
 
-export type Severity = 'P1' | 'P2' | 'P3';
+type Severity = 'P1' | 'P2' | 'P3';
 export type Classification = 'fixable-now' | 'no-touch' | 'needs-plan';
 
 // The per-finding test reference. `test_cmd` (an arbitrary argv) was removed in

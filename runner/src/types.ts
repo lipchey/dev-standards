@@ -1,11 +1,11 @@
 // Reserved for Phase 3a meta-repo adoption; no validator fixture coverage yet.
-export type Stack = 'node-service' | 'frontend-web' | 'n8n-ops' | 'meta-docs';
-export type SchedulerClass =
+type Stack = 'node-service' | 'frontend-web' | 'n8n-ops' | 'meta-docs';
+type SchedulerClass =
   | 'github-actions-push-and-schedule'
   | 'n8n-webhook-and-schedule'
   | 'schedule-only'
   | 'local-only';
-export type FilesetSource = 'git_staged' | 'repo_all';
+type FilesetSource = 'git_staged' | 'repo_all';
 export type CheckMode = 'blocking' | 'report-only';
 export type TierName = 'staged' | 'fast' | 'full' | 'audit';
 
@@ -32,7 +32,7 @@ export interface Check {
   operational_exit_codes?: number[];
 }
 
-export interface Workspace {
+interface Workspace {
   name: string;
   path: string;
   stack: Stack;
@@ -40,7 +40,7 @@ export interface Workspace {
 }
 
 /* `fileset` must be a git_staged fileset; runs only when policy.format_fix_staged_allowed is true. */
-export interface FormatConfig {
+interface FormatConfig {
   argv: string[];
   fileset: string;
   timeout_seconds: number;

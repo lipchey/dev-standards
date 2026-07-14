@@ -39,6 +39,6 @@ test('an exhausted deadline throws DeadlineExceededError naming the label', asyn
   assert.equal(d.remainingMs(), 0, 'floored at 0, never negative');
   assert.throws(
     () => d.checkpoint('after-spawn'),
-    (error: unknown) => error instanceof DeadlineExceededError && /after-spawn/.test((error as Error).message),
+    (error: unknown) => error instanceof DeadlineExceededError && /after-spawn/.test((error).message),
   );
 });

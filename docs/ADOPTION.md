@@ -58,7 +58,10 @@ project-specific gates start empty, so `./scripts/verify` passes immediately.
 1. Switch `stack` (and each workspace `stack`) from `meta-docs` to your real
    stack, then add your project's checks (typecheck, tests, lint, …) to the
    `staged` / `fast` / `full` tiers — **keep** the seeded `instance-docs-seeded`
-   check in `fast` and `full`. `./scripts/verify --doctor` explains the
+   check in `fast` and `full`. Dead code has an owning gate — add `knip` (devDep +
+   `knip.json`) as a `full`-tier check with `mode: report-only` until the
+   `CALIBRATION.md` flip rule is met; the review guides already defer dead-code
+   findings to it. `./scripts/verify --doctor` explains the
    manifest; the validator runs on every `verify`.
 2. Fill the four `.claude/` instance docs (layer DAG, no-touch zones,
    conventions, checklist, gate-miss ledger).

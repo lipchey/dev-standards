@@ -18,7 +18,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { EXIT_OK, EXIT_FAILURE, EXIT_USAGE, EXIT_WRONG_STATE } from '../../deep-review/src/types.ts';
-import type { FindingRecord, FindingsFileV2, VerificationRecord } from '../../deep-review/src/types.ts';
+import type { FindingRecord, FindingsFileV2 } from '../../deep-review/src/types.ts';
 import { decideHandoff, realHandoffDeps } from '../../deep-review/src/handoff.ts';
 import type { HandoffDeps, HandoffGitSpawn } from '../../deep-review/src/handoff.ts';
 import { createDeadline } from '../../deep-review/src/deadline.ts';
@@ -56,7 +56,7 @@ function mkFile(findings: FindingRecord[], over: Partial<FindingsFileV2> = {}): 
     run_id: 'run-1',
     base_sha: 'base-1',
     revision: 3,
-    verification: { sha: HEAD_SHA, scope: 'verify:fast', completed_at: 't' } as VerificationRecord,
+    verification: { sha: HEAD_SHA, scope: 'verify:fast', completed_at: 't' },
     findings,
     ...over,
   };

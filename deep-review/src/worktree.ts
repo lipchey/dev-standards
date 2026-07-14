@@ -71,7 +71,7 @@ const SYMLINK_TARGETS = [
 // matches only directories), so they surface as dirty and would block every slice.
 // Derived from SYMLINK_TARGETS (drop the in-submodule dist entries, which never appear
 // as superproject paths) unioned with the submodule root.
-export const WORKTREE_TOOLING_PATHS: readonly string[] = [
+const WORKTREE_TOOLING_PATHS: readonly string[] = [
   ...SYMLINK_TARGETS.filter((rel) => !rel.startsWith(`${SUBMODULE_PATH}/`)),
   SUBMODULE_PATH,
 ];

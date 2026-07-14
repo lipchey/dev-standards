@@ -109,9 +109,9 @@ const DEEP_REVIEW_VERIFY = ['--fast', '--full'] as const;
 const DEEP_REVIEW_BUDGET_REQUIRED = ['seconds'] as const;
 const DEEP_REVIEW_BUDGET_KEYS = ['seconds', 'tokens'] as const;
 
-const FILES_TOKEN = /^\{files:([A-Za-z0-9_-]+)\}$/;
+const FILES_TOKEN = /^\{files:([\w-]+)\}$/;
 // The schema dialect allows only `*`, `**`, and literals.
-const UNSUPPORTED_GLOB_SYNTAX = /[?\[{]/;
+const UNSUPPORTED_GLOB_SYNTAX = /[?[{]/;
 
 // Rest tuple distinguishes "no value" from an explicit undefined value.
 function addError(
@@ -146,10 +146,19 @@ function describeValue(value: unknown): string {
   switch (typeof value) {
     case 'string':
       return JSON.stringify(value);
-    case 'object':
-      return 'an object';
-    default:
+    case 'number':
+    case 'bigint':
+    case 'boolean':
+    case 'symbol':
+    case 'undefined':
+    case 'function':
       return String(value);
+    default:
+      /* typeof === 'object' (null/array handled above). The object case sits in
+         `default` because TS neither narrows `unknown` through negated typeof
+         guards nor proves typeof-switch exhaustiveness — a positive-case-only
+         switch fails TS2366. */
+      return 'an object';
   }
 }
 

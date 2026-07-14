@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /* The dev-standards checkout root (this file is tests/deep-review-e2e/helper.ts). */
-export const REPO_ROOT = path.resolve(HERE, '../..');
+const REPO_ROOT = path.resolve(HERE, '../..');
 /* The local tsx binary (NEVER npx — a network launcher) + the engine source
    entrypoint. Verbs run through tsx on SOURCE, not the built bundle. */
 const TSX_BIN = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
@@ -92,14 +92,14 @@ export function writeExecutable(dir: string, rel: string, content: string): void
 
 /* The committed source the AI "fixes": the slice edits src/app.ts from ORIGINAL to
    EDITED. The edit is what commit-slice validates + lands. */
-export const ORIGINAL = 'export const a = 1;\n';
+const ORIGINAL = 'export const a = 1;\n';
 export const EDITED = 'export const a = 2;\n';
 
 /* Verify-shim bodies (committed as `verify`, checked out into the one-shot
    validation worktree). GREEN -> commit lands; RED -> fix-failed while writing a
    residue file into its cwd (the tmp worktree) so a case can prove the residue
    never reaches the live tree. */
-export const GREEN_SHIM = '#!/usr/bin/env bash\nexit 0\n';
+const GREEN_SHIM = '#!/usr/bin/env bash\nexit 0\n';
 export const RED_SHIM = '#!/usr/bin/env bash\nmkdir -p coverage\necho residue > coverage/lcov.info\nexit 1\n';
 /* A verify shim that spawns a detached-group grandchild (recorded in
    $DR_E2E_PIDFILE) and then blocks far past the tiny run deadline, so the run's
@@ -121,7 +121,7 @@ const DEFAULT_PROJECT_FACTS = `# Project facts
 - node-service, solo
 `;
 
-export interface QualityOpts {
+interface QualityOpts {
   budgetSeconds?: number | undefined;
   noTouchGlobsRef?: string | undefined;
   verifyEntry?: string | undefined;
@@ -132,7 +132,7 @@ export interface QualityOpts {
    gitignores `/reports/` so the findings file (+ its lock + the written report)
    live under the reports root — passing mutateFindings' confinement while staying
    invisible to commit-slice's scope gate. */
-export function qualityJson(opts: QualityOpts = {}): string {
+function qualityJson(opts: QualityOpts = {}): string {
   const deepReview: Record<string, unknown> = {
     enabled: true,
     trigger: 'manual-only',
@@ -384,7 +384,7 @@ export function placeFindings(cwd: string, json: string): string {
   return FINDINGS_REL;
 }
 
-export function readFindingsJson(cwd: string): { revision: number; verification: unknown; findings: Array<Record<string, unknown>> } {
+function readFindingsJson(cwd: string): { revision: number; verification: unknown; findings: Array<Record<string, unknown>> } {
   const raw = fs.readFileSync(path.join(cwd, FINDINGS_REL), 'utf8');
   return JSON.parse(raw) as { revision: number; verification: unknown; findings: Array<Record<string, unknown>> };
 }

@@ -80,7 +80,7 @@ function writeFakeGitWithGrandchild(dir: string, marker: string, writeAfterMs: n
     file,
     `#!${process.execPath}\n` +
       "const { spawn } = require('node:child_process');\n" +
-      `spawn(process.execPath, ['-e', 'setTimeout(()=>require(\"fs\").writeFileSync(process.argv[1],\"x\"),${writeAfterMs})', ${JSON.stringify(
+      `spawn(process.execPath, ['-e', 'setTimeout(()=>require("fs").writeFileSync(process.argv[1],"x"),${writeAfterMs})', ${JSON.stringify(
         marker,
       )}], { stdio: 'ignore' });\n` +
       "process.on('SIGTERM', () => {});\n" +

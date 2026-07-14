@@ -67,6 +67,7 @@ const WANT = {
   "dev-standards": "file:vendor/dev-standards",
   "eslint": "^9.38.0",
   "@eslint/js": "^9",
+  "globals": "^17",
   "typescript-eslint": "^8",
 };
 let cfg;

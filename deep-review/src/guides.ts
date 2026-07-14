@@ -9,7 +9,7 @@ const BODY_SEPARATOR = '\n\n';
 
 /* The seven-guide contract: a partial or blank-body checkout must fail preflight,
    not silently review with a thinner rulebook. */
-export const REQUIRED_TEMPLATE_NAMES = [
+const REQUIRED_TEMPLATE_NAMES = [
   'architecture-deepening.md',
   'clean-architecture.md',
   'core-code-guidelines.md',
@@ -25,9 +25,9 @@ export const REVIEW_GUIDE_TEMPLATES_DIR = join(
   'review-guide-templates',
 );
 
-export type ReviewGuideSourceKind = 'package-template' | 'repo-overlay';
+type ReviewGuideSourceKind = 'package-template' | 'repo-overlay';
 
-export interface ReviewGuideSource {
+interface ReviewGuideSource {
   kind: ReviewGuideSourceKind;
   path: string;
   body: string;

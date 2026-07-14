@@ -469,7 +469,6 @@ test('F7: verifyDescriptor bounds every git spawn with a deadline-derived timeou
 test('G4: the REUSE path threads the run deadline into verifyDescriptor so its git spawns are timeout-bounded', () => {
   const { base, repo } = makeBase();
   assert.equal(selectWorktree('reusedl', deps(repo)).exitCode, EXIT_OK);
-  const wtPath = fallbackWtPath(repo, 'reusedl');
 
   const deadline = createDeadline(900);
   let seenDeadline: unknown = 'unset';

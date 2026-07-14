@@ -5,8 +5,8 @@
   "scheduler_class": "local-only",
   "budgets": {
     "staged_seconds": 15,
-    "fast_seconds": 90,
-    "full_seconds": 300,
+    "fast_seconds": 150,
+    "full_seconds": 420,
     "audit_seconds": 300
   },
   "policy": {
@@ -63,6 +63,13 @@
         "operational_exit_codes": [2],
         "skip_if_empty": "manifests_staged",
         "timeout_seconds": 10
+      },
+      {
+        "name": "eslint",
+        "argv": ["npm", "run", "lint"],
+        "mode": "report-only",
+        "operational_exit_codes": [2],
+        "timeout_seconds": 45
       }
     ],
     "full": [
@@ -85,6 +92,19 @@
         "name": "deep-review-e2e",
         "argv": ["npm", "run", "test:e2e"],
         "timeout_seconds": 45
+      },
+      {
+        "name": "eslint",
+        "argv": ["npm", "run", "lint"],
+        "mode": "report-only",
+        "operational_exit_codes": [2],
+        "timeout_seconds": 45
+      },
+      {
+        "name": "knip",
+        "argv": ["npm", "run", "knip"],
+        "mode": "report-only",
+        "timeout_seconds": 60
       }
     ],
     "audit": []

@@ -35,7 +35,6 @@ const DAY_MS = 86_400_000;
    context, but candidacy must mean exactly what quality-stats' text report means, so the flip
    (7d) and prune (30d) windows are imported from there and never follow --days. */
 const DEFAULT_WINDOW_DAYS = 90;
-const SHA_SHORT_LEN = 12;
 
 /* ---- run outcome -----------------------------------------------------------
  * The whole run's verdict, straight from the persisted RunEvent exit/aborted (never a

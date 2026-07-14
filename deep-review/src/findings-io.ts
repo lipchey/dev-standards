@@ -94,7 +94,7 @@ export interface FindingsIoDeps {
 // The findings-lock seam. `create` is an O_EXCL create (false when the file
 // already exists); `read` returns the lock body or null; `remove` best-effort
 // unlinks; `isAlive` reports whether a pid is a live process.
-export interface FindingsLockDeps {
+interface FindingsLockDeps {
   create: (lockPath: string, content: string) => boolean;
   read: (lockPath: string) => string | null;
   remove: (lockPath: string) => void;
@@ -212,7 +212,7 @@ const TEST_REFS = ['verify:fast', 'verify:full'] as const;
 const BOUND_ONLY_STATUSES: readonly FindingStatus[] = ['fixed', 'fix-failed', 'infra-blocked'];
 
 // A Windows drive prefix (`C:`), treated as absolute.
-const WINDOWS_DRIVE_RE = /^[A-Za-z]:/;
+const WINDOWS_DRIVE_RE = /^[A-Z]:/i;
 // A finding id usable verbatim in a commit trailer and a filename.
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -228,10 +228,19 @@ function describeValue(value: unknown): string {
   switch (typeof value) {
     case 'string':
       return JSON.stringify(value);
-    case 'object':
-      return 'an object';
-    default:
+    case 'number':
+    case 'bigint':
+    case 'boolean':
+    case 'symbol':
+    case 'undefined':
+    case 'function':
       return String(value);
+    default:
+      /* typeof === 'object' (null/array handled above). The object case sits in
+         `default` because TS neither narrows `unknown` through negated typeof
+         guards nor proves typeof-switch exhaustiveness — a positive-case-only
+         switch fails TS2366. */
+      return 'an object';
   }
 }
 
@@ -775,7 +784,7 @@ export function mutateFindings(
     assertImmutableBinding(before, proposed);
     // Re-validate the mutator's output exactly as a read would (structure, binding
     // invariant, unique ids), so no `fn` can persist an invalid file.
-    const validated = validateFindingsFileV2(proposed as unknown);
+    const validated = validateFindingsFileV2(proposed);
     const next: FindingsFileV2 = { ...validated, revision: before.revision + 1 };
     deps.writeConfined(ctx.reportsRootAbs, relPath, serializeFindingsV2(next));
     return next;

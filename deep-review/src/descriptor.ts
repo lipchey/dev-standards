@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 import type { Deadline } from './deadline.ts';
 
 // The descriptor file name under the worktree's absolute git-dir.
-export const DESCRIPTOR_FILENAME = 'deep-review-run.json';
+const DESCRIPTOR_FILENAME = 'deep-review-run.json';
 
 export interface RunDescriptor {
   schema: 1;
@@ -43,7 +43,7 @@ export interface DeepReviewContext {
 
 // A descriptor-layer failure carrying a human-legible reason (surfaced by the caller as a §2.4
 // machine error / EXIT_DESCRIPTOR_MISMATCH). `kind` is a cross-realm tag.
-export class DescriptorError extends Error {
+class DescriptorError extends Error {
   readonly kind = 'descriptor-error' as const;
   readonly reason: string;
   constructor(reason: string) {
@@ -62,7 +62,7 @@ export type DescriptorVerdict =
 
 // ── Effects seam ────────────────────────────────────────────────────────────────
 
-export interface DescriptorGitResult {
+interface DescriptorGitResult {
   status: number | null;
   stdout: string;
   stderr: string;
@@ -101,7 +101,7 @@ function gitRun(deps: DescriptorDeps, args: string[], cwd: string): DescriptorGi
   return deps.git(args, cwd, timeout);
 }
 
-export const realDescriptorDeps: DescriptorDeps = {
+const realDescriptorDeps: DescriptorDeps = {
   git: defaultGit,
   readFile: (p) => fs.readFileSync(p, 'utf8'),
   writeFile: (p, content) => fs.writeFileSync(p, content),
@@ -148,15 +148,7 @@ function readGitIdentity(deps: DescriptorDeps, cwd: string): GitIdentity | null 
   };
 }
 
-// The absolute git-dir for `cwd` (realpath-normalized), or throws when not in a worktree.
-export function resolveGitDir(cwd: string, over?: Partial<DescriptorDeps>): string {
-  const deps = withDefaults(over);
-  const identity = readGitIdentity(deps, cwd);
-  if (identity === null) throw new DescriptorError('not inside a git worktree');
-  return identity.gitDir;
-}
-
-export function descriptorPath(gitDirAbs: string): string {
+function descriptorPath(gitDirAbs: string): string {
   return path.join(gitDirAbs, DESCRIPTOR_FILENAME);
 }
 

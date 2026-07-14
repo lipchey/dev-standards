@@ -59,6 +59,12 @@ scope stack rules to the right subtree — React rules must not reach node packa
 - Everything here is ESLint-9-clean. **When moving consumers to ESLint 10**, that is
   also the moment to add `eslint-plugin-unicorn` (its ≥66 line requires ESLint 10.4;
   the ESLint-9 line is stuck at 65.x — held out of v1 to avoid a compat island).
+- **ESLint 10 is blocked today** by two plugins shipped here as `dependencies`, so a
+  consumer on `eslint@10` hits `ERESOLVE` on install regardless of which presets it
+  uses: `eslint-plugin-jsx-a11y` (latest 6.10.2 peers `^3…^9`, no ^10) and
+  `eslint-plugin-react-hooks@6` (peer `^3…^9`; ^10 lands only in 7.x — a major bump).
+  Revisit the ESLint-10 move — the unicorn moment above — once both ship ^10 peer
+  support.
 
 ## Deliberately opt-in / not shipped (v1)
 
