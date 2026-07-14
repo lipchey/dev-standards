@@ -15,6 +15,16 @@
 > до gitleaks-гейта В CI); dependabot.yml = лише version-updates,
 > vulnerability-покриття вмикається окремо (alerts + security updates);
 > AGENTS.md-pointer — 3-рядковий файл, не symlink.
+> Фаза N1: ВИКОНАНО 2026-07-14 (core 8203357, пілот e324e22+fb1ea40) — гейт
+> live у core fast і пілотному staged (записи в reports/quality/ обох),
+> mode report-only; флип у blocking НЕ зроблено — лише за CALIBRATION.
+> Виконавчі дельти проти тексту фази (low-level план + Gate P/C):
+> граматика на spec-CHANGED deps знята як over-reach (кандидат в inbox);
+> lockfile-proof посилено (section+spec-bound direct entry, object-shape
+> resolution entry); up-front валідація staged-lockfile (fail-closed на
+> порожній множині нових deps); D10 pnpm/yarn stand-down предикат;
+> PR-CI index bridge припарковано в BACKLOG до flip-рішення (у CI staged
+> порожній — enforcement-поверхня = локальний fast/staged).
 > Джерело: веб-ресерч «інструменти/методології якісного коду з АІ, 2025-2026»
 > (107 знахідок → 103 верифіковано adversarial fact-check-ом → 3 лінзи
 > проектної придатності). Фільтр відбору: максимальна ефективність, не
