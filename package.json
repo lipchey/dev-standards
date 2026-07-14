@@ -22,7 +22,8 @@
     "test:file": "DS_TELEMETRY_PATH=off tsx --test",
     "validate:manifest": "node runner/dist/validate-quality-manifest.mjs --manifest quality.json",
     "verify:full": "./verify --full",
-    "test:eslint": "node --test tests/eslint/*.test.mjs"
+    "test:eslint": "node --test tests/eslint/*.test.mjs",
+    "test:adoption": "tests/e2e-adoption-kit.sh"
   },
   "peerDependencies": {
     "eslint": ">=9.38.0"

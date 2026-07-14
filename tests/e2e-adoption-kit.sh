@@ -147,6 +147,74 @@ else
 fi
 rm -f "$B/dirty.marker"
 
+echo "=== F: mid-seed install failure leaves recoverable state (no auto-rollback)"
+# Fault injection: a PATH-shadowed npm that passes ds-install's existence-only
+# preflight (command -v npm) but exits 1 at ds-bootstrap's submodule `npm ci`,
+# aborting seeding mid-way. node stays real (stub dir holds only npm). The stub
+# is scoped to just this call so A/C keep the real npm.
+mkdir -p "$E2E/stub-fail-npm"
+cat > "$E2E/stub-fail-npm/npm" <<'STUB'
+#!/usr/bin/env bash
+# Record cwd+arg of the npm call we fail on, so the test can assert the fault
+# landed on the vendor `npm ci` — not some other npm call added earlier, which
+# would bypass the mid-seed seed|tee journal path this scenario exercises.
+printf '%s %s\n' "$PWD" "${1:-}" > "$DS_FIRED"
+exit 1
+STUB
+chmod +x "$E2E/stub-fail-npm/npm"
+mkconsumer "$E2E/consumer-fault"
+CF="$E2E/consumer-fault"; CFG="$CF/.git"
+expect_fail "F mid-seed install exits non-zero" \
+  env PATH="$E2E/stub-fail-npm:$PATH" DS_FIRED="$E2E/f.fired" "$INSTALL" "$CF"
+expect "F fault fired at vendor npm ci" grep -q "/vendor/dev-standards ci$" "$E2E/f.fired"
+# Post-v0.9.1: a failed install is LEFT in place (state+journal persist), never
+# auto-rolled-back — undo is manual via --rollback.
+expect "F state left"                test -f "$CFG/ds-install.state"
+expect "F journal left"              test -f "$CFG/ds-install.journal"
+expect "F tree left dirty"           test -n "$(git -C "$CF" status --porcelain)"
+expect "F submodule was checked out" test -d "$CF/vendor/dev-standards"
+expect "F --rollback succeeds"          "$INSTALL" "$CF" --rollback
+expect "F rollback clean tree"          test -z "$(git -C "$CF" status --porcelain)"
+expect "F rollback cleared state"       test ! -e "$CFG/ds-install.state"
+expect "F rollback cleared journal"     test ! -e "$CFG/ds-install.journal"
+expect "F rollback no module residue"   test ! -e "$CFG/modules/vendor/dev-standards"
+expect "F rollback no vendor residue"   test ! -e "$CF/vendor/dev-standards"
+expect "F rollback no node_modules"     test ! -e "$CF/node_modules"
+
+echo "=== G: SIGINT mid-seed takes the INT-trap path, leaving recoverable state"
+# A stub npm that, when ds-bootstrap runs `npm ci`, sends SIGINT to the ds-install
+# process (whose pid the foreground wrapper exports) and then exits — so the blocked
+# seed|tee pipeline completes and ds-install's PENDING INT trap fires (exit 130,
+# fail_handler harvests the live journal). ds-install MUST run in the FOREGROUND:
+# an async (&) process in this non-interactive harness inherits SIGINT=SIG_IGN and
+# cannot trap it, so an external kill -INT would be ignored (verified). The wrapper
+# runs it in the foreground and the stub triggers the signal from inside.
+mkdir -p "$E2E/stub-sigint-npm"
+cat > "$E2E/stub-sigint-npm/npm" <<'STUB'
+#!/usr/bin/env bash
+printf '%s %s\n' "$PWD" "${1:-}" > "$DS_FIRED"
+kill -INT "$DS_INSTALL_PID"
+exit 1
+STUB
+chmod +x "$E2E/stub-sigint-npm/npm"
+mkconsumer "$E2E/consumer-sigint"
+CS="$E2E/consumer-sigint"; CSG="$CS/.git"
+set +e
+PATH="$E2E/stub-sigint-npm:$PATH" DS_FIRED="$E2E/g.fired" \
+  bash -c 'export DS_INSTALL_PID=$$; exec "$0" "$1"' "$INSTALL" "$CS" > "$E2E/g-install.log" 2>&1
+g_rc=$?
+set -e
+[ "$g_rc" -eq 130 ] && ok "G SIGINT mid-seed exits 130 (INT trap)" || bad "G exit code: $g_rc (want 130)"
+expect "G signal fired at vendor npm ci" grep -q "/vendor/dev-standards ci$" "$E2E/g.fired"
+expect "G state left"       test -f "$CSG/ds-install.state"
+expect "G journal left"     test -f "$CSG/ds-install.journal"
+expect "G tree left dirty"  test -n "$(git -C "$CS" status --porcelain)"
+expect "G undo hint printed" grep -q -- "--rollback" "$E2E/g-install.log"
+expect "G --rollback succeeds"          "$INSTALL" "$CS" --rollback
+expect "G rollback clean tree"          test -z "$(git -C "$CS" status --porcelain)"
+expect "G rollback cleared state"       test ! -e "$CSG/ds-install.state"
+expect "G rollback no module residue"   test ! -e "$CSG/modules/vendor/dev-standards"
+
 echo
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

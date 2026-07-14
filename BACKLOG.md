@@ -2,15 +2,24 @@
 
 Non-blocking, dated. Newest first.
 
-## 2026-07-14 — Hermetic installer/updater test suite (Gate P F13)
+## 2026-07-14 — Hermetic installer/updater test suite (Gate P F13) — DONE (2026-07-14)
 
-`ds-install.sh` / `seed-consumer.sh` / `ds-update-pins.sh` ship with no automated
-tests. Add a hermetic suite driven by a **local-fixture upstream** (a bare repo
-served as origin, so no GitHub round-trip) covering the happy path AND the
-failure paths the design promises: dirty-tree abort, bad `--ref` abort,
-predates-kit rejection with clean-tree rollback, mid-seed failure rollback, and
-the pin-update forced-red rollback (old pin + stamps restored, other consumers
-untouched). Effort M.
+**Status: DONE (2026-07-14).** `tests/e2e-adoption-kit.sh` is the hermetic suite
+(local file:// bare upstream, `protocol.file.allow` scoped via `GIT_CONFIG_*` env,
+no GitHub). It now covers, end-to-end (`RESULT: 56 passed, 0 failed`): fresh
+non-Node install + idempotent re-run + gitlink-at-latest-tag, dirty-tree abort,
+bad `--ref` abort, predates-kit reject + `--rollback` clean, pin bump
+(gitlink-only commit, clean tree), forced-red bump **auto**-rollback (old pin +
+stamps restored), `--keep-on-failure` + manual restore, dirty-consumer skip, plus
+the two added closers — **F** mid-seed install fault (a PATH-shadowed `npm` that
+passes the existence-only preflight but fails at the submodule `npm ci`: state
+LEFT under `.git/ds-install.{state,journal}`, NO auto-rollback, `--rollback`
+cleans) and **G** SIGINT mid-seed (foreground wrapper so the INT trap is
+trappable — an async process would inherit `SIGINT=SIG_IGN`; exit 130, state
+LEFT, `--rollback` cleans). Both pin the fault to the intended vendor `npm ci`.
+Run via `npm run test:adoption` (kept out of `npm test`: the happy path needs
+network + ~10 min). Post-v0.9.1 rollback semantics (install = manual-undo-only;
+update-pins = auto-rollback default) are locked in. Effort M.
 
 ## 2026-07-14 — Template-migration policy for consumer-owned shims (Gate P F11)
 
@@ -22,13 +31,16 @@ changes a shim's expected contract, an old consumer copy silently drifts. Define
 a policy: version/stamp the templates, detect drift on `--check`, and offer an
 opt-in re-seed that respects consumer edits. Effort M.
 
-## 2026-07-14 — Non-Node worktree create/reuse test (Gate P F4)
+## 2026-07-14 — Non-Node worktree create/reuse test (Gate P F4) — DONE (2026-07-14)
 
-The deep-review worktree symlinks root `node_modules/` unconditionally
-(`worktree.ts`); `ds-bootstrap.sh` now `mkdir -p node_modules` for non-Node
-consumers so the symlink resolves. Add a test that exercises worktree
-create-then-reuse for a non-Node consumer (empty `node_modules/`, no
-`package-lock.json`) so this contract can't regress. Effort S.
+**Status: DONE (2026-07-14).** `tests/deep-review-e2e/worktree.test.ts` gains a
+non-Node consumer (empty `node_modules/`, no `package-lock.json`)
+create-then-reuse test: select-worktree twice reuses the same worktree (asserted
+by an unchanged run-descriptor `run_id`, so a silent remove-and-recreate can't
+masquerade as reuse) with the `node_modules` symlink resolving both times; a
+negative third run (main `node_modules` removed) must refuse with
+`EXIT_WRONG_STATE` + stale-tooling — so the unconditional-symlink contract can't
+regress. Effort S.
 
 ## 2026-07-10 — Descriptor-relative confinement for skill-wrapper generation — MOOT (Phase 2, 2026-07-10)
 
