@@ -15,6 +15,29 @@
 > до gitleaks-гейта В CI); dependabot.yml = лише version-updates,
 > vulnerability-покриття вмикається окремо (alerts + security updates);
 > AGENTS.md-pointer — 3-рядковий файл, не symlink.
+> Фаза N3: ВИКОНАНО 2026-07-14 (core 72fdb74 = v0.13.0, пілот 21869f2) —
+> ОСТАННЯ фаза плану; план виконано повністю. Виконавчі дельти: контракт
+> §4.2 ратифіковано ЗА ТУЛОМ (тул не мінявся): точна 4-гілкова decision
+> table `computeCoverage` (exclude виграє над усім; present-entry міряється
+> без include-звірки), порожній діапазон = N/A exit 0 ЗІ звітом
+> (кваліфіковано: після resolveBase + свіжого loadCoverage; exit 2 не
+> видаляє старий артефакт), «0%-правило» знято як недосяжне при all:true;
+> CI `event.before` паркований у BACKLOG (прецедент N1 PR-CI bridge).
+> Hardening 4.1: redact→cap 200 у точці інгесту `exec.ts`
+> (`runner/src/redact.ts`, best-effort deny-list — НЕ gitleaks-спавн;
+> visible-char guard проти zero-width/filler reasons; surrogate-safe cap;
+> єдиний owner `BYPASS_REASON_MAX`, телеметрія імпортує). Нова real-git
+> CLI-сьюта diff-cover (N/A+аудит-поля, unresolvable, stale-до-rev-list,
+> e2e % проти порога — герметична заміна пілотному виміру). Пілотні улови:
+> мертвий exclude `features/corpus/download.ts` (реальний файл —
+> `infrastructure/…`; зміна трипнула б absent+included exit 2) і відсутній
+> `**/*.spec.ts` — exclude-список реконсиліовано до set-рівності з vitest
+> COVERAGE_EXCLUDE. Live-fire: `bypassed` companion-tests запис із
+> `[REDACTED]`-reason в ОБОХ sink-ах (звіт+телеметрія); diff-coverage
+> smoke-запис (total null — чесний N/A). Історична телеметрія: 623 events /
+> 6 bypassed / 0 suspicious — міграція не потрібна. Флипів НЕ робилось
+> (companion-tests = blocking+bypassable самопроводки пілота ще з N2,
+> diff-coverage = report-only; далі — лише за CALIBRATION).
 > Фаза N2: ВИКОНАНО 2026-07-14 (core eafc03e = v0.12.0, пілот 7a9f7b9).
 > Скоуп-дельта: пілотні кроки 3.1–3.5 виявились уже ВИКОНАНИМИ самим пілотом
 > (quality.json — легальна поверхня тюнінгу; роадмап reality-synced, вкл.
