@@ -40,6 +40,13 @@ non-obvious values and document any format-owned literal exceptions.
 Record identifier, comment, and test-title rules, including allowed exceptions
 for external schemas or user-facing content.
 
+Make the naming standard OPERATIONAL, never aspirational. Pick one and write it
+down: an explicit blessed-abbreviation allowlist (with the rule "a new
+abbreviation is added to the list in the same PR that introduces it"), or an
+explicit "abbreviations are fine" stance. A bare "use descriptive names" rule
+backed only by a length gate leaves the aspirational half ungated and guarantees
+arbitrary, reviewer-dependent enforcement.
+
 ## Tests
 
 State where tests and fixtures live, how source areas map to their tests, and

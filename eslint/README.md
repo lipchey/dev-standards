@@ -6,7 +6,7 @@ no per-project plugin install. Import what a stack needs; append your own layer.
 
 ```js
 // consumer eslint.config.js
-import { core, regexp, node, test, frontend, frontendVite, frontendNext } from "dev-standards/eslint";
+import { core, regexp, node, test, frontend, frontendVite, frontendNext, constantsHome } from "dev-standards/eslint";
 
 export default tseslint.config(
   { ignores: [/* … */] },
@@ -48,9 +48,42 @@ export default tseslint.config(
 | `frontend({files})` | frontend-web | `jsx-a11y` recommended + `react-hooks` flat/recommended + `react-hooks/set-state-in-render`. **Owns the react-hooks rules** — drop any separate react-hooks block in the consumer or the two double-report |
 | `frontendVite({files})` | frontend-web (Vite) | `react-refresh/only-export-components` — Fast-Refresh integrity. Vite only; Next runs its own |
 | `frontendNext({files})` | frontend-web (Next) | `@next/eslint-plugin-next` core-web-vitals. Next site only |
+| `constantsHome({files, ignores})` | all | custom `dev-standards/constants-home` (error): a module-scope `const` bound to a bare primitive literal must move to a constants home. A custom rule in an inline plugin — **not** `no-restricted-syntax` — so it never clobbers a consumer's own naming gate (see below) |
 
-The factory presets (`node`, `frontend*`) take `{ files }` because a monorepo must
-scope stack rules to the right subtree — React rules must not reach node packages.
+The factory presets (`node`, `frontend*`, `constantsHome`) take `{ files }` (and
+`constantsHome` also `{ ignores }`) because a monorepo must scope stack rules to the
+right subtree — React rules must not reach node packages, and the constants gate must
+not fire in the constants homes it points people toward.
+
+## `constantsHome` — value constants out of logic files
+
+Turns the review-only "value constants never sit inline in logic files" rule into a
+gate. It flags a **module-scope** `const` whose initializer is a bare primitive VALUE:
+a number/string/boolean literal, a unary `+`/`-` on a numeric literal, an expressionless
+template (`` `fixed` ``), or any of those inside a TS `as const` cast.
+
+It ships a custom rule inside an inline plugin, **not** a `no-restricted-syntax` config:
+flat config REPLACES (never merges) same-rule options, so a shared `no-restricted-syntax`
+entry would silently erase a consumer's own `no-restricted-syntax` naming gate (or the
+reverse). The distinct `dev-standards/constants-home` id cannot collide. The preset
+hard-codes NO paths — pass your own globs:
+
+```js
+...constantsHome({
+  files: ["src/**/*.ts"],                    // the workspace source (logic) globs
+  ignores: [                                 // the homes the message points to, plus non-logic files
+    "**/src/constants/**", "**/constants.ts",
+    "**/*.test.ts", "**/*.d.ts",
+    // + any repo-specific config homes that legitimately hold literals
+  ],
+}),
+```
+
+**Ceilings — review-owned, deliberately NOT caught:** a function-local literal
+(`const t = 500;` inside a function or block) and a literal-only arithmetic initializer
+(`const MS = 45 * 60 * 1000;` — a `BinaryExpression`, not a literal) both stay
+review-owned. Object literals and option-defaults objects (`const defaults = { gap: 500 }`)
+are intentionally left in place.
 
 ## Version pins that matter
 

@@ -169,16 +169,38 @@ classification, status, sha) across the whole run.
    "editable" verdict here would risk auto-editing a path the repo meant to
    protect.
 3. `commit-slice <finding-id>` runs the atomic fix loop, `fixable-now` findings
-   only:
+   only. **Brief fidelity (orchestrator-runtime, no CLI change):** a finding whose
+   fix has a placement component (moves or introduces code) must carry the exact
+   rule-compliant destination path, validated against `.claude/code-conventions.md`
+   - never a destination the finding→slice translation guessed or hard-coded; the
+   implementer re-checks each slice's placement against `code-conventions.md`
+   before this loop.
    - Make one smallest behavior-preserving slice.
    - Run focused tests for the touched area.
+   - **Self-review the slice diff (orchestrator-runtime, no CLI verb):** before
+     committing, judge the slice against the SAME merged guide set from the
+     review-only pass (§review-only step 4), explicitly INCLUDING the repo's
+     placement/conventions rules (`.claude/code-conventions.md`). A slice that
+     violates them is reworked and re-reviewed BEFORE commit, never
+     committed-then-fixed.
    - Green: commit that slice alone, carrying a
      `Deep-Review-Slice: <finding-id>` trailer.
    - Red: revert that slice only, mark the finding `fix-failed`, and move it to
      the plan. Never carry a broken slice forward.
-4. `verify` runs the final `./verify --fast`/`--full` gate across the applied
-   slices in the worktree - the skill's own changes only, no base integration.
-   Red means the whole refactor is `needs-human`; nothing proceeds to handoff.
+4. **Fix-diff self-review (orchestrator-runtime), then `verify`.** Before the gate,
+   self-review the WHOLE produced diff - diffed against the run descriptor's
+   `initial_head_sha` (not an ambiguous `<base>` ref) - under the same merged guide
+   lens, architecture/placement/conventions INCLUDED (`.claude/code-conventions.md`).
+   The engine has no verb to reopen a bound finding (`mutateFindings` is the sole
+   findings writer), so a violation still standing here does NOT become a new finding
+   in this run and does NOT proceed to handoff: record it in the report and route the
+   refactor to `needs-human` - the same fail-closed exit as a red verify. Any Codex
+   Gate-C / cross-run prompt over a produced FIX diff carries this same
+   architecture/placement/conventions lens (cite `code-conventions.md`), never
+   behavior-only. Then `verify` runs the final gate at the tier that judges the merge
+   (`--full` default; `deep_review.verify_after_fix` overrides) across the applied
+   slices in the worktree - the skill's own changes only, no base integration. Red
+   means the whole refactor is `needs-human`; nothing proceeds to handoff.
 5. `report` writes `reports/quality/deep-review-<date>.md`, metadata-only and
    secret-scanned: the fixed slices with their SHAs, the rejected buckets
    (no-touch, needs-plan, fix-failed), and the plan for the latter two.

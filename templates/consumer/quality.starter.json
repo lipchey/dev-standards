@@ -83,7 +83,7 @@
     },
     "guides_dir": ".claude/review-guides",
     "no_touch_globs_ref": ".claude/project-facts.md",
-    "verify_after_fix": "--fast",
+    "verify_after_fix": "--full",
     "verify_entry": "scripts/verify"
   }
 }
