@@ -11,19 +11,21 @@ export LC_ALL=C
 EXIT_USAGE=2
 SUBMODULE_PATH='vendor/dev-standards'
 
-usage() { echo "usage: ds-update-pins.sh [--ref <tag|sha>] [--dry-run] [roots...]" >&2; }
+usage() { echo "usage: ds-update-pins.sh [--ref <tag|sha>] [--dry-run] [--keep-on-failure] [roots...]" >&2; }
 
 core_script_dir=$(cd "$(dirname "$0")" && pwd -P)
 core_root=$(cd "$core_script_dir/.." && pwd -P)
 
 ref=''
 dry_run=false
+keep_on_failure=false
 roots=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --ref) [ "$#" -ge 2 ] || { echo "--ref needs a value" >&2; usage; exit "$EXIT_USAGE"; }
            ref="$2"; shift 2 ;;
     --dry-run) dry_run=true; shift ;;
+    --keep-on-failure) keep_on_failure=true; shift ;;
     -*) echo "unknown flag: $1" >&2; usage; exit "$EXIT_USAGE" ;;
     *) roots+=("$1"); shift ;;
   esac
@@ -85,11 +87,27 @@ rollback_consumer() {
   fi
 }
 
-# An interrupt mid-transaction must roll the in-flight consumer back before
+# On a caught transaction failure: default rolls the in-flight consumer back to
+# its old pin; --keep-on-failure instead leaves the half-applied state in place
+# for debugging and just prints the manual restore recipe. Either way the caller
+# counts the consumer failed.
+handle_failure() {
+  if [ "$keep_on_failure" = true ]; then
+    echo "  kept for debugging (log: $boot_log)"
+    # Unstage FIRST: bootstrap runs `git submodule update`, which resets the
+    # checkout to the staged gitlink — restoring after it would undo the checkout.
+    printf '  restore: git -C %q restore --staged %s && git -C %q checkout %s && (cd %q && scripts/ds-bootstrap.sh)\n' \
+      "$consumer" "$SUBMODULE_PATH" "$sub" "$old_oid" "$consumer"
+  else
+    rollback_consumer
+  fi
+}
+
+# An interrupt mid-transaction must resolve the in-flight consumer before
 # exiting; `started` is true only while one is under mutation.
 started=false
-consumer=''; sub=''; old_oid=''
-trap 'if [ "$started" = true ]; then echo "  interrupted"; rollback_consumer; fi; exit 130' INT TERM
+consumer=''; sub=''; old_oid=''; boot_log=''
+trap 'if [ "$started" = true ]; then echo "  interrupted"; handle_failure; fi; exit 130' INT TERM
 
 for consumer in "${consumers[@]}"; do
   echo "--- $consumer"
@@ -143,6 +161,10 @@ for consumer in "${consumers[@]}"; do
 
   echo "  bumping ${old_oid:0:7} -> ${new_oid:0:7}"
   ok=true
+  # --absolute-git-dir resolves the real store even in a linked worktree, where
+  # $consumer/.git is a file, not a directory. Set before started=true so an
+  # early signal's keep-on-failure message never prints an empty log path.
+  boot_log="$(git -C "$consumer" rev-parse --absolute-git-dir)/ds-bump-bootstrap.log"
   started=true
 
   # One transaction: checkout NEW -> stage gitlink BEFORE bootstrap (so the
@@ -151,9 +173,6 @@ for consumer in "${consumers[@]}"; do
   git -C "$sub" -c advice.detachedHead=false checkout -q "$new_oid" 2>/dev/null \
     || { echo "  FAIL: checkout $new_oid"; ok=false; }
   [ "$ok" = true ] && { git -C "$consumer" add -- "$SUBMODULE_PATH" || { echo "  FAIL: staging gitlink"; ok=false; }; }
-  # --absolute-git-dir resolves the real store even in a linked worktree, where
-  # $consumer/.git is a file, not a directory.
-  boot_log="$(git -C "$consumer" rev-parse --absolute-git-dir)/ds-bump-bootstrap.log"
   [ "$ok" = true ] && { ( cd "$consumer" && ./scripts/ds-bootstrap.sh ) >"$boot_log" 2>&1 || { echo "  FAIL: ds-bootstrap (log: $boot_log)"; ok=false; }; }
   [ "$ok" = true ] && { ( cd "$consumer" && ./scripts/verify --fast ) || { echo "  FAIL: verify --fast"; ok=false; }; }
   if [ "$ok" = true ]; then
@@ -162,6 +181,7 @@ for consumer in "${consumers[@]}"; do
     # Pathspec-confined: hooks or gates that staged something else during the
     # transaction cannot ride into the pin commit.
     if git -C "$consumer" commit -q -m "chore(dev-standards): bump submodule pin ${old_oid:0:7} -> ${new_oid:0:7}" -- "$SUBMODULE_PATH"; then
+      started=false
       echo "  updated -> ${new_oid:0:7}"
       updated_count=$((updated_count + 1))
     else
@@ -170,7 +190,7 @@ for consumer in "${consumers[@]}"; do
   fi
 
   if [ "$ok" != true ]; then
-    rollback_consumer
+    handle_failure
     fail_count=$((fail_count + 1))
   fi
   started=false

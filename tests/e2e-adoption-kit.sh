@@ -60,6 +60,7 @@ mkconsumer "$E2E/consumer-a"
 if "$INSTALL" "$E2E/consumer-a" > "$E2E/a-install.log" 2>&1; then ok "A install exit 0"; else bad "A install (see a-install.log)"; fi
 A="$E2E/consumer-a"
 expect "A --check green" "$INSTALL" "$A" --check
+expect "A no leftover recovery state" test ! -e "$A/.git/ds-install.state"
 expect "A node_modules exists" test -d "$A/node_modules"
 expect "A overlay dir empty" test -z "$(ls -A "$A/.claude/review-guides" 2>/dev/null)"
 expect "A CLAUDE.md managed marker" grep -q "dev-standards:managed-section" "$A/CLAUDE.md"
@@ -83,6 +84,9 @@ expect "B bad-ref: tree untouched" test -z "$(git -C "$E2E/consumer-badref" stat
 
 mkconsumer "$E2E/consumer-old"
 expect_fail "B predates-kit ref rejected" "$INSTALL" "$E2E/consumer-old" --ref v0.8.0
+expect "B predates: state left for debugging" test -f "$E2E/consumer-old/.git/ds-install.state"
+expect "B predates: --rollback succeeds" "$INSTALL" "$E2E/consumer-old" --rollback
+expect "B predates: recovery state cleared" test ! -e "$E2E/consumer-old/.git/ds-install.state"
 expect "B predates: clean rollback" test -z "$(git -C "$E2E/consumer-old" status --porcelain)"
 expect "B predates: no .git/modules residue" test ! -e "$E2E/consumer-old/.git/modules/vendor/dev-standards"
 
@@ -119,6 +123,20 @@ if [ "$after" = "$old_pin" ]; then ok "D rollback restored old pin"; else bad "D
 stamp=$(cat "$B/vendor/dev-standards/runner/dist/.built-from")
 if [ "$stamp" = "$old_pin" ]; then ok "D rollback restored stamps"; else bad "D stamp: $stamp"; fi
 expect "D tree clean after rollback" test -z "$(git -C "$B" status --porcelain)"
+
+echo "=== D2: --keep-on-failure leaves the failed bump in place"
+# B still carries D's committed red gate and sits at old_pin (v0.9.1-test).
+want92=$(git -C "$E2E/core-work" rev-parse 'v0.9.2-test^{commit}')
+expect_fail "D2 keep red bump exits non-zero" \
+  "$E2E/core-work/scripts/ds-update-pins.sh" --ref v0.9.2-test --keep-on-failure "$E2E/consumer-b"
+kept=$(git -C "$B/vendor/dev-standards" rev-parse HEAD)
+if [ "$kept" = "$want92" ]; then ok "D2 failed pin kept, not rolled back"; else bad "D2 pin: $kept != $want92"; fi
+# Manual restore per the printed recipe: unstage FIRST (bootstrap's submodule
+# update would otherwise reset the checkout to the staged new gitlink).
+git -C "$B" restore --staged -- vendor/dev-standards
+git -C "$B/vendor/dev-standards" -c advice.detachedHead=false checkout -q "$old_pin"
+( cd "$B" && ./scripts/ds-bootstrap.sh ) >/dev/null 2>&1
+expect "D2 tree clean after manual restore" test -z "$(git -C "$B" status --porcelain)"
 
 echo "=== E: dirty consumer is skipped by update-pins"
 touch "$B/dirty.marker"

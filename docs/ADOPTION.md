@@ -1,9 +1,5 @@
 # Adopting dev-standards
 
-> **Onboarding gate.** The `Onboarding gate` bullet in this repo's `CLAUDE.md`
-> must be cleared **by the user** before onboarding any new consumer. This
-> document describes the mechanics; it does not by itself lift that gate.
-
 dev-standards is vendored into a consumer as a git submodule at
 `vendor/dev-standards` (pinned by SHA). The consumer builds the runner bundles
 locally and runs thin `scripts/verify` / `scripts/deep-review` shims over them.
@@ -29,7 +25,9 @@ scripts/ds-install.sh /path/to/consumer [--ref vX.Y.Z] [--eslint]
 - `--eslint` also seeds the shared ESLint presets (requires a root
   `package.json`).
 - The installer **stages the gitlink but does not commit** — review, then
-  commit. On any failure it rolls the target back to its clean starting state.
+  commit. On failure it **leaves the half-applied state in place** for debugging
+  (the transaction journal lands in the repo's git dir — `.git/ds-install.journal` for a normal checkout; `git rev-parse --absolute-git-dir` for a linked worktree); undo it on demand
+  with `scripts/ds-install.sh /path/to/consumer --rollback`.
 - Idempotent: re-running re-pins/re-seeds without clobbering repo-owned files.
   `scripts/ds-install.sh /path/to/consumer --check` verifies an install.
 
@@ -89,12 +87,15 @@ Bump one or all local consumers to a newer pin (one atomic transaction each;
 rolls that consumer back on any failure; no pushes):
 
 ```sh
-scripts/ds-update-pins.sh [--ref vX.Y.Z] [--dry-run] [roots...]
+scripts/ds-update-pins.sh [--ref vX.Y.Z] [--dry-run] [--keep-on-failure] [roots...]
 ```
 
 Each bump re-runs the consumer's `ds-bootstrap.sh` (rebuild + re-stamp) and
 `./scripts/verify --fast` before committing only the gitlink with message
-`chore(dev-standards): bump submodule pin <old7> -> <new7>`.
+`chore(dev-standards): bump submodule pin <old7> -> <new7>`. A failed bump rolls
+that consumer back to its old pin by default; `--keep-on-failure` instead leaves
+the failed state in place for debugging (the run still exits non-zero and prints
+a manual restore recipe).
 
 ## Fix-upstream loop
 
