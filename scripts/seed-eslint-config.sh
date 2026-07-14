@@ -65,7 +65,7 @@ const pkgPath = process.argv[1];
    is the consumers own runner (peer of dev-standards), so it is seeded too. */
 const WANT = {
   "dev-standards": "file:vendor/dev-standards",
-  "eslint": ">=9.38.0",
+  "eslint": "^9.38.0",
   "@eslint/js": "^9",
   "typescript-eslint": "^8",
 };

@@ -30,9 +30,24 @@
       "package_manager": "none"
     }
   ],
-  "filesets": [],
+  "filesets": [
+    {
+      "name": "manifests_staged",
+      "source": "git_staged",
+      "include": ["package.json", "package-lock.json"]
+    }
+  ],
   "tiers": {
-    "staged": [],
+    "staged": [
+      {
+        "name": "check-new-deps",
+        "argv": ["node", "vendor/dev-standards/tools/check-new-deps.mjs"],
+        "mode": "report-only",
+        "operational_exit_codes": [2],
+        "skip_if_empty": "manifests_staged",
+        "timeout_seconds": 10
+      }
+    ],
     "fast": [
       {
         "name": "instance-docs-seeded",

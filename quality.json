@@ -36,6 +36,11 @@
       "source": "repo_all",
       "include": ["runner/src/**/*.ts", "tests/**/*.ts"],
       "exclude": []
+    },
+    {
+      "name": "manifests_staged",
+      "source": "git_staged",
+      "include": ["package.json", "package-lock.json"]
     }
   ],
   "tiers": {
@@ -50,6 +55,14 @@
         "name": "runner-tests",
         "argv": ["npm", "run", "test:runner"],
         "timeout_seconds": 60
+      },
+      {
+        "name": "check-new-deps",
+        "argv": ["node", "tools/check-new-deps.mjs"],
+        "mode": "report-only",
+        "operational_exit_codes": [2],
+        "skip_if_empty": "manifests_staged",
+        "timeout_seconds": 10
       }
     ],
     "full": [

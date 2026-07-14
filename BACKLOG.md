@@ -2,6 +2,20 @@
 
 Non-blocking, dated. Newest first.
 
+## 2026-07-14 — PR-CI index bridge for check-new-deps (N1 Gate P, parked)
+
+`check-new-deps` reads git index-blobs only, so in PR CI (clean checkout,
+index == HEAD) its `git_staged`-sourced `skip_if_empty` fileset is empty and
+the check is `skipped` — core CI contributes zero coverage and zero
+calibration telemetry for it; the enforcement surface is local
+`./verify --fast` (core) and the pre-commit `--staged` hook (consumers). A
+bridge — `git reset --soft $(git merge-base origin/<base> HEAD)` before
+`./verify --fast` in the PR job, plus non-shallow fetch-depth — would present
+the PR delta as a staged index without crossing the index-blob invariant.
+Decide TOGETHER WITH the blocking flip per `docs/CALIBRATION.md`, not before:
+report-only telemetry comes from local runs; a CI bridge only matters once
+the gate blocks. (N1 low-level plan D1; Gate P finding, Codex P1/PARTIAL.)
+
 ## 2026-07-14 — Hermetic installer/updater test suite (Gate P F13) — DONE (2026-07-14)
 
 **Status: DONE (2026-07-14).** `tests/e2e-adoption-kit.sh` is the hermetic suite

@@ -39,6 +39,7 @@ deleted - the history is the second-use evidence.
 
 ## Pending
 
+- [ ] 2026-07-14 dev-standards N1 gate-P (Codex) - check-new-deps: extend the positive spec grammar from NEW deps to spec-CHANGED deps (dep-swap to git/URL/tarball/range is the same threat class); dropped from N1 as exceeding the binding spec's letter — needs its own decision + false-positive assessment before landing (addition)
 - [ ] 2026-07-13 ai-prompter repo-foundation T9 - docs/templates: generic prose hardcodes the `reports/quality` output path; consumers can relocate it via quality.json `paths.*` (ai-prompter now uses `.artifacts/reports/quality`) — reference `paths.reports`/`paths.baselines` instead of the literal (correction)
 - [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - runner: validate `{files:...}`-expanded operands against glob metacharacters (`[ ] * ?`) — ESLint treats CLI file args as globs, so a bracket-named staged file is silently mis-resolved (addition)
 - [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - runner: tier deadline equality boundary — `remainingMs()` floors sub-ms headroom to 0 and the budget assertion fires only on strictly-greater elapsed; make `left <= 0` a tier-level failure with regression coverage (addition)
