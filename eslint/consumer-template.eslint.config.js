@@ -31,6 +31,14 @@ export default tseslint.config(
   //   ...frontend({ files: ["src/**/*.tsx"] }),
   //   ...frontendVite({ files: ["src/**/*.tsx"] }),   // Vite app only
   //   ...frontendNext({ files: ["app/**/*.tsx"] }),   // Next site only
+  // Constants-home gate — a module-scope const bound to a bare primitive literal
+  // belongs in a constants home, not inline in a logic file. Add `constantsHome`
+  // to the dev-standards/eslint import; scope `files` to your source and `ignores`
+  // to your constants homes + non-logic files (tests, .d.ts, config homes):
+  //   ...constantsHome({
+  //     files: ["src/**/*.ts"],
+  //     ignores: ["**/src/constants/**", "**/constants.ts", "**/*.test.ts", "**/*.d.ts"],
+  //   }),
   /* JS config files sit outside tsconfig — typed rules crash on them. globals.node
      keeps no-undef quiet on `process` etc.; merge the languageOptions so this block
      does not clobber disableTypeChecked's parser reset (bare `languageOptions: { globals }`

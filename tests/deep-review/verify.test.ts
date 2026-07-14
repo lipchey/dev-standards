@@ -261,12 +261,12 @@ function cliFor(repo: string): { deps: CliDeps; err: () => string } {
   };
 }
 
-test('scope default: no --scope and no verify_after_fix -> the verify shim is spawned with --fast; verification stamped', () => {
+test('scope default: no --scope and no verify_after_fix -> the verify shim is spawned with --full; verification stamped', () => {
   const { repo, fpath, recordPath } = repoWithFixMode();
   const cli = cliFor(repo);
   assert.equal(runCli(['verify', '--findings', fpath], cli.deps), EXIT_OK);
-  assert.equal(fs.readFileSync(recordPath, 'utf8').trim(), '--fast');
-  assert.equal(JSON.parse(fs.readFileSync(fpath, 'utf8')).verification?.scope, 'verify:fast');
+  assert.equal(fs.readFileSync(recordPath, 'utf8').trim(), '--full');
+  assert.equal(JSON.parse(fs.readFileSync(fpath, 'utf8')).verification?.scope, 'verify:full');
 });
 
 test('scope from config: verify_after_fix "--full" -> --full passed', () => {

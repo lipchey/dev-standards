@@ -484,7 +484,7 @@ function handoffCmd(rest: string[], deps: CliDeps): number {
 // The deep-review runtime calls this AFTER all slices and BEFORE handoff: a GREEN
 // verify (exit 0) records the verification stamp and clears the refactor to proceed;
 // a RED verify is EXIT_NEEDS_HUMAN (13) and nothing lands. Scope is `--scope` ??
-// deep_review.verify_after_fix ?? --fast, validated here (an invalid operand is an
+// deep_review.verify_after_fix ?? --full, validated here (an invalid operand is an
 // argv-level usage error -> EXIT_USAGE before any spawn). The §2 contract (absolute
 // fixed-argv shim spawn, exit mapping) lives in ./verify.ts; on a spawn failure the
 // §2.4 machine error is the LAST stderr line, else a one-line status is printed.
@@ -505,7 +505,7 @@ function verifyCmd(rest: string[], deps: CliDeps): number {
     return EXIT_USAGE;
   }
   const config = loadConfig(resolve(env.cwd, 'quality.json'));
-  const scope = scopeFlag.value ?? config.verifyAfterFix ?? '--fast';
+  const scope = scopeFlag.value ?? config.verifyAfterFix ?? '--full';
   if (scope !== '--fast' && scope !== '--full') {
     deps.stderr(
       `deep-review verify: invalid --scope operand ${JSON.stringify(scope)} (expected --fast or --full)\n`,
