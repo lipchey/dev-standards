@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=20"
   },
+  "exports": {
+    "./eslint": "./eslint/index.js"
+  },
   "scripts": {
     "bootstrap": "npm ci && npm run build",
     "prebuild": "rm -rf runner/dist deep-review/dist",
@@ -13,18 +16,34 @@
     "build:runner": "esbuild runner/src/verify-runner.ts runner/src/validate-quality-manifest.ts runner/src/migrate-quality-manifest.ts --bundle --platform=node --target=node20 --format=esm --sourcemap=external --outdir=runner/dist --out-extension:.js=.mjs",
     "build:deep-review": "esbuild deep-review/src/deep-review-runner.ts --bundle --platform=node --target=node20 --format=esm --sourcemap=external --outdir=deep-review/dist --out-extension:.js=.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "DS_TELEMETRY_PATH=off tsx --test tests/runner/*.test.ts tests/deep-review/*.test.ts tests/tools/*.test.ts",
+    "test": "DS_TELEMETRY_PATH=off tsx --test tests/runner/*.test.ts tests/deep-review/*.test.ts tests/tools/*.test.ts && npm run test:eslint",
     "test:e2e": "DS_TELEMETRY_PATH=off tsx --test tests/deep-review-e2e/*.test.ts",
     "test:runner": "DS_TELEMETRY_PATH=off tsx --test tests/runner/*.test.ts",
     "test:file": "DS_TELEMETRY_PATH=off tsx --test",
     "validate:manifest": "node runner/dist/validate-quality-manifest.mjs --manifest quality.json",
-    "verify:full": "./verify --full"
+    "verify:full": "./verify --full",
+    "test:eslint": "node --test tests/eslint/*.test.mjs"
+  },
+  "peerDependencies": {
+    "eslint": ">=9.38.0"
+  },
+  "dependencies": {
+    "@eslint-community/eslint-plugin-eslint-comments": "^4.7.2",
+    "@next/eslint-plugin-next": "^16.2.10",
+    "@vitest/eslint-plugin": "^1.6.23",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-n": "^18.2.2",
+    "eslint-plugin-react-hooks": "^6.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "eslint-plugin-regexp": "^3.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "ajv": "^8.17.1",
     "esbuild": "^0.25.0",
+    "eslint": "^9.38.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.63.0"
   }
 }
