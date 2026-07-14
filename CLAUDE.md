@@ -23,3 +23,7 @@ their bootstrap script and run a thin `verify` shim). Pilot consumer:
 - **Post-removal roadmap**: `docs/post-workflow-removal-plan.md` — execute
   after the `workflow/` removal lands; each phase gets its own low-level plan
   + Gate P before dispatch.
+- **AI-quality adoption plan**: `docs/ai-quality-adoption-plan.md`
+  (Gate P passed 2026-07-14) — research-born deltas layered on the roadmap:
+  Block 0 roadmap-staleness fixes, N1 `check-new-deps` gate, N2/N3 = execute
+  roadmap Phases 3-4, N4 platform/doctrine cheap wins. Same execution rule.
