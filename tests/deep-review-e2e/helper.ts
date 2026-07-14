@@ -215,9 +215,10 @@ export function initCoreRepo(opts: CoreFixtureOpts = {}): Sandbox {
    gitlink submodule (added over file:// with `protocol.file.allow=always`, which
    git >=2.38 requires for local submodule transport), carrying a committed
    pre-commit hook. The main checkout holds the tooling SOURCES a fresh run-worktree
-   symlinks (built dist / node_modules / .tools) plus the build stamp
-   (runner/dist/.built-from). `stampFresh` sets the stamp to the pinned submodule SHA
-   (tooling wires successfully) or a bogus SHA (setupWorktreeTooling must fail loud).
+   COPIES (built dist) + symlinks (node_modules / .tools), plus the build stamps
+   (runner/ + deep-review/ dist/.built-from). `stampFresh` sets the stamps to the
+   pinned submodule SHA (tooling wires successfully) or a bogus SHA
+   (setupWorktreeTooling must fail loud at the before-copy gate).
    The predicted run-worktree path is returned so the stale case can assert rollback. */
 export interface Consumer extends Sandbox {
   pinnedSha: string;
@@ -273,12 +274,14 @@ export function initConsumerRepo(opts: { stampFresh: boolean; slug?: string } ):
   git(repo, ['commit', '-q', '-m', 'add vendor/dev-standards submodule'], env);
   const pinnedSha = git(repo, ['rev-parse', 'HEAD:vendor/dev-standards'], env).trim();
 
-  /* The tooling SOURCES + build stamp, created AFTER the commits so they stay
+  /* The tooling SOURCES + build stamps, created AFTER the commits so they stay
      untracked fs artifacts in the main checkout (exactly how a bootstrapped dist
-     lives). */
+     lives). ds-bootstrap stamps BOTH dist dirs; the copy path re-reads each dist's
+     own stamp, so the fixture must carry both. */
   const stamp = opts.stampFresh ? pinnedSha : 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
   writeFile(repo, 'vendor/dev-standards/runner/dist/.built-from', `${stamp}\n`);
   writeFile(repo, 'vendor/dev-standards/runner/dist/verify-runner.mjs', '/* built */\n');
+  writeFile(repo, 'vendor/dev-standards/deep-review/dist/.built-from', `${stamp}\n`);
   writeFile(repo, 'vendor/dev-standards/deep-review/dist/deep-review-runner.mjs', '/* built */\n');
   writeFile(repo, 'node_modules/.keep', '');
   writeFile(repo, '.tools/.keep', '');

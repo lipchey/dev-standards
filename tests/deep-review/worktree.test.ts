@@ -365,26 +365,108 @@ function toolingDeps(submoduleSha: string | null, over: Partial<WorktreeDeps> = 
   return { deps: d, links };
 }
 
+// A real-fs fixture for the COPY path of setupWorktreeTooling: a `main` checkout holding the built
+// dist sources (each with its own `.built-from` stamp + bundle entrypoint, as ds-bootstrap leaves
+// them) plus node_modules/.tools, and an empty worktree dir. Git reads stay MOCKED (toolingSpawn) —
+// only the fs copy is real, so the immutable-snapshot + race guards run against real files.
+const TOOLING_DISTS = [
+  ['vendor/dev-standards/runner/dist', 'verify-runner.mjs'],
+  ['vendor/dev-standards/deep-review/dist', 'deep-review-runner.mjs'],
+] as const;
+
+function makeToolingFixture(pinned: string): { root: string; main: string; wt: string } {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-tooling-')));
+  const main = path.join(root, 'main');
+  const wt = path.join(root, 'wt');
+  fs.mkdirSync(wt, { recursive: true });
+  for (const [rel, entry] of TOOLING_DISTS) {
+    fs.mkdirSync(path.join(main, rel), { recursive: true });
+    fs.writeFileSync(path.join(main, rel, '.built-from'), `${pinned}\n`);
+    fs.writeFileSync(path.join(main, rel, entry), '/* built */\n');
+  }
+  fs.mkdirSync(path.join(main, 'node_modules'), { recursive: true });
+  fs.mkdirSync(path.join(main, '.tools'), { recursive: true });
+  return { root, main, wt };
+}
+
+// deps for setupWorktreeTooling against a real-fs fixture: real fs reads + copy, but MOCKED git so
+// no real submodule is needed. `--git-common-dir` -> `<main>/.git` makes mainCheckoutOf resolve to
+// `<main>`. `over` layers a copyDir fault injection.
+function realFsToolingDeps(fx: { main: string; wt: string }, pinned: string, over: Partial<WorktreeDeps> = {}): WorktreeDeps {
+  return {
+    cwd: fx.wt,
+    existsSync: (p) => fs.existsSync(p),
+    realpath: (p) => p,
+    spawn: toolingSpawn(pinned, `${fx.main}/.git`),
+    ...over,
+  };
+}
+
 test('tooling: a repo WITHOUT a vendor/dev-standards gitlink is a no-op (no symlinks, no throw)', () => {
   const { deps: d, links } = toolingDeps(null);
   assert.doesNotThrow(() => setupWorktreeTooling(d, '/wt'));
   assert.equal(links.length, 0, 'core repo => nothing wired');
 });
 
-test('tooling: a fresh stamp (main .built-from == pinned submodule SHA) symlinks dist/node_modules/.tools', () => {
-  const { deps: d, links } = toolingDeps('abc123', {
-    readFileMaybe: (p) => (p === '/main/vendor/dev-standards/runner/dist/.built-from' ? 'abc123\n' : null),
-  });
+test('tooling: a fresh stamp COPIES the dist dirs (immutable real snapshots) and SYMLINKS node_modules/.tools', () => {
+  const pinned = 'abc123def456';
+  const fx = makeToolingFixture(pinned);
+  try {
+    setupWorktreeTooling(realFsToolingDeps(fx, pinned), fx.wt);
 
-  setupWorktreeTooling(d, '/wt');
+    for (const [rel, entry] of TOOLING_DISTS) {
+      const distPath = path.join(fx.wt, rel);
+      assert.equal(fs.lstatSync(distPath).isSymbolicLink(), false, `${rel} must be a copied real dir, not a symlink`);
+      assert.equal(fs.statSync(distPath).isDirectory(), true, `${rel} must be a directory`);
+      assert.equal(fs.readFileSync(path.join(distPath, '.built-from'), 'utf8').trim(), pinned, `${rel} stamp copied from main`);
+      assert.equal(fs.existsSync(path.join(distPath, entry)), true, `${rel} entrypoint copied from main`);
+      const leftovers = fs.readdirSync(path.dirname(distPath)).filter((n) => n.includes('.tmp-'));
+      assert.deepEqual(leftovers, [], `no leftover temp copy dir beside ${rel}`);
+    }
+    for (const rel of ['node_modules', '.tools']) {
+      const link = path.join(fx.wt, rel);
+      assert.equal(fs.lstatSync(link).isSymbolicLink(), true, `${rel} must stay a symlink`);
+      assert.equal(fs.existsSync(link), true, `${rel} symlink must resolve`);
+    }
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
 
-  const linkPaths = links.map(([, l]) => l);
-  assert.ok(linkPaths.includes('/wt/vendor/dev-standards/runner/dist'), 'runner dist symlinked');
-  assert.ok(linkPaths.includes('/wt/vendor/dev-standards/deep-review/dist'), 'deep-review dist symlinked');
-  assert.ok(linkPaths.includes('/wt/node_modules'), 'node_modules symlinked');
-  assert.ok(linkPaths.includes('/wt/.tools'), '.tools symlinked');
-  // Each links from the resolved main checkout.
-  assert.ok(links.every(([target]) => target.startsWith('/main/')), 'symlink targets live in the main checkout');
+test('tooling: a concurrent re-bootstrap changing the SOURCE stamp mid-copy -> ToolingError, no dist at the destination (temp cleaned up)', () => {
+  const pinned = 'abc123def456';
+  const fx = makeToolingFixture(pinned);
+  const runnerDist = path.join(fx.wt, 'vendor/dev-standards/runner/dist');
+  const copiedFrom: string[] = [];
+  try {
+    // Copy for real, then simulate a concurrent ds-bootstrap rebuilding main at a DIFFERENT pin:
+    // the SOURCE stamp changes between the pre-copy gate and the post-copy re-read.
+    const deps = realFsToolingDeps(fx, pinned, {
+      copyDir: (src, dest) => {
+        copiedFrom.push(src);
+        fs.cpSync(src, dest, { recursive: true });
+        fs.writeFileSync(path.join(fx.main, 'vendor/dev-standards/runner/dist/.built-from'), 'deadbeefdeadbeef\n');
+      },
+    });
+
+    // `concurrent` is unique to snapshotDist's post-copy race guard (the before-copy gate says
+    // "run scripts/ds-bootstrap.sh") — matching it proves the fault fired at the intended site.
+    assert.throws(
+      () => setupWorktreeTooling(deps, fx.wt),
+      (error: unknown) => error instanceof ToolingError && /concurrent/i.test((error as Error).message),
+    );
+    assert.ok(
+      copiedFrom.includes(path.join(fx.main, 'vendor/dev-standards/runner/dist')),
+      'the copy seam ran for runner/dist (the fault landed at the copy site, not before it)',
+    );
+
+    assert.equal(fs.existsSync(runnerDist), false, 'no dist dir left at the destination');
+    const parent = path.dirname(runnerDist);
+    const leftovers = fs.existsSync(parent) ? fs.readdirSync(parent).filter((n) => n.includes('.tmp-')) : [];
+    assert.deepEqual(leftovers, [], 'temp copy dir cleaned up');
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
 });
 
 test('tooling: a STALE stamp (main built a different submodule SHA) -> ToolingError, no symlinks, bootstrap instruction', () => {

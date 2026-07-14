@@ -8,8 +8,9 @@
 //   1. capture the base as ref + SHA and `worktree add` FROM the captured SHA (not the branch
 //      name, which could move between resolve and add);
 //   2. assert the new worktree's HEAD == the captured base SHA;
-//   3. set up tooling (consumer repos: submodule init + symlink the main checkout's built dist /
-//      node_modules / .tools when the build stamp matches the pinned submodule SHA);
+//   3. set up tooling (consumer repos: submodule init, then COPY the main checkout's built dist as
+//      an immutable snapshot + symlink node_modules / .tools, when the build stamp matches the
+//      pinned submodule SHA);
 //   4. write the run descriptor LAST — its presence is the "worktree ready" marker.
 // Any failure AFTER `worktree add` rolls back exactly what THIS call created (branch + worktree);
 // a pre-existing worktree is reused ONLY when it carries a valid descriptor AND live tooling.
@@ -50,29 +51,40 @@ const DIR_PREFIX = 'deep-review-';
 // The consumer submodule path the engine ships inside; tooling wires a fresh worktree of the
 // CONSUMER repo to the main checkout's built copy of this submodule.
 const SUBMODULE_PATH = 'vendor/dev-standards';
-// The single build stamp both bundles share (runner/dist/.built-from == the pinned submodule SHA
-// the main checkout was built from). A worktree reuses the main checkout's dist only when this
-// stamp matches the worktree's own pinned submodule SHA.
+// The representative build stamp for the BEFORE-copy gate (runner/dist/.built-from == the pinned
+// submodule SHA the main checkout was built from). ds-bootstrap writes a stamp into BOTH dist dirs
+// with the same SHA, so checking one is a sufficient precondition; the per-dist post-copy re-read
+// (snapshotDist) is the actual race guard. A worktree copies the main checkout's dist only when
+// this stamp matches the worktree's own pinned submodule SHA.
 const BUILT_FROM_REL = 'vendor/dev-standards/runner/dist/.built-from';
-// The artifacts symlinked from the main checkout into a fresh consumer worktree.
-const SYMLINK_TARGETS = [
-  'vendor/dev-standards/runner/dist',
-  'vendor/dev-standards/deep-review/dist',
-  'node_modules',
-  '.tools',
+// The per-dist build-stamp basename (ds-bootstrap writes one into each dist dir).
+const DIST_STAMP = '.built-from';
+// The two in-submodule dist dirs are COPIED (not symlinked) from the main checkout as IMMUTABLE
+// snapshots. They are shared MUTABLE artifacts: a concurrent ds-bootstrap in the main checkout at
+// another pin DELETES + rebuilds them, so a symlink would swap the running engine mid-run and break
+// the worktree's verify preflight (its `.built-from` stamp would no longer match the worktree's
+// pinned SHA). Each snapshot is validated to carry its bundle entrypoint.
+const COPY_TARGETS = [
+  { rel: 'vendor/dev-standards/runner/dist', entrypoint: 'verify-runner.mjs' },
+  { rel: 'vendor/dev-standards/deep-review/dist', entrypoint: 'deep-review-runner.mjs' },
 ] as const;
+// node_modules / .tools are pin-INDEPENDENT (a re-bootstrap at another pin never rewrites them), so
+// they stay symlinks to the main checkout.
+const SYMLINK_TARGETS = ['node_modules', '.tools'] as const;
 
 // The engine's OWN worktree-tooling footprint as it appears in `git status` at the
-// SUPERPROJECT level: the symlinked `node_modules` / `.tools`, plus the submodule
-// itself (reported dirty by its internal `runner/dist` / `deep-review/dist` symlinks).
+// SUPERPROJECT level: the symlinked `node_modules` / `.tools`, plus the submodule root.
 // setupWorktreeTooling creates these, so the slice scope gate must not count them as
-// out-of-slice user work — a consumer whose .gitignore lists these as DIRECTORIES
-// (`node_modules/`, `dist/`) does not ignore the SYMLINKS (a trailing-slash pattern
-// matches only directories), so they surface as dirty and would block every slice.
-// Derived from SYMLINK_TARGETS (drop the in-submodule dist entries, which never appear
-// as superproject paths) unioned with the submodule root.
+// out-of-slice user work — a consumer whose .gitignore lists node_modules as a DIRECTORY
+// (`node_modules/`) does not ignore the SYMLINK (a trailing-slash pattern matches only
+// directories), so it surfaces as dirty and would block every slice. The two in-submodule
+// dist dirs are now COPIED real dirs (gitignored inside dev-standards), so the submodule no
+// longer shows dirty via them — but SUBMODULE_PATH stays listed DEFENSIVELY (its own
+// `submodule update --init` checkout, or an unignored stray, can still surface it).
+// Derived from the tooling rels (drop the in-submodule dist entries, which never appear as
+// superproject paths) unioned with the submodule root.
 const WORKTREE_TOOLING_PATHS: readonly string[] = [
-  ...SYMLINK_TARGETS.filter((rel) => !rel.startsWith(`${SUBMODULE_PATH}/`)),
+  ...[...COPY_TARGETS.map((t) => t.rel), ...SYMLINK_TARGETS].filter((rel) => !rel.startsWith(`${SUBMODULE_PATH}/`)),
   SUBMODULE_PATH,
 ];
 
@@ -106,6 +118,13 @@ export interface WorktreeDeps {
   spawn: (file: string, args: readonly string[], options: { cwd: string; timeout?: number }) => SpawnResult;
   deadline?: Deadline;
   symlink?: (target: string, linkPath: string) => void;
+  // §W1 the dist COPY seam (mirrors `symlink`): recursively copies a built dist dir from the main
+  // checkout into the worktree as an immutable snapshot. Defaults to a fixed hand-rolled recursive
+  // copy (`fs.cpSync` is experimental on the oldest supported Node).
+  copyDir?: (src: string, dest: string) => void;
+  // §W1 lstat-based symlink test through the seam: the reuse gate treats a SYMLINKED dist (left by
+  // the pre-copy engine) as stale tooling. Defaults to real `fs.lstatSync(p).isSymbolicLink()`.
+  isSymlink?: (p: string) => boolean;
   readFileMaybe?: (p: string) => string | null;
   writeDescriptorFn?: (descriptor: RunDescriptor) => void;
   setupTooling?: (deps: WorktreeDeps, wtPath: string) => void;
@@ -231,11 +250,11 @@ function realOf(deps: WorktreeDeps, p: string): string {
   }
 }
 
-// ── Consumer worktree tooling (submodule + symlinks) ────────────────────────────
+// ── Consumer worktree tooling (submodule + copied dist + symlinks) ───────────────
 
-// A tooling failure: the main checkout's built submodule does not match this worktree's pin, so
-// symlinking its dist would run a STALE engine. Loud, with the bootstrap instruction — never a
-// silent skip.
+// A tooling failure: the main checkout's built submodule does not match this worktree's pin (so
+// copying its dist would snapshot a STALE engine), OR a concurrent re-bootstrap changed the dist
+// mid-copy. Loud, with the bootstrap / re-run instruction — never a silent skip.
 export class ToolingError extends Error {
   readonly kind = 'worktree-tooling-error' as const;
   constructor(message: string) {
@@ -261,6 +280,39 @@ function makeSymlink(deps: WorktreeDeps, target: string, linkPath: string): void
   }
   fs.mkdirSync(path.dirname(linkPath), { recursive: true });
   fs.symlinkSync(target, linkPath);
+}
+
+// Hand-rolled recursive copy: `fs.cpSync` is still experimental on the oldest supported Node
+// (^20.19.0 — n/no-unsupported-features flags it until 22.3.0). A dist tree is esbuild output —
+// plain files and dirs only — so readdir + copyFileSync covers it.
+function copyTreeReal(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const to = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyTreeReal(from, to);
+    else fs.copyFileSync(from, to);
+  }
+}
+
+function copyTree(deps: WorktreeDeps, src: string, dest: string): void {
+  if (deps.copyDir !== undefined) {
+    deps.copyDir(src, dest);
+    return;
+  }
+  copyTreeReal(src, dest);
+}
+
+// lstat semantics (does NOT follow the link) so the reuse gate can tell a COPIED dist (real dir)
+// from a pre-copy SYMLINKED one. A missing/unstattable path is not a symlink — the caller's
+// existsSync check gates liveness separately.
+function isSymlinkPath(deps: WorktreeDeps, p: string): boolean {
+  if (deps.isSymlink !== undefined) return deps.isSymlink(p);
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 // Detects whether `wtPath` tracks the `vendor/dev-standards` submodule (a consumer repo). Returns
@@ -300,10 +352,64 @@ function mainCheckoutOf(deps: WorktreeDeps, wtPath: string): string | null {
   return path.dirname(realOf(deps, abs));
 }
 
-// Sets up a fresh consumer worktree: init the submodule, then (when the main checkout's build
-// stamp matches this worktree's pinned submodule SHA) symlink the built dist / node_modules /
-// .tools from the main checkout. A stamp mismatch throws ToolingError (run bootstrap). A repo with
-// no `vendor/dev-standards` gitlink (core itself) is a no-op.
+// A concurrent-bootstrap race verdict: the source dist changed between the pre-copy gate and the
+// post-copy re-validation, so the snapshot cannot be trusted.
+function concurrentBootstrapError(rel: string): ToolingError {
+  return new ToolingError(
+    `dev-standards dist ${rel} changed while being copied into the worktree ` +
+      '(a concurrent scripts/ds-bootstrap.sh rebuild in the main checkout); re-run select-worktree',
+  );
+}
+
+// Copies one in-submodule dist dir from the main checkout as a RACE-PROOF immutable snapshot.
+// ds-bootstrap's build DELETES both dist trees and writes each stamp only AFTER rebuilding, so a
+// rebuild landing mid-copy can capture a tree whose stamp is the OLD pin (== this worktree's pin,
+// so the verify preflight would PASS) but whose bundle is the NEW revision — a silently wrong
+// engine. Guard: copy into a temp dir beside the destination, then re-validate the snapshot (the
+// SOURCE stamp still == pinned, the COPIED stamp == pinned, the bundle entrypoint is present) and
+// only an all-pass renames it into place; any mismatch removes the temp dir and throws. The
+// same-pin re-bootstrap window (stamp unchanged but bundle rewritten) stays a ceiling — closing it
+// needs a build lock or content hashing upstream.
+function snapshotDist(
+  deps: WorktreeDeps,
+  main: string,
+  wtPath: string,
+  target: { readonly rel: string; readonly entrypoint: string },
+  pinned: string,
+  runId: string,
+): void {
+  const src = path.join(main, target.rel);
+  const dest = path.join(wtPath, target.rel);
+  const tmp = `${dest}.tmp-${runId}`;
+  const removeTmp = (): void => {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      // best-effort: a leaked temp dir beside the destination is prunable, never a live artifact
+    }
+  };
+
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  copyTree(deps, src, tmp);
+  try {
+    const sourceStamp = (readFileMaybe(deps, path.join(src, DIST_STAMP)) ?? '').trim();
+    const copiedStamp = (readFileMaybe(deps, path.join(tmp, DIST_STAMP)) ?? '').trim();
+    if (sourceStamp !== pinned || copiedStamp !== pinned) throw concurrentBootstrapError(target.rel);
+    if (!deps.existsSync(path.join(tmp, target.entrypoint))) throw concurrentBootstrapError(target.rel);
+  } catch (error) {
+    removeTmp();
+    throw error;
+  }
+  // Atomic publish: a fresh worktree has no dist yet (gitignored inside the submodule), so this
+  // rename never clobbers a live tree.
+  fs.renameSync(tmp, dest);
+}
+
+// Sets up a fresh consumer worktree: init the submodule, then (when the main checkout's build stamp
+// matches this worktree's pinned submodule SHA) COPY the built dist dirs as immutable race-proof
+// snapshots and symlink node_modules / .tools from the main checkout. A stamp mismatch throws
+// ToolingError (run bootstrap). A repo with no `vendor/dev-standards` gitlink (core itself) is a
+// no-op.
 export function setupWorktreeTooling(deps: WorktreeDeps, wtPath: string): void {
   const pinned = pinnedSubmoduleSha(deps, wtPath);
   if (pinned === null) return; // no consumer gitlink -> nothing to wire
@@ -313,6 +419,8 @@ export function setupWorktreeTooling(deps: WorktreeDeps, wtPath: string): void {
   const main = mainCheckoutOf(deps, wtPath);
   if (main === null) throw new ToolingError('cannot resolve the main checkout to wire worktree tooling');
 
+  // BEFORE-copy gate (unchanged in meaning): copying a dist built from a DIFFERENT pin would
+  // snapshot a stale engine, so refuse loudly with the bootstrap instruction.
   const stamp = (readFileMaybe(deps, path.join(main, BUILT_FROM_REL)) ?? '').trim();
   if (stamp !== pinned) {
     throw new ToolingError(
@@ -321,17 +429,30 @@ export function setupWorktreeTooling(deps: WorktreeDeps, wtPath: string): void {
     );
   }
 
+  // COPY the dist dirs as immutable, race-proof snapshots; SYMLINK the pin-independent tooling. One
+  // temp-dir suffix per setup keeps the mid-copy tmp dirs unique against a concurrent select-worktree.
+  const runId = crypto.randomUUID();
+  for (const target of COPY_TARGETS) {
+    snapshotDist(deps, main, wtPath, target, pinned, runId);
+  }
   for (const rel of SYMLINK_TARGETS) {
     makeSymlink(deps, path.join(main, rel), path.join(wtPath, rel));
   }
 }
 
-// Reuse-time liveness: the wired tooling targets must still resolve (a consumer worktree whose
-// main checkout moved would have dangling symlinks). A repo with no gitlink is trivially alive.
+// Reuse-time liveness: the symlinked tooling must still resolve (a consumer worktree whose main
+// checkout moved would have dangling symlinks) AND each dist must be a COPIED real dir. A SYMLINKED
+// dist is tooling from the PRE-COPY engine, still exposed to the concurrent-bootstrap race, so it is
+// STALE — refuse reuse. A repo with no gitlink is trivially alive.
 function toolingAlive(deps: WorktreeDeps, wtPath: string): boolean {
   const pinned = pinnedSubmoduleSha(deps, wtPath);
   if (pinned === null) return true;
-  return SYMLINK_TARGETS.every((rel) => deps.existsSync(path.join(wtPath, rel)));
+  const symlinksResolve = SYMLINK_TARGETS.every((rel) => deps.existsSync(path.join(wtPath, rel)));
+  const distsAreSnapshots = COPY_TARGETS.every((t) => {
+    const distPath = path.join(wtPath, t.rel);
+    return deps.existsSync(distPath) && !isSymlinkPath(deps, distPath);
+  });
+  return symlinksResolve && distsAreSnapshots;
 }
 
 // ── Existing-directory validation (the S21 collision gate + descriptor reuse gate) ─
@@ -387,7 +508,7 @@ function validateExistingWorktree(deps: WorktreeDeps, wtPath: string, branch: st
   }
   if (!toolingAlive(deps, wtPath)) {
     return refuse(
-      `existing worktree at ${wtPath} has stale tooling (a symlinked artifact no longer resolves); remove it and re-run select-worktree`,
+      `existing worktree at ${wtPath} has stale tooling (a symlinked dist from the pre-copy engine, or an artifact that no longer resolves); remove it and re-run select-worktree`,
     );
   }
   return { exitCode: EXIT_OK, mode: 'dedicated', worktree: wtPath, branch };

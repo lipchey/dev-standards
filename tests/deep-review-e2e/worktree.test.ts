@@ -12,14 +12,14 @@ import path from 'node:path';
 import { EXIT_OK, EXIT_FAILURE, EXIT_WRONG_STATE } from '../../deep-review/src/types.ts';
 import { initConsumerRepo, runVerb, git, cleanup, readRunDescriptor } from './helper.ts';
 
-const SYMLINK_TARGETS = [
-  'vendor/dev-standards/runner/dist',
-  'vendor/dev-standards/deep-review/dist',
-  'node_modules',
-  '.tools',
-];
+/* The two dist dirs are now COPIED (immutable real snapshots); node_modules/.tools stay symlinks. */
+const COPY_TARGETS = [
+  ['vendor/dev-standards/runner/dist', 'verify-runner.mjs'],
+  ['vendor/dev-standards/deep-review/dist', 'deep-review-runner.mjs'],
+] as const;
+const SYMLINK_TARGETS = ['node_modules', '.tools'];
 
-test('consumer worktree, fresh build stamp -> submodule initialized + tooling symlinked, descriptor written', () => {
+test('consumer worktree, fresh build stamp -> submodule initialized + dist copied / tooling symlinked, descriptor written', () => {
   const box = initConsumerRepo({ stampFresh: true });
   try {
     const res = runVerb(box.repo, ['select-worktree', '--slug', 'e2e'], box.env);
@@ -28,6 +28,24 @@ test('consumer worktree, fresh build stamp -> submodule initialized + tooling sy
 
     /* The submodule was checked out in the worktree (a real file-protocol clone). */
     assert.equal(fs.existsSync(path.join(wt, 'vendor/dev-standards/.git')), true, 'submodule not initialized in worktree');
+
+    /* The dist dirs are COPIED real directories (immutable snapshots), NOT symlinks — a symlink
+       would let a concurrent main-checkout re-bootstrap swap the engine mid-run. */
+    for (const [rel, entry] of COPY_TARGETS) {
+      const distPath = path.join(wt, rel);
+      assert.equal(fs.lstatSync(distPath).isSymbolicLink(), false, `${rel} must be a copied real dir, not a symlink`);
+      assert.equal(fs.statSync(distPath).isDirectory(), true, `${rel} must be a directory`);
+      assert.equal(fs.existsSync(path.join(distPath, entry)), true, `${rel} bundle entrypoint not copied from main`);
+      /* The immutable-snapshot temp dir must have been renamed away, not left behind. */
+      const leftovers = fs.readdirSync(path.dirname(distPath)).filter((n) => n.includes('.tmp-'));
+      assert.deepEqual(leftovers, [], `leftover temp copy dir beside ${rel}`);
+    }
+    /* The copied stamp came from the main checkout (== the pinned submodule SHA). */
+    assert.equal(
+      fs.readFileSync(path.join(wt, 'vendor/dev-standards/runner/dist/.built-from'), 'utf8').trim(),
+      box.pinnedSha,
+      'copied runner/dist stamp != pinned submodule SHA',
+    );
 
     for (const rel of SYMLINK_TARGETS) {
       const link = path.join(wt, rel);
@@ -85,6 +103,45 @@ test('non-Node consumer worktree: create then REUSE (node_modules symlink resolv
     const third = runVerb(box.repo, ['select-worktree', '--slug', 'e2e'], box.env);
     assert.equal(third.status, EXIT_WRONG_STATE, `dangling node_modules must refuse reuse; got status=${third.status} stdout=${third.stdout}`);
     assert.match(third.stderr, /stale tooling/);
+  } finally {
+    cleanup(box);
+  }
+});
+
+test('consumer worktree: a copied dist is immune to a concurrent main-checkout re-bootstrap (stamp mutation)', () => {
+  const box = initConsumerRepo({ stampFresh: true });
+  try {
+    assert.equal(runVerb(box.repo, ['select-worktree', '--slug', 'e2e'], box.env).status, EXIT_OK);
+    const copiedStamp = path.join(box.worktreePath, 'vendor/dev-standards/runner/dist/.built-from');
+    assert.equal(fs.readFileSync(copiedStamp, 'utf8').trim(), box.pinnedSha, 'copied stamp != pin right after setup');
+
+    /* Simulate a concurrent re-bootstrap in the MAIN checkout at a different pin: it rewrites the
+       main's stamp + dist. The worktree's COPIED stamp is an immutable snapshot, so it must NOT
+       change — this is exactly what the old symlink broke (it made the worktree's verify preflight
+       read the main's mutated stamp mid-run and exit 127). */
+    fs.writeFileSync(
+      path.join(box.repo, 'vendor/dev-standards/runner/dist/.built-from'),
+      'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n',
+    );
+    assert.equal(fs.readFileSync(copiedStamp, 'utf8').trim(), box.pinnedSha, 'copied stamp changed with the main checkout');
+  } finally {
+    cleanup(box);
+  }
+});
+
+test('consumer worktree reuse: a SYMLINKED dist (left by the pre-copy engine) is refused as stale tooling', () => {
+  const box = initConsumerRepo({ stampFresh: true });
+  try {
+    assert.equal(runVerb(box.repo, ['select-worktree', '--slug', 'e2e'], box.env).status, EXIT_OK);
+    const dist = path.join(box.worktreePath, 'vendor/dev-standards/runner/dist');
+    /* Replace the copied dist with a symlink into the main checkout — exactly the tooling the
+       pre-copy engine wired, which the race made unsafe. Reuse must now refuse it. */
+    fs.rmSync(dist, { recursive: true, force: true });
+    fs.symlinkSync(path.join(box.repo, 'vendor/dev-standards/runner/dist'), dist);
+
+    const res = runVerb(box.repo, ['select-worktree', '--slug', 'e2e'], box.env);
+    assert.equal(res.status, EXIT_WRONG_STATE, res.stdout || res.stderr);
+    assert.match(res.stderr, /stale tooling/);
   } finally {
     cleanup(box);
   }
