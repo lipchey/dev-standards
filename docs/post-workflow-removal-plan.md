@@ -176,6 +176,26 @@ blocking СТРОГО за `docs/CALIBRATION.md`.
 
 ### 4.3 Доктрина цінних тестів (S) — judgment-рівень
 
+> Reality-sync 2026-07-14 (сесія 4.3): доктрина вже ЗДЕБІЛЬШОГО була в
+> template до старту фази — Tests-розділ `core-code-guidelines.md` покривав
+> буллети 1-3 і 5-6 повністю, 4 — без «config», 7 — evidence-бар без явної
+> легалізації клінапу (авторинг b23a950; mock-дзеркала, characterization і
+> delete-evidence — 5bf5abb; oracle-independence і property-based лінза —
+> N4 36c8d3d). Дельта цієї фази: config-літерал, уже застережений
+> schema/validator-гейтом, у списку що-не-тестувати (G1; поведінка
+> конфігурації — парсинг/валідація/precedence/дефолти — тестується) +
+> явна легалізація видалення тесту-дубліката після mutation-evidence,
+> БЕЗ нових умов до чинного бару (G2). Рішення: окремий testing.md
+> ВІДХИЛЕНО (дублював би Tests-розділ — умова «без дублювання»
+> недосяжна); пілот отримує additive overlay
+> `.claude/review-guides/core-code-guidelines.md` (test-harness-first
+> лінза для поведінкових matching-змін через corpus-сценарій +
+> gate0-метрику). Нормативний текст доктрини — Tests-розділ гайда;
+> буллети 4 і 7 нижче РАТИФІКОВАНО ЗА НИМ (патерн «контракт за тулом»,
+> N3): «конфіг» = лише літерал, уже застережений schema/validator-гейтом;
+> видалення — за mutation-evidence бар'єром гайда, «ніколи не падав»
+> самого по собі НЕ достатньо.
+
 НЕ плодити дублікат: `core-code-guidelines.md` вже має Tests-розділ —
 РОЗШИРИТИ його доктриною нижче (merge-don't-duplicate). Окремий
 `testing.md` — лише якщо router-style без дублювання. Активація: engine читає
@@ -308,6 +328,18 @@ bootstrap кейс); один slice реально приземлений у п�
 
 ## Фаза 6 — Хвости + зняття onboarding gate (M)
 
+> Reality-sync 2026-07-14 (сесія 4.3): 6.4 ВИКОНАНО достроково —
+> docs/ADOPTION.md існує і є канонічним онбордингом (delivery-таблиця,
+> порядок submodule update → build → seed, migration note); ратифікаційна
+> частина 6.5 зафіксована в ADOPTION.md §«Content contract (Phase 6)»;
+> freshness-guard у ЯДЕРНОМУ verify-шимі досі НЕ портований (лишається
+> активним хвостом 6.5). 6.1 (docs/ADR.md) — не існує, pending. 6.2 —
+> pending (продубльовано в BACKLOG). 6.3 — DEEP_REVIEW_FINDINGS.md
+> відсутній у робочому дереві, але ВІДНОВНИЙ:
+> `git show refs/stash:DEEP_REVIEW_FINDINGS.md` (595 рядків, 58 знахідок;
+> stash крихкий — відновити при першій нагоді). Пункт лишається pending —
+> сесія Фази 6 відновлює файл і робить повну диспозицію.
+
 1. `docs/ADR.md` — канонічний ADR-лог (перші записи: ADR-008/012 retired у
    removal; далі — всі id, на які посилається код).
 2. Перейменувати ADR-011 «review-chain» (колізія зі скілом `codex-chain`).
@@ -344,6 +376,24 @@ bootstrap кейс); один slice реально приземлений у п�
 
 Мета: модифікація/файнтюн dev-standards під конкретний проект — явний,
 задокументований механізм. Сьогодні продумано частково.
+
+> Reality-sync 2026-07-14 (сесія 4.3): фаза ЗДЕБІЛЬШОГО ВИКОНАНА поза
+> власною сесією (adoption-цикл + пілотні сесії): «три легальні поверхні»
+> зафіксовані в docs/ADOPTION.md §«Per-project tuning — three legal
+> surfaces»; 7.1 additive-only модель БЕЗ override — там само («Overlays
+> never override or delete a canonical rule»); 7.2 —
+> `agents/project-facts-template.md` існує, канонічний шлях
+> `.claude/project-facts.md` узгоджений у тілі скіла, пілот має заповнений
+> `.claude/project-facts.md` із `vendor/dev-standards/**` у No-Touch; 7.3
+> no-fork політика — в ADOPTION.md («Skill bodies are not a tuning
+> surface»). ЛИШИЛОСЬ: deviation-маркер `> deviates-from-core:` описаний
+> лише в тексті 7.1 нижче, у жодному оперативному доці (хвіст 7.1 →
+> ADOPTION.md); extend-only кваліфікатор no-touch floor («додати можна,
+> звузити BASELINE не можна») є в тілі скіла, але відсутній у
+> ADOPTION.md §tuning п.3 (хвіст туди ж); no-fork рядок у CLAUDE.md
+> ядра відсутній (хвіст 7.3); fail-closed читання project-facts у
+> fix-mode — контракт лишається за 7.2, доставка разом із Фазою 5
+> (передумова 5.8), як і було. Усі хвости — S, закрити разом із Фазою 6.
 
 ### Що вже є (зафіксувати в ADOPTION.md як три легальні поверхні тюнінгу)
 
