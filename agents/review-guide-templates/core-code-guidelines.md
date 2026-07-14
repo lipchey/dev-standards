@@ -139,7 +139,8 @@ Judgment prompts:
   a P2 finding.
 - Is the suite testing the right things? Types are the compiler's job, style the
   linter's, third-party libraries their maintainers'; a test that re-checks any
-  of these, or a trivial getter/passthrough/constant, is noise to delete.
+  of these, or a trivial getter/passthrough/constant, or a config literal
+  already enforced by a schema or validator, is noise to delete.
 - Are there fewer, deeper tests rather than many shallow ones? A snapshot large
   enough that no reader would notice a wrong line needs an explicit reason to
   exist.
@@ -150,7 +151,8 @@ Judgment prompts:
   redundant: for every invariant the test guarded, a concrete mutation must
   still be caught by the surviving gate (a type check, a lint rule, another
   test). "Never failed" alone is not that evidence - a test can guard a
-  regression that simply has not happened yet.
+  regression that simply has not happened yet. Once that mutation evidence
+  exists, deletion is legitimate cleanup, not lost coverage.
 
 ## Output expectations
 
