@@ -124,7 +124,7 @@ fast, і в full:
 Запуск: `node vendor/dev-standards/tools/quality-stats.mjs` (без нових
 прапорів у раннері — YAGNI).
 
-### 5. Miss ledger: `.agents/gate-misses.md` у консюмері
+### 5. Miss ledger: `.claude/gate-misses.md` у консюмері
 
 Формальний сигнал пропуску. Міс = дефект, який детермінований чек verify
 міг/мав зловити, але він дійшов до пізнішої стадії (Gate C, deep-review,

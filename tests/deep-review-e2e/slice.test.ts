@@ -351,7 +351,7 @@ test('§F4 self-protection: a slice targeting quality.json is refused by the no-
   }
 });
 
-test('§F4 self-protection: a slice targeting the no-touch source (.agents/project-facts.md) is refused (two-slice bypass closed)', () => {
+test('§F4 self-protection: a slice targeting the no-touch source (.claude/project-facts.md) is refused (two-slice bypass closed)', () => {
   const box = initCoreRepo();
   try {
     const worktree = selectWorktree(box.repo, box.env);
@@ -359,7 +359,7 @@ test('§F4 self-protection: a slice targeting the no-touch source (.agents/proje
     placeFindings(
       worktree,
       findingsFile(
-        [finding({ file: '.agents/project-facts.md', slice_files: ['.agents/project-facts.md'], classification: 'fixable-now', status: 'pending' })],
+        [finding({ file: '.claude/project-facts.md', slice_files: ['.claude/project-facts.md'], classification: 'fixable-now', status: 'pending' })],
         { run_id: desc.run_id, base_sha: desc.base_sha },
       ),
     );
@@ -378,7 +378,7 @@ test('§5.0 partial guide set (1/N present) -> select-worktree fails EXIT_PREFLI
     /* Strip the seeded canonical set down to a single guide — the pilot's original 1/7 state that
        the old ">=1 .md" gate waved through. Preflight reads the working-tree dir, so no commit is
        needed for select-worktree's guides check to see the partial set. */
-    const guidesDir = path.join(box.repo, '.agents/review-guides');
+    const guidesDir = path.join(box.repo, '.claude/review-guides');
     const names = fs.readdirSync(guidesDir).filter((n) => n.endsWith('.md')).sort();
     assert.ok(names.length >= 2, 'fixture precondition: more than one canonical guide seeded');
     for (const name of names.slice(1)) fs.rmSync(path.join(guidesDir, name));
@@ -403,6 +403,7 @@ test('§F11 no_touch_globs_ref that resolves outside the repo via a symlink -> c
        path). Committed so the run-worktree checks it out. */
     const target = path.join(box.root, 'evil-target.md');
     fs.writeFileSync(target, '## No-Touch Zones\n- `x/**`\n');
+    fs.mkdirSync(path.join(box.repo, '.agents'), { recursive: true });
     fs.symlinkSync(target, path.join(box.repo, '.agents', 'evil-facts.md'));
     git(box.repo, ['add', '.agents/evil-facts.md'], box.env);
     git(box.repo, ['commit', '-q', '-m', 'add escaping no-touch ref'], box.env);

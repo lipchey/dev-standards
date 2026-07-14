@@ -5,10 +5,10 @@ paraphrased excerpts from `awesome-skills/code-review-skill` (MIT; pinned
 `f2fd4e57`). The spec-vs-code completeness section is independently written own
 material (the requirement-status vocabulary is generic review practice).
 STARTING template: each adopting repo copies it into
-`.agents/review-guides/` and then owns its final body. This guide defines the
+`.claude/review-guides/` and then owns its final body. This guide defines the
 SHAPE a review emits, not a lens on the code - it is loaded for output shape
 only (never as a review criterion), so a downstream consumer (a human, an
-automated fixer, the deep-review findings engine) can act on the findings
+automated fixer, the deep-review findings runtime) can act on the findings
 without re-parsing prose.
 Template-Version: 2 (guides-revamp 2026-07-11)
 

@@ -66,7 +66,7 @@ report-only), and say so in the report.
    ```
 
    The prompt file instructs Codex to run this skill's review-only pass
-   independently: read `.agents/project-facts.md`, then the guides per step
+   independently: read `.claude/project-facts.md`, then the guides per step
    4's ordered semantics (baseline always -> router lens -> area guides per
    their conditionality banners -> repo-owned extras), same scope as the
    main pass, findings per `review-output-format.md` with file:line +
@@ -101,7 +101,7 @@ round inside the same deep-review invocation.
 
 Produce findings; change nothing. The runtime is six steps, in order:
 
-1. Context. Read `.agents/project-facts.md` (layer DAG, domain terms, sensitive
+1. Context. Read `.claude/project-facts.md` (layer DAG, domain terms, sensitive
    and no-touch zones, known false positives), then `AGENTS.md` and `CLAUDE.md`.
    For the changed hunks, also read their history — blame the PRE-change lines
    (`git blame <base> -L`) or pickaxe the removed code (`git log -S/-G`) — since
@@ -114,7 +114,7 @@ Produce findings; change nothing. The runtime is six steps, in order:
    judgment-only; it does not duplicate a gate.
 3. CodeGraph first for architecture, navigation, and impact questions.
 4. Judge against the repo-local review guides. The guides live in the guides dir
-   - `deep_review.guides_dir` in `quality.json`, default `.agents/review-guides/`
+   - `deep_review.guides_dir` in `quality.json`, default `.claude/review-guides/`
    - seeded on bootstrap (copy-if-absent) and owned by the repo. Confirm the set
    is complete BEFORE judging: run
    `vendor/dev-standards/scripts/seed-review-guides.sh . --check` (the submodule
@@ -166,7 +166,7 @@ classification, status, sha) across the whole run.
 2. `classify` assigns each finding a classification (`fixable-now`, `no-touch`,
    `needs-plan`) against the §2.5 no-touch floor and writes it back to the
    findings file. **Fail-closed**: in fix mode, a missing, unreadable, or
-   unparseable `.agents/project-facts.md` makes the engine refuse outright
+   unparseable `.claude/project-facts.md` makes the engine refuse outright
    instead of silently classifying against the baseline floor alone - a false
    "editable" verdict here would risk auto-editing a path the repo meant to
    protect.
@@ -196,10 +196,10 @@ The no-touch set is the UNION of two parts:
    `.githooks/`, `.github/workflows/`, `./verify`, `tools/`, `auth/**`, and
    `credentials/**`.
 2. The repo's own additions, listed in the `## No-Touch Zones` section of
-   `.agents/project-facts.md`.
+   `.claude/project-facts.md`.
 
 A path in either set is never edited - it is emitted as a plan instead.
-`.agents/project-facts.md` can only extend the baseline, never shrink it.
+`.claude/project-facts.md` can only extend the baseline, never shrink it.
 
 ## Landing is not the skill's job (ADR-012)
 

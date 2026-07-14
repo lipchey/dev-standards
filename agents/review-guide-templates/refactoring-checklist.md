@@ -5,7 +5,7 @@ Seed template. Distilled as short, paraphrased excerpts from
 `code-smells.md` and `complexity.md`. The tech-debt classification and
 execution-order sections are own material over industry-standard (Fowler)
 vocabulary - no upstream text. STARTING template: each
-adopting repo copies it into `.agents/review-guides/` and then owns its final
+adopting repo copies it into `.claude/review-guides/` and then owns its final
 body. The rules below are review-only JUDGMENT PROMPTS - they gate whether a
 refactor is safe and worth it, never an instruction to edit. In
 `deep-review-refactor`'s review-and-refactor mode they ALSO define the

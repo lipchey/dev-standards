@@ -20,8 +20,8 @@ export const NO_TOUCH_BASELINE = [
   'credentials/**',
 ] as const;
 
-// Default location of a repo's No-Touch Zones extension list.
-const DEFAULT_NO_TOUCH_GLOBS_REF = '.agents/project-facts.md';
+/* The default must match the instance-doc location created by the onboarding seeder. */
+const DEFAULT_NO_TOUCH_GLOBS_REF = '.claude/project-facts.md';
 const NO_TOUCH_HEADING = '## No-Touch Zones';
 
 // A missing/unreadable/unparseable no_touch_globs_ref in 'fix' mode, or a ref
@@ -43,11 +43,8 @@ export class NoTouchSourceError extends Error {
 }
 
 export interface BuildNoTouchSetDeps {
-  // Repo-relative ref to the project-facts file; may carry a `#fragment` naming
-  // the target heading (stripped before the path is resolved). Defaults to
-  // `.agents/project-facts.md` when omitted/empty/undefined (the manifest field
-  // is optional, so an explicit `undefined` is accepted under
-  // exactOptionalPropertyTypes).
+  /* The optional manifest field may carry a heading fragment; omitted and empty
+     values must resolve to the same seeded project-facts instance. */
   noTouchGlobsRef?: string | undefined;
   /* The configured verify shim (deep_review.verify_entry, default `verify`). Added to the
      baseline floor in EVERY mode so a relocated shim gets the same protection as the literal
@@ -218,20 +215,11 @@ export function buildNoTouchSet(deps: BuildNoTouchSetDeps): string[] {
   return [...set];
 }
 
-// §F4 the engine's OWN policy inputs — the quality manifest and the no-touch source
-// file (`no_touch_globs_ref`, fragment stripped, defaulted) — must themselves be
-// no-touch in fix mode, so a slice can never edit the very files that DEFINE what is
-// protected. Without this, a two-slice bypass is possible: slice #1 edits project-facts
-// to remove a no-touch zone, slice #2 then edits the now-unprotected file. These are
-// UNIONED into the fix-mode set at the CLI edge (never into NO_TOUCH_BASELINE, which the
-// review-only check-path shares). Returned as CANONICAL repo-relative globs. (The verify
-// shim is protected separately, in EVERY mode, via buildNoTouchSet's verifyEntry.)
-//
-// G2: the ref is canonicalized (fragment stripped, `.`/`..` collapsed, leading `./`
-// dropped) so a config value like `./.agents/project-facts.md` or
-// `docs/../.agents/project-facts.md` matches the canonical slice path
-// `.agents/project-facts.md` — a literal, uncanonicalized value would not match and the
-// self-protection would be silently bypassed.
+/* §F4 protects both policy inputs in fix mode; otherwise one slice could remove
+   a no-touch zone and a later slice could edit the newly exposed path. G2
+   canonicalization is required so spellings such as
+   `./.claude/project-facts.md` and `docs/../.claude/project-facts.md` still
+   protect the canonical `.claude/project-facts.md` slice path. */
 export function selfProtectedPaths(noTouchGlobsRef?: string): string[] {
   const ref =
     noTouchGlobsRef && noTouchGlobsRef.length > 0 ? noTouchGlobsRef : DEFAULT_NO_TOUCH_GLOBS_REF;

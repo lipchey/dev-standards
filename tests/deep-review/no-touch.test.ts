@@ -32,7 +32,7 @@ function harness(files: Record<string, string> = {}): {
   };
 }
 
-const DEFAULT_REF = '.agents/project-facts.md';
+const DEFAULT_REF = '.claude/project-facts.md';
 
 // A project-facts body whose No-Touch Zones section lists ONE addition and omits
 // every baseline glob; prose (and a bullet under a LATER heading) must be ignored.
@@ -329,18 +329,18 @@ test('F4: selfProtectedPaths returns quality.json + the resolved no-touch source
 });
 
 test('G2: selfProtectedPaths canonicalizes the ref (./ and docs/../ spellings) so it matches the canonical slice path', () => {
-  assert.deepEqual(selfProtectedPaths('./.agents/project-facts.md'), ['quality.json', DEFAULT_REF]);
-  assert.deepEqual(selfProtectedPaths('docs/../.agents/project-facts.md'), ['quality.json', DEFAULT_REF]);
-  assert.deepEqual(selfProtectedPaths('./.agents/project-facts.md#no-touch-zones'), ['quality.json', DEFAULT_REF]);
+  assert.deepEqual(selfProtectedPaths('./.claude/project-facts.md'), ['quality.json', DEFAULT_REF]);
+  assert.deepEqual(selfProtectedPaths('docs/../.claude/project-facts.md'), ['quality.json', DEFAULT_REF]);
+  assert.deepEqual(selfProtectedPaths('./.claude/project-facts.md#no-touch-zones'), ['quality.json', DEFAULT_REF]);
   // The canonicalized ref actually matches a slice targeting it (a literal `./…` would not).
-  const set = [...NO_TOUCH_BASELINE, ...selfProtectedPaths('./.agents/project-facts.md')];
-  assert.equal(isNoTouch('.agents/project-facts.md', set), true, 'canonical ref matches the canonical slice path');
+  const set = [...NO_TOUCH_BASELINE, ...selfProtectedPaths('./.claude/project-facts.md')];
+  assert.equal(isNoTouch('.claude/project-facts.md', set), true, 'canonical ref matches the canonical slice path');
 });
 
 test('F4: the self-protected paths match as no-touch (a fix slice can never target quality.json or the project-facts source)', () => {
   const set = [...NO_TOUCH_BASELINE, ...selfProtectedPaths()];
   assert.equal(isNoTouch('quality.json', set), true, 'the manifest is no-touch in fix mode');
-  assert.equal(isNoTouch('.agents/project-facts.md', set), true, 'the no-touch source file is no-touch in fix mode');
+  assert.equal(isNoTouch('.claude/project-facts.md', set), true, 'the no-touch source file is no-touch in fix mode');
 });
 
 // ── verify_entry protection: the configured shim is baseline no-touch in EVERY mode ──

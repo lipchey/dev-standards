@@ -9,275 +9,359 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
 const SCRIPT = path.join(REPO_ROOT, 'scripts', 'seed-review-guides.sh');
-const TEMPLATES_DIR = path.join(REPO_ROOT, 'agents', 'review-guide-templates');
+const AGENTS_TEMPLATES_DIR = path.join(REPO_ROOT, 'agents');
+const GUIDE_TEMPLATES_DIR = path.join(AGENTS_TEMPLATES_DIR, 'review-guide-templates');
+const DEFAULT_GUIDES_REL = '.claude/review-guides';
+const DEFAULT_INSTANCE_DOCS_REL = '.claude';
+const EXIT_SUCCESS = 0;
+const EXIT_INCOMPLETE = 1;
+const EXIT_USAGE = 2;
+const PARTIAL_REPAIR_COUNT = 2;
+const STALE_PROCESS_ID = '99999';
 
-// Canonical set is derived from the templates dir — never hardcode "7".
-const CANON = fs
-  .readdirSync(TEMPLATES_DIR)
-  .filter((f) => f.endsWith('.md'))
+/* The canonical guide set must follow the template directory without a duplicated list. */
+const CANONICAL_GUIDES = fs
+  .readdirSync(GUIDE_TEMPLATES_DIR)
+  .filter((fileName) => fileName.endsWith('.md'))
   .sort();
-const CANON_COUNT = CANON.length;
+const CANONICAL_GUIDE_COUNT = CANONICAL_GUIDES.length;
 
-function canon(i: number): string {
-  const n = CANON[i];
-  if (n === undefined) throw new Error(`fewer than ${i + 1} canonical guides in ${TEMPLATES_DIR}`);
-  return n;
+const INSTANCE_DOC_TEMPLATES = [
+  ['CHECKLIST.md', 'checklist-template.md'],
+  ['code-conventions.md', 'code-conventions-template.md'],
+  ['gate-misses.md', 'gate-misses-template.md'],
+  ['project-facts.md', 'project-facts-template.md'],
+] as const;
+const INSTANCE_DOC_NAMES = INSTANCE_DOC_TEMPLATES.map(([destinationName]) => destinationName);
+const FIRST_INSTANCE_DOC_NAME = INSTANCE_DOC_TEMPLATES[0][0];
+const INSTANCE_DOC_COUNT = INSTANCE_DOC_TEMPLATES.length;
+const ONBOARDING_FILE_COUNT = CANONICAL_GUIDE_COUNT + INSTANCE_DOC_COUNT;
+const EXPECTED_SEEDED_NAMES = [...CANONICAL_GUIDES, ...INSTANCE_DOC_NAMES];
+
+function canonicalGuide(index: number): string {
+  const guideName = CANONICAL_GUIDES[index];
+  if (guideName === undefined) {
+    throw new Error(`fewer than ${index + 1} canonical guides in ${GUIDE_TEMPLATES_DIR}`);
+  }
+  return guideName;
 }
 
 type Run = { status: number | null; stdout: string; stderr: string };
 
-function run(args: string[], opts: { cwd?: string } = {}): Run {
-  const res = spawnSync('bash', [SCRIPT, ...args], { encoding: 'utf8', cwd: opts.cwd });
-  return { status: res.status, stdout: res.stdout, stderr: res.stderr };
+function run(args: string[], options: { cwd?: string } = {}): Run {
+  const result = spawnSync('bash', [SCRIPT, ...args], { encoding: 'utf8', cwd: options.cwd });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-function withRoot(fn: (root: string) => void): void {
+function withRoot(callback: (root: string) => void): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-seed-'));
   try {
-    fn(root);
+    callback(root);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
-function guidesOf(root: string, rel = '.agents/review-guides'): string[] {
-  const dir = path.join(root, rel);
-  if (!fs.existsSync(dir)) return [];
+function guidesOf(root: string, relativePath = DEFAULT_GUIDES_REL): string[] {
+  const directory = path.join(root, relativePath);
+  if (!fs.existsSync(directory)) return [];
   return fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith('.md'))
+    .readdirSync(directory)
+    .filter((fileName) => fileName.endsWith('.md'))
     .sort();
 }
 
-test('1. fresh seed (no quality.json): copies the whole canonical set, exit 0', () => {
+function instanceDocsOf(root: string): string[] {
+  const directory = path.join(root, DEFAULT_INSTANCE_DOCS_REL);
+  if (!fs.existsSync(directory)) return [];
+  return fs
+    .readdirSync(directory)
+    .filter((fileName) => INSTANCE_DOC_NAMES.includes(fileName as (typeof INSTANCE_DOC_NAMES)[number]))
+    .sort();
+}
+
+function expectedSeededPaths(root: string): string[] {
+  return [
+    ...CANONICAL_GUIDES.map((guideName) => path.join(root, DEFAULT_GUIDES_REL, guideName)),
+    ...INSTANCE_DOC_NAMES.map((documentName) => path.join(root, DEFAULT_INSTANCE_DOCS_REL, documentName)),
+  ];
+}
+
+function readSeededFiles(root: string): Buffer[] {
+  return expectedSeededPaths(root).map((filePath) => fs.readFileSync(filePath));
+}
+
+function assertInstanceDocsMatchTemplates(root: string): void {
+  assert.deepEqual(instanceDocsOf(root), [...INSTANCE_DOC_NAMES].sort());
+  for (const [destinationName, templateName] of INSTANCE_DOC_TEMPLATES) {
+    assert.deepEqual(
+      fs.readFileSync(path.join(root, DEFAULT_INSTANCE_DOCS_REL, destinationName)),
+      fs.readFileSync(path.join(AGENTS_TEMPLATES_DIR, templateName)),
+      `${destinationName} must match its source template`,
+    );
+  }
+}
+
+test('a fresh consumer receives all review guides and instance docs', () => {
   withRoot((root) => {
-    const res = run([root]);
-    assert.equal(res.status, 0, res.stderr);
-    assert.deepEqual(guidesOf(root), CANON);
-    assert.match(res.stdout, new RegExp(`seeded: ${CANON_COUNT} \\(`));
-    // deterministic (sorted) name list
-    assert.ok(res.stdout.includes(`seeded: ${CANON_COUNT} (${CANON.join(', ')})`), res.stdout);
-    assert.match(res.stdout, /kept: 0/);
+    const result = run([root]);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.deepEqual(guidesOf(root), CANONICAL_GUIDES);
+    assertInstanceDocsMatchTemplates(root);
+    assert.equal(guidesOf(root).length + instanceDocsOf(root).length, ONBOARDING_FILE_COUNT);
+    assert.match(result.stdout, new RegExp(`seeded: ${ONBOARDING_FILE_COUNT} \\(`));
+    assert.ok(
+      result.stdout.includes(`seeded: ${ONBOARDING_FILE_COUNT} (${EXPECTED_SEEDED_NAMES.join(', ')})`),
+      result.stdout,
+    );
+    assert.match(result.stdout, /kept: 0/);
   });
 });
 
-test('2. re-run is idempotent: seeded 0, kept all, content unchanged', () => {
-  withRoot((root) => {
-    run([root]);
-    const first = CANON.map((n) => fs.readFileSync(path.join(root, '.agents/review-guides', n)));
-    const res = run([root]);
-    assert.equal(res.status, 0, res.stderr);
-    assert.match(res.stdout, /seeded: 0/);
-    assert.match(res.stdout, new RegExp(`kept: ${CANON_COUNT}`));
-    const second = CANON.map((n) => fs.readFileSync(path.join(root, '.agents/review-guides', n)));
-    CANON.forEach((_, i) => assert.deepEqual(second[i], first[i]));
-  });
-});
-
-test('3. an existing file with changed content is preserved byte-for-byte', () => {
-  withRoot((root) => {
-    run([root]);
-    const target = path.join(root, '.agents/review-guides', canon(0));
-    const edited = Buffer.from('REPO OWNS THIS BODY\n');
-    fs.writeFileSync(target, edited);
-    const res = run([root]);
-    assert.equal(res.status, 0, res.stderr);
-    assert.deepEqual(fs.readFileSync(target), edited);
-  });
-});
-
-test('4. partial repair: delete 2, re-seed adds exactly those 2 and keeps the rest', () => {
-  withRoot((root) => {
-    run([root]);
-    const gone = [canon(0), canon(1)];
-    for (const n of gone) fs.rmSync(path.join(root, '.agents/review-guides', n));
-    const res = run([root]);
-    assert.equal(res.status, 0, res.stderr);
-    assert.ok(res.stdout.includes(`seeded: 2 (${gone.join(', ')})`), res.stdout);
-    assert.match(res.stdout, new RegExp(`kept: ${CANON_COUNT - 2}`));
-    assert.deepEqual(guidesOf(root), CANON);
-  });
-});
-
-test('5. a foreign repo-owned guide is left untouched and not counted as canonical', () => {
+test('a second seed is idempotent and preserves every seeded file byte-for-byte', () => {
   withRoot((root) => {
     run([root]);
-    const extra = path.join(root, '.agents/review-guides', 'extra.md');
-    const body = Buffer.from('repo-specific guide\n');
-    fs.writeFileSync(extra, body);
-    const res = run([root]);
-    assert.equal(res.status, 0, res.stderr);
-    assert.match(res.stdout, /seeded: 0/);
-    assert.match(res.stdout, new RegExp(`kept: ${CANON_COUNT}`)); // extra.md not counted
-    assert.deepEqual(fs.readFileSync(extra), body);
-    const check = run([root, '--check']);
-    assert.equal(check.status, 0, check.stderr);
-    assert.match(check.stdout, new RegExp(`review guides: ok \\(${CANON_COUNT}\\)`));
+    const firstContents = readSeededFiles(root);
+    const result = run([root]);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.match(result.stdout, /seeded: 0/);
+    assert.match(result.stdout, new RegExp(`kept: ${ONBOARDING_FILE_COUNT}`));
+    const secondContents = readSeededFiles(root);
+    secondContents.forEach((content, index) => assert.deepEqual(content, firstContents[index]));
   });
 });
 
-test('6. --check on an unseeded root: exit 1, names the missing, creates no dir; ok after seed', () => {
+test('an existing guide with changed content is preserved byte-for-byte', () => {
   withRoot((root) => {
-    const res = run([root, '--check']);
-    assert.equal(res.status, 1);
-    for (const n of CANON) assert.ok(res.stderr.includes(n), `stderr should name ${n}`);
-    assert.equal(fs.existsSync(path.join(root, '.agents/review-guides')), false, 'no dir in --check');
     run([root]);
-    const ok = run([root, '--check']);
-    assert.equal(ok.status, 0, ok.stderr);
-    assert.match(ok.stdout, new RegExp(`review guides: ok \\(${CANON_COUNT}\\)`));
+    const target = path.join(root, DEFAULT_GUIDES_REL, canonicalGuide(0));
+    const editedContent = Buffer.from('REPO OWNS THIS BODY\n');
+    fs.writeFileSync(target, editedContent);
+    const result = run([root]);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.deepEqual(fs.readFileSync(target), editedContent);
   });
 });
 
-test('7. quality.json deep_review.guides_dir routes seeding + --check to that dir', () => {
+test('an existing instance doc with changed content is preserved byte-for-byte', () => {
+  withRoot((root) => {
+    run([root]);
+    const target = path.join(root, DEFAULT_INSTANCE_DOCS_REL, FIRST_INSTANCE_DOC_NAME);
+    const editedContent = Buffer.from('REPO OWNS THIS DOCUMENT\n');
+    fs.writeFileSync(target, editedContent);
+    const result = run([root]);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.deepEqual(fs.readFileSync(target), editedContent);
+  });
+});
+
+test('a partial guide set is repaired without replacing the remaining onboarding files', () => {
+  withRoot((root) => {
+    run([root]);
+    const removedGuides = CANONICAL_GUIDES.slice(0, PARTIAL_REPAIR_COUNT);
+    for (const guideName of removedGuides) {
+      fs.rmSync(path.join(root, DEFAULT_GUIDES_REL, guideName));
+    }
+    const result = run([root]);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.ok(result.stdout.includes(`seeded: ${PARTIAL_REPAIR_COUNT} (${removedGuides.join(', ')})`), result.stdout);
+    assert.match(result.stdout, new RegExp(`kept: ${ONBOARDING_FILE_COUNT - PARTIAL_REPAIR_COUNT}`));
+    assert.deepEqual(guidesOf(root), CANONICAL_GUIDES);
+    assertInstanceDocsMatchTemplates(root);
+  });
+});
+
+test('a foreign repo-owned guide is untouched and excluded from canonical counts', () => {
+  withRoot((root) => {
+    run([root]);
+    const extraGuide = path.join(root, DEFAULT_GUIDES_REL, 'extra.md');
+    const extraContent = Buffer.from('repo-specific guide\n');
+    fs.writeFileSync(extraGuide, extraContent);
+    const result = run([root]);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.match(result.stdout, /seeded: 0/);
+    assert.match(result.stdout, new RegExp(`kept: ${ONBOARDING_FILE_COUNT}`));
+    assert.deepEqual(fs.readFileSync(extraGuide), extraContent);
+    const checkResult = run([root, '--check']);
+    assert.equal(checkResult.status, EXIT_SUCCESS, checkResult.stderr);
+    assert.match(checkResult.stdout, new RegExp(`review guides: ok \\(${CANONICAL_GUIDE_COUNT}\\)`));
+    assert.match(checkResult.stdout, new RegExp(`instance docs: ok \\(${INSTANCE_DOC_COUNT}\\)`));
+  });
+});
+
+test('--check requires all onboarding files, reports every missing name, and writes nothing', () => {
+  withRoot((root) => {
+    const result = run([root, '--check']);
+    assert.equal(result.status, EXIT_INCOMPLETE);
+    for (const fileName of EXPECTED_SEEDED_NAMES) {
+      assert.ok(result.stderr.includes(fileName), `stderr should name ${fileName}`);
+    }
+    assert.equal(fs.existsSync(path.join(root, DEFAULT_INSTANCE_DOCS_REL)), false, '--check must not create .claude');
+    run([root]);
+    const completeResult = run([root, '--check']);
+    assert.equal(completeResult.status, EXIT_SUCCESS, completeResult.stderr);
+    assert.match(completeResult.stdout, new RegExp(`review guides: ok \\(${CANONICAL_GUIDE_COUNT}\\)`));
+    assert.match(completeResult.stdout, new RegExp(`instance docs: ok \\(${INSTANCE_DOC_COUNT}\\)`));
+  });
+});
+
+test('quality.json deep_review.guides_dir routes only the guides while docs retain their canonical path', () => {
   withRoot((root) => {
     fs.writeFileSync(
       path.join(root, 'quality.json'),
       JSON.stringify({ deep_review: { guides_dir: 'custom/guides' } }),
     );
-    const res = run([root]);
-    assert.equal(res.status, 0, res.stderr);
-    assert.deepEqual(guidesOf(root, 'custom/guides'), CANON);
-    assert.equal(fs.existsSync(path.join(root, '.agents')), false, 'default dir untouched');
-    const check = run([root, '--check']);
-    assert.equal(check.status, 0, check.stderr);
+    const result = run([root]);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.deepEqual(guidesOf(root, 'custom/guides'), CANONICAL_GUIDES);
+    assert.equal(fs.existsSync(path.join(root, DEFAULT_GUIDES_REL)), false, 'default guide dir must remain untouched');
+    assertInstanceDocsMatchTemplates(root);
+    const checkResult = run([root, '--check']);
+    assert.equal(checkResult.status, EXIT_SUCCESS, checkResult.stderr);
   });
 });
 
-test('8. quality.json guides_dir that escapes the root exits 2 and writes nothing outside', () => {
+test('a guides_dir that escapes the root exits with usage failure and writes nothing outside', () => {
   withRoot((root) => {
     fs.writeFileSync(
       path.join(root, 'quality.json'),
       JSON.stringify({ deep_review: { guides_dir: '../out' } }),
     );
-    const res = run([root]);
-    assert.equal(res.status, 2);
-    assert.match(res.stderr, /escapes consumer-root/);
+    const result = run([root]);
+    assert.equal(result.status, EXIT_USAGE);
+    assert.match(result.stderr, /escapes consumer-root/);
     assert.equal(fs.existsSync(path.join(path.dirname(root), 'out')), false);
+    assert.equal(fs.existsSync(path.join(root, DEFAULT_INSTANCE_DOCS_REL)), false);
   });
 });
 
-test('9. broken quality.json exits 2; a quality.json without deep_review falls back to default', () => {
+test('broken quality.json fails while a manifest without deep_review uses the defaults', () => {
   withRoot((root) => {
     fs.writeFileSync(path.join(root, 'quality.json'), '{ not json');
-    const broken = run([root]);
-    assert.equal(broken.status, 2);
-    assert.match(broken.stderr, /invalid JSON/);
+    const brokenResult = run([root]);
+    assert.equal(brokenResult.status, EXIT_USAGE);
+    assert.match(brokenResult.stderr, /invalid JSON/);
   });
   withRoot((root) => {
     fs.writeFileSync(path.join(root, 'quality.json'), JSON.stringify({ version: 1 }));
-    const res = run([root]);
-    assert.equal(res.status, 0, res.stderr);
-    assert.deepEqual(guidesOf(root), CANON);
+    const result = run([root]);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.deepEqual(guidesOf(root), CANONICAL_GUIDES);
+    assertInstanceDocsMatchTemplates(root);
   });
 });
 
-test('10. --guides-dir override wins and quality.json is ignored', () => {
+test('--guides-dir overrides quality.json without relocating instance docs', () => {
   withRoot((root) => {
     fs.writeFileSync(
       path.join(root, 'quality.json'),
       JSON.stringify({ deep_review: { guides_dir: 'custom/guides' } }),
     );
-    const res = run([root, '--guides-dir', 'other/dir']);
-    assert.equal(res.status, 0, res.stderr);
-    assert.deepEqual(guidesOf(root, 'other/dir'), CANON);
-    assert.equal(fs.existsSync(path.join(root, 'custom')), false, 'quality.json path ignored');
+    const result = run([root, '--guides-dir', 'other/dir']);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.deepEqual(guidesOf(root, 'other/dir'), CANONICAL_GUIDES);
+    assert.equal(fs.existsSync(path.join(root, 'custom')), false, 'quality.json path must be ignored');
+    assertInstanceDocsMatchTemplates(root);
   });
 });
 
-test('11. a missing or non-directory consumer-root exits 2', () => {
+test('a missing or non-directory consumer root exits with usage failure', () => {
   withRoot((root) => {
-    const missing = run([path.join(root, 'nope')]);
-    assert.equal(missing.status, 2);
-    const file = path.join(root, 'afile');
-    fs.writeFileSync(file, 'x');
-    const notDir = run([file]);
-    assert.equal(notDir.status, 2);
+    const missingResult = run([path.join(root, 'nope')]);
+    assert.equal(missingResult.status, EXIT_USAGE);
+    const filePath = path.join(root, 'a-file');
+    fs.writeFileSync(filePath, 'x');
+    const nonDirectoryResult = run([filePath]);
+    assert.equal(nonDirectoryResult.status, EXIT_USAGE);
   });
 });
 
-test('12. runs from an arbitrary cwd (templates resolve from script dir, not cwd)', () => {
+test('seeding from an arbitrary current directory still resolves templates from the script', () => {
   withRoot((root) => {
-    const otherCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-cwd-'));
+    const otherCurrentDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-cwd-'));
     try {
-      const res = run([root], { cwd: otherCwd });
-      assert.equal(res.status, 0, res.stderr);
-      assert.deepEqual(guidesOf(root), CANON);
+      const result = run([root], { cwd: otherCurrentDirectory });
+      assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+      assert.deepEqual(guidesOf(root), CANONICAL_GUIDES);
+      assertInstanceDocsMatchTemplates(root);
     } finally {
-      fs.rmSync(otherCwd, { recursive: true, force: true });
+      fs.rmSync(otherCurrentDirectory, { recursive: true, force: true });
     }
   });
 });
 
-test('unknown flag / missing --guides-dir value exit 2', () => {
+test('unknown flags and a missing --guides-dir value exit with usage failure', () => {
   withRoot((root) => {
-    assert.equal(run([root, '--bogus']).status, 2);
-    assert.equal(run([root, '--guides-dir']).status, 2);
-    assert.equal(run([]).status, 2); // no consumer-root
+    assert.equal(run([root, '--bogus']).status, EXIT_USAGE);
+    assert.equal(run([root, '--guides-dir']).status, EXIT_USAGE);
+    assert.equal(run([]).status, EXIT_USAGE);
   });
 });
 
-test('an explicit-but-EMPTY --guides-dir exits 2 in both flag forms (never a silent default)', () => {
+test('an explicitly empty --guides-dir fails in both flag forms without seeding', () => {
   withRoot((root) => {
     for (const args of [
       [root, '--guides-dir', ''],
       [root, '--guides-dir='],
     ]) {
-      const res = run(args);
-      assert.equal(res.status, 2, args.join(' '));
-      assert.match(res.stderr, /non-empty/);
+      const result = run(args);
+      assert.equal(result.status, EXIT_USAGE, args.join(' '));
+      assert.match(result.stderr, /non-empty/);
     }
-    assert.deepEqual(guidesOf(root), []); // nothing seeded anywhere
+    assert.deepEqual(guidesOf(root), []);
+    assert.equal(fs.existsSync(path.join(root, DEFAULT_INSTANCE_DOCS_REL)), false);
   });
 });
 
-test('seeding copies via temp+rename and leaves no temp residue; a stale temp is swept, foreign *.md.tmp.* names survive', () => {
+test('atomic seeding removes only per-destination stale temps and leaves foreign lookalikes', () => {
   withRoot((root) => {
-    const dir = path.join(root, '.agents/review-guides');
-    fs.mkdirSync(dir, { recursive: true });
-    /* Simulate a previously interrupted copy: temp present, destination absent. */
-    const stale = path.join(dir, `${canon(0)}.tmp.99999`);
-    fs.writeFileSync(stale, 'truncated');
-    /* A user file that merely LOOKS like a temp must not be swept (per-name namespace only). */
-    const foreign = path.join(dir, 'draft.md.tmp.keep');
-    fs.writeFileSync(foreign, 'mine');
-    const res = run([root]);
-    assert.equal(res.status, 0);
-    assert.equal(fs.existsSync(stale), false, 'stale temp swept');
-    assert.equal(fs.readFileSync(foreign, 'utf8'), 'mine', 'foreign temp-lookalike untouched');
-    assert.deepEqual(guidesOf(root), CANON); // full set, no temp names counted or left behind
+    const guidesDirectory = path.join(root, DEFAULT_GUIDES_REL);
+    fs.mkdirSync(guidesDirectory, { recursive: true });
+    const staleTemp = path.join(guidesDirectory, `${canonicalGuide(0)}.tmp.${STALE_PROCESS_ID}`);
+    fs.writeFileSync(staleTemp, 'truncated');
+    const foreignLookalike = path.join(guidesDirectory, 'draft.md.tmp.keep');
+    fs.writeFileSync(foreignLookalike, 'mine');
+    const result = run([root]);
+    assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+    assert.equal(fs.existsSync(staleTemp), false, 'stale temp must be swept');
+    assert.equal(fs.readFileSync(foreignLookalike, 'utf8'), 'mine', 'foreign lookalike must remain');
+    assert.deepEqual(guidesOf(root), CANONICAL_GUIDES);
     assert.equal(
-      fs.readFileSync(path.join(dir, canon(0)), 'utf8'),
-      fs.readFileSync(path.join(TEMPLATES_DIR, canon(0)), 'utf8'),
-      'the guide whose temp was stale is a complete copy, not the truncated leftover',
+      fs.readFileSync(path.join(guidesDirectory, canonicalGuide(0)), 'utf8'),
+      fs.readFileSync(path.join(GUIDE_TEMPLATES_DIR, canonicalGuide(0)), 'utf8'),
+      'the published guide must contain the complete template',
     );
+    assertInstanceDocsMatchTemplates(root);
   });
 });
 
-test('a failing cp leaves NO destination and NO temp residue (exit 2); a rerun with a working cp recovers', () => {
+test('a failing copy publishes no partial file or temp and a later seed recovers', () => {
   withRoot((root) => {
-    /* PATH-shim a cp that writes partial data and fails — the interrupted-copy scenario. */
-    const shims = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-shim-'));
+    const shimsDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-shim-'));
     try {
-      fs.writeFileSync(path.join(shims, 'cp'), '#!/bin/sh\necho partial > "$2"\nexit 1\n', { mode: 0o755 });
-      const broken = spawnSync('bash', [SCRIPT, root], {
-        encoding: 'utf8',
-        env: { ...process.env, PATH: `${shims}:${process.env.PATH ?? ''}` },
+      fs.writeFileSync(path.join(shimsDirectory, 'cp'), '#!/bin/sh\necho partial > "$2"\nexit 1\n', {
+        mode: 0o755,
       });
-      assert.equal(broken.status, 2);
-      assert.match(broken.stderr, /copy failed/);
-      const dir = path.join(root, '.agents/review-guides');
-      assert.deepEqual(guidesOf(root), [], 'no guide published from a failed copy');
+      const brokenResult = spawnSync('bash', [SCRIPT, root], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${shimsDirectory}:${process.env.PATH ?? ''}` },
+      });
+      assert.equal(brokenResult.status, EXIT_USAGE);
+      assert.match(brokenResult.stderr, /copy failed/);
+      const guidesDirectory = path.join(root, DEFAULT_GUIDES_REL);
+      assert.deepEqual(guidesOf(root), [], 'a failed copy must not publish a guide');
       assert.deepEqual(
-        fs.readdirSync(dir).filter((n) => n.includes('.tmp.')),
+        fs.readdirSync(guidesDirectory).filter((fileName) => fileName.includes('.tmp.')),
         [],
-        'failed copy cleans its temp',
+        'a failed copy must remove its temp',
       );
-      const rerun = run([root]);
-      assert.equal(rerun.status, 0);
-      assert.deepEqual(guidesOf(root), CANON);
+      assert.deepEqual(instanceDocsOf(root), [], 'copy failure must stop before later files are published');
+      const recoveryResult = run([root]);
+      assert.equal(recoveryResult.status, EXIT_SUCCESS, recoveryResult.stderr);
+      assert.deepEqual(guidesOf(root), CANONICAL_GUIDES);
+      assertInstanceDocsMatchTemplates(root);
     } finally {
-      fs.rmSync(shims, { recursive: true, force: true });
+      fs.rmSync(shimsDirectory, { recursive: true, force: true });
     }
   });
 });

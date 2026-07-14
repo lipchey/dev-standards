@@ -102,8 +102,8 @@ export function canonicalGuideNames(): string[] {
 /* Seeds a fixture's guides_dir with the FULL canonical set as empty files — the preflight
    checks availability BY NAME, never content. Every fix-mode fixture must call this so
    select-worktree/commit-slice/verify/handoff clear the guides gate. */
-export function seedGuides(repo: string, guidesDirRel = '.agents/review-guides'): void {
-  for (const name of canonicalGuideNames()) writeFile(repo, path.join(guidesDirRel, name), '');
+export function seedGuides(repo: string, guidesDirRel = '.claude/review-guides'): void {
+  for (const guideName of canonicalGuideNames()) writeFile(repo, path.join(guidesDirRel, guideName), '');
 }
 
 /* The committed source the AI "fixes": the slice edits src/app.ts from ORIGINAL to
@@ -154,7 +154,6 @@ export function qualityJson(opts: QualityOpts = {}): string {
     trigger: 'manual-only',
     modes: ['review-only', 'review-and-refactor'],
     budget: { seconds: opts.budgetSeconds ?? 900 },
-    guides_dir: '.agents/review-guides',
   };
   if (opts.noTouchGlobsRef !== undefined) deepReview['no_touch_globs_ref'] = opts.noTouchGlobsRef;
   if (opts.verifyEntry !== undefined) deepReview['verify_entry'] = opts.verifyEntry;
@@ -220,7 +219,7 @@ export function initCoreRepo(opts: CoreFixtureOpts = {}): Sandbox {
 
   writeFile(repo, '.gitignore', '/reports/\n');
   writeFile(repo, 'quality.json', qualityJson({ budgetSeconds: opts.budgetSeconds, noTouchGlobsRef: opts.noTouchGlobsRef, verifyEntry: opts.verifyEntry }));
-  writeFile(repo, '.agents/project-facts.md', opts.projectFacts ?? DEFAULT_PROJECT_FACTS);
+  writeFile(repo, '.claude/project-facts.md', opts.projectFacts ?? DEFAULT_PROJECT_FACTS);
   seedGuides(repo);
   writeFile(repo, 'src/app.ts', ORIGINAL);
   if (opts.verifyShim !== null) writeExecutable(repo, opts.verifyEntry ?? 'verify', opts.verifyShim ?? GREEN_SHIM);
@@ -283,7 +282,7 @@ export function initConsumerRepo(opts: { stampFresh: boolean; slug?: string } ):
 
   writeFile(repo, '.gitignore', '/reports/\n');
   writeFile(repo, 'quality.json', qualityJson());
-  writeFile(repo, '.agents/project-facts.md', DEFAULT_PROJECT_FACTS);
+  writeFile(repo, '.claude/project-facts.md', DEFAULT_PROJECT_FACTS);
   seedGuides(repo);
   writeFile(repo, 'src/app.ts', ORIGINAL);
   writeExecutable(repo, 'verify', GREEN_SHIM);

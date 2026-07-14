@@ -71,7 +71,7 @@ export function loadConfig(filePath: string): DeepReviewConfig {
     modes: deepReview?.modes ?? [],
     budget: deepReview?.budget ?? { seconds: DEFAULT_BUDGET_SECONDS },
     // Defaulted HERE so seeder, skill body and engine can never disagree on where guides live.
-    guidesDir: deepReview?.guides_dir ?? '.agents/review-guides',
+    guidesDir: deepReview?.guides_dir ?? '.claude/review-guides',
     noTouchGlobsRef: deepReview?.no_touch_globs_ref,
     verifyAfterFix: deepReview?.verify_after_fix,
     verifyEntry: requireRepoRelative(filePath, deepReview?.verify_entry ?? 'verify'),

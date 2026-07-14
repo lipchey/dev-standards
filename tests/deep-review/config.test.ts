@@ -1,6 +1,6 @@
 /* loadConfig projection defaults — specifically guidesDir: the manifest key is optional, but the
  * engine, the seeder (scripts/seed-review-guides.sh) and the skill body all document
- * `.agents/review-guides` as the default, so loadConfig must materialize it (a manifest without
+ * `.claude/review-guides` as the default, so loadConfig must materialize it (a manifest without
  * the key must NOT reach preflight as "unconfigured"). */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,7 +28,7 @@ const MANIFEST_BASE = {
   tiers: { staged: [], fast: [], full: [], audit: [] },
 };
 
-test('deep_review without guides_dir -> loadConfig defaults to .agents/review-guides', () => {
+test('deep_review without guides_dir -> loadConfig defaults to .claude/review-guides', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ds-config-'));
   try {
     const manifest = {
@@ -37,7 +37,7 @@ test('deep_review without guides_dir -> loadConfig defaults to .agents/review-gu
     };
     writeFileSync(join(dir, 'quality.json'), JSON.stringify(manifest));
     const config = loadConfig(join(dir, 'quality.json'));
-    assert.equal(config.guidesDir, '.agents/review-guides');
+    assert.equal(config.guidesDir, '.claude/review-guides');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

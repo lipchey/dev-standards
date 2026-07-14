@@ -126,7 +126,7 @@ blocking після калібрування.
 НЕ плодити дублікат: `core-code-guidelines.md` вже має Tests-розділ —
 РОЗШИРИТИ його доктриною нижче (merge-don't-duplicate). Окремий
 `testing.md` — лише якщо router-style без дублювання. Активація: гайд
-працює тільки після copy/fill у `.agents/review-guides/` пілота (гейти
+працює тільки після copy/fill у `.claude/review-guides/` пілота (гейти
 читають консюмерну теку + глобальну, не templates ядра) — явний крок фази.
 Ядро доктрини:
 
@@ -223,7 +223,7 @@ v2-записі ∧ worktree чистий.
 `build:deep-review` у bootstrap консюмера; шим `deep-review` у корені
 консюмера (аналог `verify`, зі stamp-guard); блок `deep_review` заповнений;
 скіл `deep-review-refactor` wired на CLI-верби (+ виправити в тілі скіла
-шлях `project-facts.md` → канонічний `.agents/project-facts.md`, як в
+шлях `project-facts.md` → канонічний `.claude/project-facts.md`, як в
 енджині). Окремий факт: dedicated worktree консюмера з `git worktree add`
 НЕ отримує ні checked-out submodule (gitlink), ні gitignored `dist/`, ні
 `node_modules` — шими і pre-commit hook там мертві. Рішення: бутстрап
@@ -294,7 +294,7 @@ bootstrap кейс); один slice реально приземлений у п�
 
 1. **`quality.json`** — повністю проектний конфіг: стек, тіри/чеки/бюджети,
    філесети, policy, `deep_review` блок (schema-validated).
-2. **`.agents/review-guides/`** — проектна адаптація знань: гайди приходять
+2. **`.claude/review-guides/`** — проектна адаптація знань: гайди приходять
    СІДИНГОМ (`seed-review-guides.sh`, copy-if-absent) на bootstrap, репо
    володіє їх тілами й доповнює їх під себе; повнота набору стережеться
    `--check`-ом у fast-tier. Manual-copy НЕ є контрактом. Понад сіди — capture
@@ -317,7 +317,7 @@ bootstrap кейс); один slice реально приземлений у п�
    людського рішення (щоб promotion-сесія не «зливала» його назад у core),
    не механізм скасування правил.
 2. **Специфікувати `project-facts.md` (S).** Канонічний шлях =
-   `.agents/project-facts.md` (дефолт енджина; текст скіла виправити — він
+   `.claude/project-facts.md` (дефолт енджина; текст скіла виправити — він
    каже root `project-facts.md`). Шаблон `agents/project-facts-template.md`:
    layer DAG, домені терміни, `## No-Touch Zones`, тип репо для
    кондиційності гайдів. Політика читання: у МУТУЮЧОМУ режимі (fix-mode)

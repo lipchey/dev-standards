@@ -3,12 +3,12 @@
 Append-only ledger of defects that a deterministic `verify` check could or
 should have caught, but that reached a later stage instead (Gate C review,
 deep-review, runtime, a user report). Copied into a consumer repo as
-`.agents/gate-misses.md` at onboarding; entries are counted by the
+`.claude/gate-misses.md` at onboarding; entries are counted by the
 calibration session (`docs/CALIBRATION.md` in dev-standards) as the
 **escape rate** — the primary signal that the gate configuration needs
 tuning.
 
-This ledger is disjoint from `.agents/review-guides/`: guides teach a
+This ledger is disjoint from `.claude/review-guides/`: guides teach a
 reviewer judgment; this file records gaps a machine gate should have closed.
 
 ## Entry format

@@ -2,7 +2,7 @@
 
 Template-Version: 2 (guides-revamp 2026-07-11)
 
-STARTING template: each adopting repo copies this into `.agents/review-guides/`
+STARTING template: each adopting repo copies this into `.claude/review-guides/`
 and then owns its final body. The `deep-review-refactor` skill loads it as a
 conditional lens, gated by the conditionality banner below. The prompts below
 are review-only JUDGMENT PROMPTS for a human or reviewing agent — never an

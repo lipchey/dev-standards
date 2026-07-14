@@ -2,7 +2,7 @@
 
 Template-Version: 2 (guides-revamp 2026-07-11)
 
-STARTING template: each adopting repo copies this into `.agents/review-guides/`
+STARTING template: each adopting repo copies this into `.claude/review-guides/`
 and then owns its final body. The prompts below are review-only JUDGMENT
 PROMPTS for a human or reviewing agent — they say what to look for and how to
 weigh it, never an instruction to edit.

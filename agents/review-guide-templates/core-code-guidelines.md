@@ -7,7 +7,7 @@ Unlike the other
 seeds it is NOT adapted from an upstream source; it is the repo's own baseline,
 kept deliberately short and noise-free so the on-demand deep guides own the long
 tail. STARTING template: each adopting repo copies it into
-`.agents/review-guides/` and then owns its final body. The prompts below are
+`.claude/review-guides/` and then owns its final body. The prompts below are
 review-only JUDGMENT PROMPTS for a human or reviewing agent - they say what to
 look for and how to weigh it, never an instruction to edit.
 
@@ -91,6 +91,14 @@ Judgment prompts:
   finding to delete, not keep: file-header banners restating the module name,
   section dividers, play-by-play narration of the next line, notes addressed
   to the reviewer ("changed this to fix X"), and commented-out code.
+- Does every file-header line name a constraint rather than summarize? A
+  header line survives only if deleting it invites a concrete bug or wrong
+  fix. Retellings of what the file does, usage examples reproducible from the
+  code or configuration, and specification text restated without adding a
+  local constraint or concrete failure consequence are findings even when
+  accurate. Use the delete test as the tie-breaker: a specification-derived
+  line that names one concrete constraint stays, as do markers carrying
+  non-derivable state.
 - Are all comments (doc comments included) written in English? A non-English
   comment is a finding regardless of the team's working language.
 - Do comments use block form `/* */` (`/** */` for doc comments) in languages

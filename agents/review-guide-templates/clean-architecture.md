@@ -12,7 +12,7 @@ Seed template. Sources (all MIT, verified):
 Paraphrased throughout; no verbatim blocks copied.
 Template-Version: 2 (guides-revamp 2026-07-11)
 
-STARTING template: each adopting repo copies it into `.agents/review-guides/`
+STARTING template: each adopting repo copies it into `.claude/review-guides/`
 and then owns its final body. The prompts below are review-only JUDGMENT PROMPTS
 for a human or reviewing agent — they say what to look for and how to weigh it,
 never an instruction to edit. This guide adds the architecture long tail ABOVE
@@ -25,7 +25,7 @@ SOLID, ports/adapters, and layering rules here are CONDITIONAL by repo surface.
 Do not import them blindly — they overfit NestJS-style class-heavy code and
 manufacture ceremony on script-style pipelines. Weight every section below by the
 tier it declares, and judge against the repo's declared layers in
-`.agents/project-facts.md` (that DAG, never a textbook diagram):
+`.claude/project-facts.md` (that DAG, never a textbook diagram):
 
 - **strong** — class-heavy TypeScript: DI containers, service classes, layered
   domain models, repositories/gateways. Ports, dependency direction, and SOLID

@@ -9,7 +9,7 @@ decisions. Effectiveness telemetry design: `docs/effectiveness-plan.md`.
 1. `node tools/quality-stats.mjs` — per-`(repo, tier, check, branch)`
    aggregates over `~/.local/share/dev-standards/events.jsonl`
    (catch-candidates, noise, bypasses, durations, flip/prune candidates).
-2. The consumer's `.agents/gate-misses.md` — escapes since the last session.
+2. The consumer's `.claude/gate-misses.md` — escapes since the last session.
 3. dev-standards `inbox/review-promotions.md` — pending rule candidates.
 
 ## Session steps
