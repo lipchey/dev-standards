@@ -78,7 +78,8 @@ wrapper-ів зелений, wrapper-и в пілоті статичні.
    разом із додаванням чеків.
 4. Розкладка: `staged` + ESLint по staged fileset; `fast` = typecheck +
    vitest + ESLint; `full` = + knip + gitleaks. Нові чеки заходять
-   `mode: report-only` → blocking після ~тижня без false-positive шуму.
+   `mode: report-only` → blocking СТРОГО за правилом `docs/CALIBRATION.md`
+   (≥1 dispositioned real catch + нуль операційного шуму — НЕ «тихий тиждень»).
 5. Точка енфорсменту: full ніхто не ганяє автоматично (pre-push = fast,
    CI у пілота нема) — shipping-гейти мають реально стояти на шляху:
    або перенести їх у fast, або pre-push → full, або CI-гейт у пілоті.
@@ -98,19 +99,28 @@ wrapper-ів зелений, wrapper-и в пілоті статичні.
 
 ### 4.1 Companion-tests check у staged (S→M)
 
-`tools/check-companion-tests.mjs` у ядрі: staged diff додає/змінює файли під
-src-глобами, а серед staged нема жодного тест-файла → fail з підказкою.
-`skip_if_empty` по src-філесету (не стріляє на doc-only коміти).
-УВАГА (залежність): `bypassable` сьогодні існує лише в схемі/валідаторі —
-`runCheck()` його не читає, у `CheckResult` нема bypass-статусу. Спершу
-реалізувати семантику в runner-і: байпас лише з непорожньою причиною
-(env `DS_BYPASS_REASON`), результат `bypassed` + причина в звіті, тести.
-До того прапор — декоративний.
+`tools/check-companion-tests.mjs` у ядрі — аналізатор УЖЕ реалізований і
+покритий тестами (`tests/tools/check-companion-tests.test.ts`): staged diff
+додає/змінює файли під src-глобами, а серед staged нема жодного тест-файла →
+fail з підказкою; `skip_if_empty` по src-філесету (не стріляє на doc-only
+коміти). Лишилась ПРОВОДКА — тіри пілота (staged).
+Bypass-семантика (передумова) ВИКОНАНА: `runner/src/exec.ts:204-206` читає
+непорожній `DS_BYPASS_REASON` і повертає `status:'bypassed'` + `reason`; звіт
+персистить повний `CheckResult`, тож reason зберігається цілим
+(`report.ts:18-20`); 7 тестів у `tests/runner/exec.bypass.test.ts`.
+Статус 4.1: tool done, wiring pending, без передумов у ядрі.
 
 ### 4.2 Diff-coverage у full (M)
 
-`tools/diff-cover.mjs` (dep-free): покриття ТІЛЬКИ доданих/змінених рядків.
-Обов'язковий вхідний контракт (без нього чек — тиха брехня):
+`tools/diff-cover.mjs` (dep-free) — аналізатор УЖЕ реалізований і покритий
+тестами (`tests/tools/diff-cover.test.ts`): покриття ТІЛЬКИ доданих/змінених
+рядків. Лишилась ПРОВОДКА (coverage-продюсер + тіри) ПЛЮС звірка двох
+контрактних пунктів нижче з фактичною семантикою тула (Gate C 2026-07-14):
+файл без coverage-entry → loud fail для `--include`-файлів, не «0%»
+(`computeCoverage`); порожній діапазон → `N/A` з exit 0, не «гучний fail»
+(нерозв'язний base падає гучно). Вирівняти тул або контракт — рішення в
+low-level плані N3. Обов'язковий вхідний контракт (без нього чек — тиха
+брехня):
 - Продюсер: `vitest --coverage` з JSON-репортером у пілоті (провайдер —
   залежність Фази 3.1); визначений шлях + freshness-перевірка звіту.
 - Файли, відсутні в coverage-даних = 0% покриття, не «пропущено».
