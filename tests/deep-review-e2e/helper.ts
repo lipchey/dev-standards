@@ -90,22 +90,6 @@ export function writeExecutable(dir: string, rel: string, content: string): void
   fs.chmodSync(path.join(dir, rel), 0o755);
 }
 
-/* The canonical review-guide set the §5.0 preflight requires present in a fixture's
-   guides_dir — read from the REAL templates dir (the same one the engine resolves from
-   import.meta.url), never a hardcoded list, so fixtures track core automatically. */
-const TEMPLATES_DIR = path.join(REPO_ROOT, 'agents', 'review-guide-templates');
-
-export function canonicalGuideNames(): string[] {
-  return fs.readdirSync(TEMPLATES_DIR).filter((n) => n.endsWith('.md')).sort();
-}
-
-/* Seeds a fixture's guides_dir with the FULL canonical set as empty files — the preflight
-   checks availability BY NAME, never content. Every fix-mode fixture must call this so
-   select-worktree/commit-slice/verify/handoff clear the guides gate. */
-export function seedGuides(repo: string, guidesDirRel = '.claude/review-guides'): void {
-  for (const guideName of canonicalGuideNames()) writeFile(repo, path.join(guidesDirRel, guideName), '');
-}
-
 /* The committed source the AI "fixes": the slice edits src/app.ts from ORIGINAL to
    EDITED. The edit is what commit-slice validates + lands. */
 export const ORIGINAL = 'export const a = 1;\n';
@@ -206,9 +190,7 @@ function initRepoDir(root: string, repo: string, env: NodeJS.ProcessEnv): void {
   git(repo, ['config', 'core.hooksPath', hooks], env);
 }
 
-/* Builds a committed core-repo fixture (no consumer gitlink) ready for
-   select-worktree: quality.json, project-facts, a review-guide, src/app.ts at
-   ORIGINAL, a green `verify` shim, and a gitignored reports root. */
+/* Package templates make consumer guide fixtures unnecessary. */
 export function initCoreRepo(opts: CoreFixtureOpts = {}): Sandbox {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-e2e-')));
   const home = path.join(root, 'home');
@@ -220,7 +202,6 @@ export function initCoreRepo(opts: CoreFixtureOpts = {}): Sandbox {
   writeFile(repo, '.gitignore', '/reports/\n');
   writeFile(repo, 'quality.json', qualityJson({ budgetSeconds: opts.budgetSeconds, noTouchGlobsRef: opts.noTouchGlobsRef, verifyEntry: opts.verifyEntry }));
   writeFile(repo, '.claude/project-facts.md', opts.projectFacts ?? DEFAULT_PROJECT_FACTS);
-  seedGuides(repo);
   writeFile(repo, 'src/app.ts', ORIGINAL);
   if (opts.verifyShim !== null) writeExecutable(repo, opts.verifyEntry ?? 'verify', opts.verifyShim ?? GREEN_SHIM);
   for (const [rel, content] of Object.entries(opts.extraFiles ?? {})) writeFile(repo, rel, content);
@@ -283,7 +264,6 @@ export function initConsumerRepo(opts: { stampFresh: boolean; slug?: string } ):
   writeFile(repo, '.gitignore', '/reports/\n');
   writeFile(repo, 'quality.json', qualityJson());
   writeFile(repo, '.claude/project-facts.md', DEFAULT_PROJECT_FACTS);
-  seedGuides(repo);
   writeFile(repo, 'src/app.ts', ORIGINAL);
   writeExecutable(repo, 'verify', GREEN_SHIM);
   git(repo, ['add', '-A'], env);

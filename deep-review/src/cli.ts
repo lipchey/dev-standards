@@ -194,19 +194,15 @@ function buildFixSet(env: ResolvedEnv, config: DeepReviewConfig): string[] {
   return [...new Set([...set, ...selfProtectedPaths(config.noTouchGlobsRef)])];
 }
 
-// Runs the §5.0 fix-mode preflight for `verb` against an already-loaded config. On a pass, returns
-// undefined; on a fail, emits the §2.4 machine error as the LAST stderr line and returns the exit
-// code (EXIT_PREFLIGHT) for the handler to return. Wired at the cli dispatch ONLY (after
-// argv/usage validation, before the engine) so gated verbs need fix-mode configured while
-// classify/report/check-path keep the review-only path.
+/* Preflight loads package guides plus the optional repo overlay before fix-mode verbs. */
 function preflightFail(
   config: DeepReviewConfig,
   env: ResolvedEnv,
   verb: string,
   deps: CliDeps,
 ): number | undefined {
-  const guidesDirAbs = resolve(env.cwd, config.guidesDir);
-  const outcome = runPreflight(config, verb, guidesDirAbs);
+  const overlayDirectory = resolve(env.cwd, config.guidesDir);
+  const outcome = runPreflight(config, verb, overlayDirectory);
   if (outcome.ok) return undefined;
   deps.stderr(`${JSON.stringify({ error: outcome.machineError })}\n`);
   return outcome.exitCode;

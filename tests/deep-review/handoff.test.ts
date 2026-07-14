@@ -241,14 +241,6 @@ test('F7: realHandoffDeps bounds every git read with a deadline-derived timeout 
 // ── CLI dispatch + real git ──────────────────────────────────────────────────────
 
 const REPO_QUALITY = fileURLToPath(new URL('../../quality.json', import.meta.url));
-// The canonical guide set the §5.0 preflight requires present in guides_dir (names only).
-const TEMPLATES_DIR = fileURLToPath(new URL('../../agents/review-guide-templates/', import.meta.url));
-function seedGuides(guidesDir: string): void {
-  fs.mkdirSync(guidesDir, { recursive: true });
-  for (const name of fs.readdirSync(TEMPLATES_DIR).filter((n) => n.endsWith('.md'))) {
-    fs.writeFileSync(path.join(guidesDir, name), '');
-  }
-}
 
 function git(dir: string, args: string[]): string {
   const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8', shell: false });
@@ -271,7 +263,6 @@ test('CLI handoff (real git, complete run): all fixed + verification@HEAD + clea
   const manifest = JSON.parse(fs.readFileSync(REPO_QUALITY, 'utf8')) as Record<string, unknown>;
   manifest['deep_review'] = { enabled: true, modes: ['review-only', 'review-and-refactor'], guides_dir: 'guides' };
   fs.writeFileSync(path.join(repo, 'quality.json'), JSON.stringify(manifest));
-  seedGuides(path.join(repo, 'guides'));
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-q', '-m', 'init']);
   const headSha = git(repo, ['rev-parse', 'HEAD']).trim();

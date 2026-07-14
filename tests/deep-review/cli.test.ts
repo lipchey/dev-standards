@@ -25,9 +25,6 @@ import type { MachineError } from '../../deep-review/src/types.ts';
 import type { DescriptorVerdict, RunDescriptor } from '../../deep-review/src/descriptor.ts';
 
 const REPO_QUALITY = fileURLToPath(new URL('../../quality.json', import.meta.url));
-// The canonical guide set the §5.0 preflight requires — the real templates dir the engine itself
-// resolves from import.meta.url (both this test file and the src sit at depth 2 from the repo root).
-const TEMPLATES_DIR = fileURLToPath(new URL('../../agents/review-guide-templates/', import.meta.url));
 
 function tmpDir(): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-cli-')));
@@ -46,11 +43,6 @@ function dirWithFixMode(over: Record<string, unknown> = {}): string {
     ...over,
   };
   fs.writeFileSync(path.join(dir, 'quality.json'), JSON.stringify(manifest));
-  fs.mkdirSync(path.join(dir, 'guides'), { recursive: true });
-  // Seed every canonical guide by NAME (empty is fine — preflight checks availability, not content).
-  for (const name of fs.readdirSync(TEMPLATES_DIR).filter((n) => n.endsWith('.md'))) {
-    fs.writeFileSync(path.join(dir, 'guides', name), '');
-  }
   fs.mkdirSync(path.join(dir, 'reports', 'quality'), { recursive: true });
   return dir;
 }

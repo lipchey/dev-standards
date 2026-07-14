@@ -54,7 +54,7 @@ test('template dir and catalog provenance agree exactly (set equality)', () => {
   );
 });
 
-test('every step-4 role name resolves to a real seed template', () => {
+test('every step-4 role name resolves to a real package template', () => {
   const names = new Set(templateNames());
   const missing = STEP4_ROLES.filter((role) => !names.has(role));
   assert.deepEqual(missing, [], `missing step-4 role templates: ${missing.join(', ')}`);

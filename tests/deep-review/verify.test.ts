@@ -188,8 +188,6 @@ test('F2: verify threads the pre-spawn findings revision into the stamp mutate',
 // ── CLI scope resolution (--scope ?? deep_review.verify_after_fix ?? --fast) ──────
 
 const REPO_QUALITY = fileURLToPath(new URL('../../quality.json', import.meta.url));
-// The canonical guide set the §5.0 preflight requires present in guides_dir (names only).
-const TEMPLATES_DIR = fileURLToPath(new URL('../../agents/review-guide-templates/', import.meta.url));
 
 function git(dir: string, args: string[]): string {
   const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8', shell: false });
@@ -215,10 +213,6 @@ function repoWithFixMode(verifyAfterFix?: '--fast' | '--full'): { repo: string; 
     ...(verifyAfterFix === undefined ? {} : { verify_after_fix: verifyAfterFix }),
   };
   fs.writeFileSync(path.join(repo, 'quality.json'), JSON.stringify(manifest));
-  fs.mkdirSync(path.join(repo, 'guides'), { recursive: true });
-  for (const name of fs.readdirSync(TEMPLATES_DIR).filter((n) => n.endsWith('.md'))) {
-    fs.writeFileSync(path.join(repo, 'guides', name), '');
-  }
 
   fs.mkdirSync(path.join(repo, 'reports', 'quality'), { recursive: true });
   const fpath = path.join(repo, 'reports', 'quality', 'findings.json');

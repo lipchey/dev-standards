@@ -113,17 +113,15 @@ Produce findings; change nothing. The runtime is six steps, in order:
    `tsc`, Knip, dependency-cruiser, or gitleaks already owns. This skill is
    judgment-only; it does not duplicate a gate.
 3. CodeGraph first for architecture, navigation, and impact questions.
-4. Judge against the repo-local review guides. The guides live in the guides dir
-   - `deep_review.guides_dir` in `quality.json`, default `.claude/review-guides/`
-   - seeded on bootstrap (copy-if-absent) and owned by the repo. Confirm the set
-   is complete BEFORE judging: run
-   `vendor/dev-standards/scripts/seed-review-guides.sh . --check` (the submodule
-   mounts at `vendor/dev-standards` by convention). Each canonical guide it
-   reports missing is itself a P1 finding ("review guides not seeded - run
-   `vendor/dev-standards/scripts/seed-review-guides.sh .`"); review-only proceeds
-   on whatever guides are present. (In `review-and-refactor`, an incomplete set
-   stops the run before `select-worktree`; the engine preflight enforces the same
-   fail-closed.) Apply the present guides in this order:
+4. Judge against the merged review-guide sources. The seven generic guides stay
+   in the package's `agents/review-guide-templates/` and are read there; they are
+   never seeded into the consumer. `deep_review.guides_dir` in `quality.json`
+   (default `.claude/review-guides/`) is an optional repo-owned overlay. Read every
+   overlay `*.md` in addition to the package set: a same-named file extends the
+   package guide and never replaces it, while an extra filename adds a repo-only
+   guide. A missing or empty overlay is valid. A missing or empty package template
+   directory is a broken checkout and stops fix-mode preflight. Apply the merged
+   guides in this order:
    - (a) the baseline `core-code-guidelines.md` - ALWAYS, and explicitly: the
      deep pass re-applies its rules on the code under review, it does not treat
      them as already met.
@@ -132,8 +130,8 @@ Produce findings; change nothing. The runtime is six steps, in order:
    - (c) the area guides (`clean-architecture.md`, `architecture-deepening.md`,
      `refactoring-checklist.md`, `security-review.md`) - each per its own
      conditionality banner.
-   - (d) any additional repo-owned `.md` in the guides dir - also judgment
-     sources.
+   - (d) same-named overlay extensions and any additional repo-owned `.md` in
+     the overlay dir - also judgment sources, never waivers.
    - (e) `review-output-format.md` - output shape only (step 5), never a review
      lens.
    Apply them only to judgment areas: boundaries, dependency direction, naming,

@@ -36,7 +36,10 @@ decisions. Effectiveness telemetry design: `docs/effectiveness-plan.md`.
    - **tune** `quality.json` (budgets, filesets, tiers) where durations or
      misses point at a structural gap;
    - **route misses**: consumer fixes applied in-session; core routes
-     mirrored into the promotions inbox (core-session processing).
+     mirrored into the promotions inbox (core-session processing). Consumer-only
+     review rules extend the package guides through same-named files in the
+     optional `.claude/review-guides/` overlay; reusable rules change the package
+     templates instead of copying them into each consumer.
 5. Append a dated summary block below: decisions + the numbers that
    justified them + open questions. Entries are append-only.
 

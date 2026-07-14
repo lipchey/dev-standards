@@ -1,6 +1,6 @@
 # Clean Architecture (review guide template)
 
-Seed template. Sources (all MIT, verified):
+Package template. Sources (all MIT, verified):
 
 - `ramziddin/solid-skills` @ `b113ce6` — SOLID, object design, and
   layered/hexagonal architecture references (adapted excerpts).
@@ -12,10 +12,11 @@ Seed template. Sources (all MIT, verified):
 Paraphrased throughout; no verbatim blocks copied.
 Template-Version: 2 (guides-revamp 2026-07-11)
 
-STARTING template: each adopting repo copies it into `.claude/review-guides/`
-and then owns its final body. The prompts below are review-only JUDGMENT PROMPTS
-for a human or reviewing agent — they say what to look for and how to weigh it,
-never an instruction to edit. This guide adds the architecture long tail ABOVE
+Deep-review reads this file in place. An adopting repo may extend it additively
+with a same-named file in `.claude/review-guides/`; the package body remains
+active. The prompts below are review-only JUDGMENT PROMPTS for a human or
+reviewing agent — they say what to look for and how to weigh it, never an
+instruction to edit. This guide adds the architecture long tail ABOVE
 the always-on `core-code-guidelines.md` baseline; where a rule sits next to a
 baseline rule it cross-references it by name rather than restating it.
 

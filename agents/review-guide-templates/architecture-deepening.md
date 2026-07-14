@@ -1,6 +1,6 @@
 # Architecture Deepening (review guide template)
 
-Seed template. Sources (all MIT, verified):
+Package template. Sources (all MIT, verified):
 
 - `mattpocock/skills` @ `391a2701` — improve-codebase-architecture,
   codebase-design, domain-modeling (ideas only: the published pages summarize the
@@ -13,9 +13,10 @@ Seed template. Sources (all MIT, verified):
 
 Template-Version: 2 (guides-revamp 2026-07-11)
 
-STARTING template: each adopting repo copies it into `.claude/review-guides/` and
-then owns its final body. The prompts below are review-only JUDGMENT PROMPTS for a
-human or reviewing agent — they say what to look for and how to weigh it, never an
+Deep-review reads this file in place. An adopting repo may extend it additively
+with a same-named file in `.claude/review-guides/`; the package body remains
+active. The prompts below are review-only JUDGMENT PROMPTS for a human or
+reviewing agent — they say what to look for and how to weigh it, never an
 instruction to edit. This guide is the module-depth long tail ABOVE the always-on
 `core-code-guidelines.md` baseline and the layer/boundary rules in
 `clean-architecture.md`; it cross-references both rather than restating them.

@@ -125,9 +125,9 @@ blocking після калібрування.
 
 НЕ плодити дублікат: `core-code-guidelines.md` вже має Tests-розділ —
 РОЗШИРИТИ його доктриною нижче (merge-don't-duplicate). Окремий
-`testing.md` — лише якщо router-style без дублювання. Активація: гайд
-працює тільки після copy/fill у `.claude/review-guides/` пілота (гейти
-читають консюмерну теку + глобальну, не templates ядра) — явний крок фази.
+`testing.md` — лише якщо router-style без дублювання. Активація: engine читає
+package template in place; пілот додає лише project-specific extension у
+same-named `.claude/review-guides/` overlay, без копії core body.
 Ядро доктрини:
 
 - Тест перевіряє ПОВЕДІНКУ через публічний контракт, не імплементацію.
@@ -167,8 +167,9 @@ INT-04.
 Факт коду: `deep_review`-конфіг (`enabled`, `modes`, `budget`, `guides_dir`)
 валідується схемою, але рантайм його ІГНОРУЄ (`cli.ts` не читає жодного
 поля). Реалізувати один preflight перед select-worktree і КОЖНИМ
-fix-вербом: enabled=true, `review-and-refactor` ∈ modes, гайди завантажені
-(додатково, не замість), один monotonic deadline із `budget.seconds`
+fix-вербом: enabled=true, `review-and-refactor` ∈ modes, package-гайди
+завантажені in place разом з опційним additive repo overlay, один monotonic
+deadline із `budget.seconds`
 протягнутий через git-виклики, test-спавни, verify і tree-kill.
 Rollback фази: прибрати `review-and-refactor` з `modes` пілота.
 
@@ -262,14 +263,15 @@ bootstrap кейс); один slice реально приземлений у п�
    finding → fixed / obsolete-after-removal / rejected+evidence /
    phase-N / BACKLOG; диспозицію закомітити.
 4. `docs/ADOPTION.md` (знімає onboarding gate з CLAUDE.md). Адопшн ОБОВʼЯЗКОВО
-   включає авто-сідинг review-гайдів: (а) виклик
+   включає авто-сідинг чотирьох instance docs: (а) виклик
    `vendor/dev-standards/scripts/seed-review-guides.sh <repo-root>` з
    консюмерського `ds-bootstrap.sh` — ПІСЛЯ submodule update + build (сабмодуль
    не ініціалізований → bootstrap падає гучно раніше за сідер, тож порядок
    зафіксований); (б) fast-tier check у `quality.json`
    `{"argv":["vendor/dev-standards/scripts/seed-review-guides.sh",".","--check"]}`
-   — детермінований гейт наявності гайдів. Сідинг = copy-if-absent, репо володіє
-   тілами гайдів; (в) рядок-правило в консюмерському CLAUDE.md: після
+   — детермінований гейт наявності лише instance docs. Сім generic guides engine
+   читає безпосередньо з package; repo володіє тільки additive overlay; (в)
+   рядок-правило в консюмерському CLAUDE.md: після
    завершення фічі агент автоматично ПРОПОНУЄ `deep-review-refactor` по
    змінах бранчі (скоуп = дифф проти бази, не весь репо); запуск лише за
    згодою користувача (контракт офера — у тілі скіла, «When to use»).
@@ -294,11 +296,11 @@ bootstrap кейс); один slice реально приземлений у п�
 
 1. **`quality.json`** — повністю проектний конфіг: стек, тіри/чеки/бюджети,
    філесети, policy, `deep_review` блок (schema-validated).
-2. **`.claude/review-guides/`** — проектна адаптація знань: гайди приходять
-   СІДИНГОМ (`seed-review-guides.sh`, copy-if-absent) на bootstrap, репо
-   володіє їх тілами й доповнює їх під себе; повнота набору стережеться
-   `--check`-ом у fast-tier. Manual-copy НЕ є контрактом. Понад сіди — capture
-   проектних правил gate-скілами (review-memory routing за скоупом).
+2. **`.claude/review-guides/`** — опційний project overlay: generic guide bodies
+   мають єдине джерело в package `agents/review-guide-templates/` і читаються
+   in place. Same-named overlay лише additive-розширює package guide; додатковий
+   `.md` додає project-only guide. `seed-review-guides.sh` сідає тільки чотири
+   instance docs, а відсутній/порожній overlay валідний.
 3. **No-touch floor** — extend-only union: проект може додати зони, звузити
    BASELINE не може.
 
@@ -311,7 +313,7 @@ bootstrap кейс); один slice реально приземлений у п�
    project > global > core» як runtime-механізм НЕ вводити. Натомість:
    проектна специфіка виражається через project-facts (applicability/
    кондиційність: тип репо вмикає strong/light/none у гайдах); пряма
-   контрадикція проектного правила з core-сідом → human reconciliation
+   контрадикція проектного правила з core-template → human reconciliation
    через `inbox/review-promotions.md`, не автоматика. Маркер
    `> deviates-from-core: <причина>` у проектному гайді — ДОКУМЕНТАЦІЯ
    людського рішення (щоб promotion-сесія не «зливала» його назад у core),

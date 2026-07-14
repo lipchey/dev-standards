@@ -1,150 +1,169 @@
-// §5.0 preflight — the fix-mode availability gate for select-worktree / commit-slice / verify /
-// handoff. Requires enabled === true, "review-and-refactor" in modes, and the guides dir holding
-// EVERY canonical guide (the `*.md` names in agents/review-guide-templates/) — an availability check
-// BY NAME, NOT "guides loaded" (the runtime never reads a guide). A fail returns EXIT_PREFLIGHT via a
-// §2.4 MachineError. classify/report/check-path are NOT gated.
+/* Preflight must use the real package templates while treating repo guides as optional overlays. */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { runPreflight } from '../../deep-review/src/preflight.ts';
 import type { PreflightDeps } from '../../deep-review/src/preflight.ts';
 import type { DeepReviewConfig } from '../../deep-review/src/config.ts';
+import { REVIEW_GUIDE_TEMPLATES_DIR } from '../../deep-review/src/guides.ts';
 import { EXIT_PREFLIGHT } from '../../deep-review/src/types.ts';
 
-function cfg(over: Partial<DeepReviewConfig> = {}): DeepReviewConfig {
+const EXPECTED_TEMPLATE_GUIDE_COUNT = 7;
+const OVERLAY_BODY = 'OVERLAY CHECKLIST BODY\n';
+
+function config(overrides: Partial<DeepReviewConfig> = {}): DeepReviewConfig {
   return {
     enabled: true,
     modes: ['review-only', 'review-and-refactor'],
     budget: { seconds: 900 },
-    guidesDir: '.agents/review-guides',
+    guidesDir: '.claude/review-guides',
     noTouchGlobsRef: undefined,
     verifyAfterFix: undefined,
     verifyEntry: 'verify',
     reportsDir: 'reports/quality',
-    ...over,
+    ...overrides,
   };
 }
 
-// A fake canonical set + a guides_dir seam. Names are arbitrary (not the real guide names): the
-// tests exercise the NAME-comparison logic, not the real set, so they stay decoupled from what
-// agents/review-guide-templates/ actually holds. By default listDir returns the FULL canonical set
-// (so preflight passes on the "ok" path).
-const CANON = ['alpha.md', 'beta.md', 'gamma.md'] as const;
-
-function guidesDeps(over: Partial<PreflightDeps> = {}): Partial<PreflightDeps> {
-  return {
-    listCanonicalGuides: () => [...CANON],
-    listDir: () => [...CANON],
-    ...over,
-  };
+function withRoot(callback: (root: string) => void): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dr-guides-'));
+  try {
+    callback(root);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
-const GATED = ['select-worktree', 'commit-slice', 'verify', 'handoff'] as const;
+const GATED_VERBS = ['select-worktree', 'commit-slice', 'verify', 'handoff'] as const;
 
-test('non-gated verbs (classify/report/check-path) pass through even with fix-mode disabled', () => {
+test('non-gated verbs pass without loading guides', () => {
+  const throwingDeps: Partial<PreflightDeps> = {
+    loadGuides: () => {
+      throw new Error('must not load');
+    },
+  };
   for (const verb of ['classify', 'report', 'check-path']) {
-    const outcome = runPreflight(cfg({ enabled: false }), verb, '/guides', guidesDeps());
+    const outcome = runPreflight(config({ enabled: false }), verb, '/missing-overlay', throwingDeps);
     assert.equal(outcome.ok, true, `${verb} must not be gated`);
   }
 });
 
-test('ok: enabled + review-and-refactor + the FULL canonical guide set -> pass, for every gated verb', () => {
-  for (const verb of GATED) {
-    const outcome = runPreflight(cfg(), verb, '/abs/guides', guidesDeps());
-    assert.equal(outcome.ok, true, `${verb} should pass a fully-configured preflight`);
-  }
+test('all gated verbs load the seven real package templates without a consumer guides directory', () => {
+  withRoot((root) => {
+    const missingOverlay = path.join(root, '.claude', 'review-guides');
+    assert.equal(fs.existsSync(missingOverlay), false);
+    for (const verb of GATED_VERBS) {
+      const outcome = runPreflight(config(), verb, missingOverlay);
+      assert.equal(outcome.ok, true, outcome.ok ? verb : outcome.machineError.message);
+      if (!outcome.ok) continue;
+      assert.equal(outcome.guides.length, EXPECTED_TEMPLATE_GUIDE_COUNT);
+      assert.equal(
+        outcome.guides.every(
+          (guide) =>
+            guide.sources.length === 1 &&
+            guide.sources[0]?.kind === 'package-template' &&
+            guide.sources[0].body.length > 0,
+        ),
+        true,
+      );
+    }
+  });
 });
 
-test('disabled: enabled !== true -> EXIT_PREFLIGHT, message names deep_review.enabled', () => {
-  const outcome = runPreflight(cfg({ enabled: false }), 'commit-slice', '/abs/guides', guidesDeps());
+test('a same-named overlay body is loaded additively alongside its package template', () => {
+  withRoot((root) => {
+    const overlayDirectory = path.join(root, '.claude', 'review-guides');
+    fs.mkdirSync(overlayDirectory, { recursive: true });
+    const templateName = fs
+      .readdirSync(REVIEW_GUIDE_TEMPLATES_DIR)
+      .filter((fileName) => fileName.endsWith('.md'))
+      .sort()[0];
+    assert.notEqual(templateName, undefined);
+    if (templateName === undefined) return;
+    fs.writeFileSync(path.join(overlayDirectory, templateName), OVERLAY_BODY);
+
+    const outcome = runPreflight(config(), 'verify', overlayDirectory);
+    assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.machineError.message);
+    if (!outcome.ok) return;
+    const mergedGuide = outcome.guides.find((guide) => guide.name === templateName);
+    assert.notEqual(mergedGuide, undefined);
+    if (mergedGuide === undefined) return;
+    const templateBody = fs.readFileSync(path.join(REVIEW_GUIDE_TEMPLATES_DIR, templateName), 'utf8');
+    assert.deepEqual(
+      mergedGuide.sources.map((source) => source.kind),
+      ['package-template', 'repo-overlay'],
+    );
+    assert.equal(mergedGuide.sources[0]?.body, templateBody);
+    assert.equal(mergedGuide.sources[1]?.body, OVERLAY_BODY);
+    assert.equal(mergedGuide.body.includes(templateBody), true);
+    assert.equal(mergedGuide.body.includes(OVERLAY_BODY), true);
+  });
+});
+
+test('an overlay-only markdown file is included without replacing package guides', () => {
+  withRoot((root) => {
+    const overlayDirectory = path.join(root, '.claude', 'review-guides');
+    fs.mkdirSync(overlayDirectory, { recursive: true });
+    fs.writeFileSync(path.join(overlayDirectory, 'repo-specific.md'), OVERLAY_BODY);
+
+    const outcome = runPreflight(config(), 'commit-slice', overlayDirectory);
+    assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.machineError.message);
+    if (!outcome.ok) return;
+    assert.equal(outcome.guides.length, EXPECTED_TEMPLATE_GUIDE_COUNT + 1);
+    assert.deepEqual(outcome.guides.find((guide) => guide.name === 'repo-specific.md')?.sources, [
+      {
+        kind: 'repo-overlay',
+        path: path.join(overlayDirectory, 'repo-specific.md'),
+        body: OVERLAY_BODY,
+      },
+    ]);
+  });
+});
+
+test('disabled fix mode fails before guide loading', () => {
+  const outcome = runPreflight(config({ enabled: false }), 'commit-slice', '/missing-overlay');
   assert.equal(outcome.ok, false);
   if (outcome.ok) return;
   assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
   assert.match(outcome.machineError.message, /disabled|enabled/);
-  assert.equal(outcome.machineError.command, 'deep-review commit-slice');
 });
 
-test('mode not allowed: review-and-refactor missing from modes -> EXIT_PREFLIGHT', () => {
-  const outcome = runPreflight(cfg({ modes: ['review-only'] }), 'verify', '/abs/guides', guidesDeps());
+test('missing review-and-refactor mode fails preflight', () => {
+  const outcome = runPreflight(config({ modes: ['review-only'] }), 'verify', '/missing-overlay');
   assert.equal(outcome.ok, false);
   if (outcome.ok) return;
   assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
   assert.match(outcome.machineError.message, /review-and-refactor/);
 });
 
-test('guidesDir escaping the repo root (raw manifest value) -> EXIT_PREFLIGHT, same contract as the seeder', () => {
-  for (const dir of ['/abs/guides', '..', '../outside', 'a/../../outside']) {
-    const outcome = runPreflight(cfg({ guidesDir: dir }), 'handoff', '/resolved/guides', guidesDeps());
-    assert.equal(outcome.ok, false, dir);
+test('overlay paths that escape the repo fail the lexical guard', () => {
+  for (const directory of ['/abs/guides', '..', '../outside', 'a/../../outside']) {
+    const outcome = runPreflight(config({ guidesDir: directory }), 'handoff', '/resolved/guides');
+    assert.equal(outcome.ok, false, directory);
     if (outcome.ok) return;
     assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
     assert.match(outcome.machineError.message, /repo-relative/);
   }
 });
 
-test('in-root guidesDir spellings (dotted segment, ./ prefix, a/..) are NOT rejected by the lexical guard', () => {
-  for (const dir of ['custom/../guides', './guides', 'a/..']) {
-    const outcome = runPreflight(cfg({ guidesDir: dir }), 'handoff', '/resolved/guides', guidesDeps());
-    assert.equal(outcome.ok, true, outcome.ok ? dir : `${dir}: ${outcome.machineError.message}`);
-  }
+test('in-root overlay path spellings pass the lexical guard', () => {
+  withRoot((root) => {
+    for (const directory of ['custom/../guides', './guides', 'a/..']) {
+      const outcome = runPreflight(config({ guidesDir: directory }), 'handoff', path.join(root, 'guides'));
+      assert.equal(outcome.ok, true, outcome.ok ? directory : `${directory}: ${outcome.machineError.message}`);
+    }
+  });
 });
 
-test('guides dir holds only a SUBSET (1/N) -> EXIT_PREFLIGHT naming the missing guides + the seeder hint', () => {
-  const outcome = runPreflight(
-    cfg(),
-    'select-worktree',
-    '/abs/guides',
-    guidesDeps({ listDir: () => ['alpha.md'] }),
-  );
-  assert.equal(outcome.ok, false);
-  if (outcome.ok) return;
-  assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
-  // The two absent canonical names are reported (sorted), and the message points at the seeder.
-  assert.match(outcome.machineError.message, /beta\.md/);
-  assert.match(outcome.machineError.message, /gamma\.md/);
-  assert.doesNotMatch(outcome.machineError.message, /alpha\.md/);
-  assert.match(outcome.machineError.message, /seed-review-guides\.sh/);
-});
-
-test('guides dir empty/absent (listDir -> []) -> EXIT_PREFLIGHT', () => {
-  const outcome = runPreflight(cfg(), 'commit-slice', '/abs/guides', guidesDeps({ listDir: () => [] }));
-  assert.equal(outcome.ok, false);
-  if (outcome.ok) return;
-  assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
-  assert.match(outcome.machineError.message, /guides/);
-});
-
-test('templates dir unavailable (no canonical set) -> EXIT_PREFLIGHT (fail-closed on a broken checkout)', () => {
-  const outcome = runPreflight(
-    cfg(),
-    'verify',
-    '/abs/guides',
-    guidesDeps({ listCanonicalGuides: () => [] }),
-  );
+test('an unavailable package template directory fails closed', () => {
+  const outcome = runPreflight(config(), 'verify', '/missing-overlay', {
+    loadGuides: () => ({ ok: false, templatesDir: '/broken/package/agents/review-guide-templates' }),
+  });
   assert.equal(outcome.ok, false);
   if (outcome.ok) return;
   assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
   assert.match(outcome.machineError.message, /canonical guide templates unavailable/);
-});
-
-test('check order: disabled is reported before the (also-failing) guides check', () => {
-  // enabled:false AND no guides — the FIRST failure (disabled) is the reported one.
-  const outcome = runPreflight(cfg({ enabled: false }), 'verify', '/abs/guides', guidesDeps({ listDir: () => [] }));
-  assert.equal(outcome.ok, false);
-  if (outcome.ok) return;
-  assert.match(outcome.machineError.message, /disabled|enabled/);
-});
-
-// Default deps (no seam override) resolve the REAL templates dir via import.meta.url. Pointing
-// guidesDirAbs at that same dir means present ⊇ canonical, so it passes — proving the src+dist
-// depth-2 resolution is correct without mocking. `../../` from tests/deep-review/ also lands at the
-// repo root, so the templates dir is the same one preflight resolves.
-const REAL_TEMPLATES_DIR = fileURLToPath(new URL('../../agents/review-guide-templates/', import.meta.url));
-
-test('default deps resolve the real templates dir: guidesDir = the templates dir itself passes', () => {
-  assert.equal(readdirSync(REAL_TEMPLATES_DIR).some((n) => n.endsWith('.md')), true, 'fixture precondition: real templates exist');
-  const outcome = runPreflight(cfg(), 'verify', REAL_TEMPLATES_DIR);
-  assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.machineError.message);
 });

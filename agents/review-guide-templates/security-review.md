@@ -2,11 +2,12 @@
 
 Template-Version: 2 (guides-revamp 2026-07-11)
 
-STARTING template: each adopting repo copies this into `.claude/review-guides/`
-and then owns its final body. The `deep-review-refactor` skill loads it as a
-conditional lens, gated by the conditionality banner below. The prompts below
-are review-only JUDGMENT PROMPTS for a human or reviewing agent — never an
-instruction to edit. Security is one place laziness never applies: a
+Deep-review reads this package template in place. An adopting repo may extend it
+additively with a same-named file in `.claude/review-guides/`; the package body
+remains active. The `deep-review-refactor` skill loads it as a conditional lens,
+gated by the conditionality banner below. The prompts below are review-only
+JUDGMENT PROMPTS for a human or reviewing agent — never an instruction to edit.
+Security is one place laziness never applies: a
 "probably fine" input path is a finding.
 
 Provenance: taxonomy and per-language quirks distilled (paraphrased, no

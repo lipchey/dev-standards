@@ -1,15 +1,16 @@
 # Core Code Guidelines (review guide template)
 
-Seed template. This is the always-on review baseline - the cheap rules every
+Package template. This is the always-on review baseline - the cheap rules every
 coding task applies, the short list that `deep-review-refactor` loads first
 (per ADR-003, review guides are loaded by explicit brief, not auto-discovered).
-Unlike the other
-seeds it is NOT adapted from an upstream source; it is the repo's own baseline,
+Unlike the other package guides, it is NOT adapted from an upstream source; it
+is the repo's own baseline,
 kept deliberately short and noise-free so the on-demand deep guides own the long
-tail. STARTING template: each adopting repo copies it into
-`.claude/review-guides/` and then owns its final body. The prompts below are
-review-only JUDGMENT PROMPTS for a human or reviewing agent - they say what to
-look for and how to weigh it, never an instruction to edit.
+tail. Deep-review reads this file in place. An adopting repo may extend it
+additively with a same-named file in `.claude/review-guides/`; the package body
+remains active. The prompts below are review-only JUDGMENT PROMPTS for a human
+or reviewing agent - they say what to look for and how to weigh it, never an
+instruction to edit.
 
 ## How to apply this guide (conditional by repo type)
 

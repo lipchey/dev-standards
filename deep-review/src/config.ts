@@ -41,11 +41,7 @@ function requireRepoRelative(filePath: string, entry: string): string {
   return entry;
 }
 
-// The engine view of the manifest: the `deep_review` fields the runtime actually uses, projected
-// off the validated manifest (schema-validated but previously dropped — 5.0). `enabled`/`modes`
-// gate preflight; `budget` seeds the deadline; `guidesDir` is the preflight availability check;
-// `noTouchGlobsRef`/`verifyAfterFix` feed the no-touch set and verify scope. `tiers` stay dropped
-// (no named-check resolver in this phase — YAGNI while there is one consumer).
+/* `guidesDir` is an optional repo overlay; canonical guides stay package-owned. */
 export interface DeepReviewConfig {
   enabled: boolean;
   modes: Array<'review-only' | 'review-and-refactor'>;
@@ -70,7 +66,7 @@ export function loadConfig(filePath: string): DeepReviewConfig {
     enabled: deepReview?.enabled ?? false,
     modes: deepReview?.modes ?? [],
     budget: deepReview?.budget ?? { seconds: DEFAULT_BUDGET_SECONDS },
-    // Defaulted HERE so seeder, skill body and engine can never disagree on where guides live.
+    /* One default keeps the engine and skill aligned on the optional overlay location. */
     guidesDir: deepReview?.guides_dir ?? '.claude/review-guides',
     noTouchGlobsRef: deepReview?.no_touch_globs_ref,
     verifyAfterFix: deepReview?.verify_after_fix,

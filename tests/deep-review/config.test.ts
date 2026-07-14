@@ -1,7 +1,4 @@
-/* loadConfig projection defaults — specifically guidesDir: the manifest key is optional, but the
- * engine, the seeder (scripts/seed-review-guides.sh) and the skill body all document
- * `.claude/review-guides` as the default, so loadConfig must materialize it (a manifest without
- * the key must NOT reach preflight as "unconfigured"). */
+/* The engine and skill share `.claude/review-guides` as the optional overlay default. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';

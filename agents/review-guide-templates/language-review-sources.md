@@ -2,10 +2,11 @@
 
 Template-Version: 2 (guides-revamp 2026-07-11)
 
-STARTING template: each adopting repo copies this into `.claude/review-guides/`
-and then owns its final body. The prompts below are review-only JUDGMENT
-PROMPTS for a human or reviewing agent — they say what to look for and how to
-weigh it, never an instruction to edit.
+Deep-review reads this package template in place. An adopting repo may extend it
+additively with a same-named file in `.claude/review-guides/`; the package body
+remains active. The prompts below are review-only JUDGMENT PROMPTS for a human
+or reviewing agent — they say what to look for and how to weigh it, never an
+instruction to edit.
 
 Provenance: lenses distilled (paraphrased excerpts, no verbatim blocks) from
 `awesome-skills/code-review-skill` (MIT, pinned `f2fd4e57`) — its per-language
