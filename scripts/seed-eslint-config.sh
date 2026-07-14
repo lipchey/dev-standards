@@ -28,16 +28,28 @@ script_dir=$(cd "$(dirname "$0")" && pwd -P)
 template="$script_dir/../eslint/consumer-template.eslint.config.js"
 [ -f "$template" ] || { echo "template not found: $template" >&2; exit 2; }
 
-# --- step 1: seed eslint.config.js (copy-if-absent, temp+rename atomic) ---
+# --- step 1: seed eslint.config.js (copy-if-absent, atomic no-clobber) ---
+# mktemp (O_EXCL + random suffix) closes the pre-planted-temp race and, by
+# owning a unique name, needs no `rm -f "$dest.tmp."*` family sweep (which would
+# eat a concurrent seeder's temp or a consumer lookalike). ln is the atomic
+# no-clobber publish: a file that appeared after the absence check is
+# consumer-owned and wins. Mirrors seed-review-guides.sh.
 dest="$consumer_root_abs/eslint.config.js"
 if [ -e "$dest" ] || [ -L "$dest" ]; then
   echo "eslint.config.js: kept (repo-owned)"
 else
-  rm -f "$dest.tmp."* 2>/dev/null || true
-  tmp="$dest.tmp.$$"
-  cp "$template" "$tmp" || { rm -f "$tmp"; echo "copy failed" >&2; exit 2; }
-  mv "$tmp" "$dest"
-  echo "eslint.config.js: seeded"
+  tmp=$(mktemp "$dest.tmp.XXXXXX") || { echo "temp create failed" >&2; exit 2; }
+  trap 'rm -f "$tmp"' EXIT
+  cp "$template" "$tmp" || { echo "copy failed" >&2; exit 2; }
+  chmod 644 "$tmp"
+  if ln "$tmp" "$dest" 2>/dev/null; then
+    echo "eslint.config.js: seeded"
+  elif [ -e "$dest" ] || [ -L "$dest" ]; then
+    echo "eslint.config.js: kept (repo-owned)"
+  else
+    echo "publish failed" >&2; exit 2
+  fi
+  rm -f "$tmp"; trap - EXIT
 fi
 
 # --- step 2: ensure toolchain devDependencies (add-if-absent, atomic write) ---
@@ -47,6 +59,7 @@ pkg="$consumer_root_abs/package.json"
 node -e '
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const pkgPath = process.argv[1];
 /* Add only absent keys — a consumer that already pins a version keeps it. eslint
    is the consumers own runner (peer of dev-standards), so it is seeded too. */
@@ -68,9 +81,16 @@ for (const [name, ver] of Object.entries(WANT)) {
   }
 }
 if (added.length === 0) { console.log("devDependencies: complete"); process.exit(0); }
-/* temp + rename so an interrupted write cannot leave a truncated package.json. */
-const tmp = pkgPath + ".tmp." + process.pid;
-fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
-fs.renameSync(tmp, pkgPath);
+/* Random same-dir temp opened wx (O_EXCL) so a pre-planted symlink is refused
+   rather than followed and truncated; clean only this file on any throw, then
+   atomically rename over package.json. */
+const tmp = pkgPath + ".tmp." + crypto.randomBytes(6).toString("hex");
+try {
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n", { flag: "wx" });
+  fs.renameSync(tmp, pkgPath);
+} catch (e) {
+  try { fs.unlinkSync(tmp); } catch (_) {}
+  throw e;
+}
 console.log("devDependencies: added " + added.join(", ") + " (run npm install)");
 ' "$pkg"

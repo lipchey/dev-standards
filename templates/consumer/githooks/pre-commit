@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Format and re-stage staged files only when the manifest's format policy enables it
+# (a no-op otherwise), before the checks run.
+./scripts/verify --fix-staged
+exec ./scripts/verify --staged

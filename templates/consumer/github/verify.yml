@@ -1,0 +1,52 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# PR-controlled npm scripts run in this job — keep the token read-only.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          # Full history: gitleaks scans the whole log, not a shallow slice.
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          # Glob, not a literal path: a hardcoded root package-lock.json
+          # entry breaks this step for non-Node consumers that have none.
+          # Matching whatever lockfiles exist still keys on
+          # vendor/dev-standards's own lockfile, so a submodule pin bump
+          # busts the cache like a literal two-path list would.
+          cache-dependency-path: "**/package-lock.json"
+
+      - name: Bootstrap dev-standards
+        run: scripts/ds-bootstrap.sh
+
+      - name: Verify (full)
+        run: ./scripts/verify --full
+
+      - name: Gitleaks (blocking)
+        run: tools/run-gitleaks git --no-banner --redact
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-artifacts
+          path: .artifacts/
+          # .artifacts/ is a dotdir — v4 skips hidden files unless told not to.
+          include-hidden-files: true

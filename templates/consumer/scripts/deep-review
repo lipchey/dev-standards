@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# deep-review — shim over the dev-standards deep-review runner (built inside the submodule).
+# Guards the build-on-demand bundle: if it is missing, point at the bootstrap.
+
+REPO_ROOT="$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)"
+BUNDLE="${REPO_ROOT}/vendor/dev-standards/deep-review/dist/deep-review-runner.mjs"
+
+if [[ ! -f "${BUNDLE}" ]]; then
+  echo "deep-review-runner bundle not found at ${BUNDLE}." >&2
+  echo "Run: scripts/ds-bootstrap.sh" >&2
+  exit 127
+fi
+
+# Reject bundles built for a different submodule revision than the one checked
+# out: dist/ is gitignored, so a pin bump leaves stale bundles in place and the
+# existence check above would happily run old runner code. ds-bootstrap.sh
+# stamps dist/.built-from with the commit it built from.
+# git that ignores the GIT_DIR/index env `git commit` exports to its hooks: inside a
+# hook the inherited (absolute, in a linked worktree) GIT_DIR makes `git -C <submodule>`
+# ignore the -C path and answer for the SUPERPROJECT, so the staleness check below would
+# wrongly compare the bundle stamp to the superproject HEAD. Unsetting the location env
+# forces each git call to rediscover the repo from its own -C path (hook-safe).
+git_clean() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY git "$@"; }
+
+STAMP="${REPO_ROOT}/vendor/dev-standards/deep-review/dist/.built-from"
+BUILT_FROM="$(cat "${STAMP}" 2>/dev/null || echo none)"
+PINNED="$(git_clean -C "${REPO_ROOT}/vendor/dev-standards" rev-parse HEAD 2>/dev/null || echo unknown)"
+if [[ "${BUILT_FROM}" != "${PINNED}" ]]; then
+  echo "deep-review-runner bundle is stale: built from ${BUILT_FROM}, submodule now at ${PINNED}." >&2
+  echo "Run: scripts/ds-bootstrap.sh" >&2
+  exit 127
+fi
+
+# Checkout-vs-stamp equality alone misses a pulled pin bump: after `git pull`
+# the recorded gitlink moves while the submodule checkout and stamp both stay
+# on the old revision and still match each other. Compare against the index
+# gitlink (not HEAD's) so an in-progress staged bump validates too. Anything
+# but exactly one clean gitlink entry (staged deletion, merge conflict) is
+# itself a broken pin state — fail rather than skip the comparison.
+RECORDED_ENTRY="$(git_clean -C "${REPO_ROOT}" ls-files -s -- vendor/dev-standards)"
+RECORDED_MODE="$(awk '{print $1}' <<<"${RECORDED_ENTRY}")"
+RECORDED="$(awk '{print $2}' <<<"${RECORDED_ENTRY}")"
+if [[ "${RECORDED_MODE}" != "160000" || "${RECORDED}" != "${PINNED}" ]]; then
+  echo "submodule checkout ${PINNED} does not match the recorded pin ${RECORDED:-<none>}." >&2
+  echo "Run: scripts/ds-bootstrap.sh" >&2
+  exit 127
+fi
+
+# No --manifest: the deep-review CLI loads quality.json (and resolves reports/
+# guides/project-facts) from cwd, so pin cwd to the repo root regardless of
+# where the shim was invoked from.
+cd "${REPO_ROOT}"
+exec node "${BUNDLE}" "$@"

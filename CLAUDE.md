@@ -17,9 +17,9 @@ their bootstrap script and run a thin `verify` shim). Pilot consumer:
 - **ADR discipline**: referencing a new ADR id in code requires a matching
   entry in `docs/ADR.md` (create the file on the first entry — known debt, see
   BACKLOG).
-- **`workflow/` (L3) is slated for removal** (BACKLOG; execution plan in local
-  gitignored `.handoff/workflow-removal-plan.md`). Do not build anything new
-  on top of `workflow/`.
+- **`workflow/` (L3) has been removed** (BACKLOG, 2026-07-10): engine, tests,
+  schema block, and validator checks are all gone. Do not reintroduce it or
+  build anything on top of it.
 - **Onboarding gate**: no new consumer repos until (1) L2 is finished in
   ai-prompter, (2) `workflow/` is removed, (3) `DEEP_REVIEW_FINDINGS.md` is
   triaged into BACKLOG or committed. When all three are done, write

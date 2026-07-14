@@ -6,8 +6,10 @@ Shared quality-system runner, schema, and fixtures.
 
 This repo provides the core `./verify` runner (schema + hand validator, tiered
 checks) and the optional `deep-review` refactor engine.
-It does not implement red-main tracking, health digests, baseline-diff promotion,
-or automated repo adoption.
+It does not implement red-main tracking, health digests, or baseline-diff
+promotion. Adopting a consumer repo is a one-command flow — see
+[docs/ADOPTION.md](docs/ADOPTION.md) (`scripts/ds-install.sh`,
+`scripts/ds-update-pins.sh`).
 
 ## Getting started
 
@@ -28,9 +30,10 @@ npm run bootstrap   # npm ci && npm run build
 - `./verify --full`
 
 `runner/dist/` is a build-on-demand artifact for `dev-standards` itself and is
-git-ignored; run `npm run bootstrap` (or `npm run build`) before `./verify`. Only adopting repos vendor the
-built `tools/verify-runner.mjs` — and only the `.mjs`, never the `.mjs.map`, which
-embeds the original TypeScript via `sourcesContent`.
+git-ignored; run `npm run bootstrap` (or `npm run build`) before `./verify`.
+Adopting repos do NOT vendor a built bundle: they pin this repo as a submodule
+and build `runner/dist/` locally in `ds-bootstrap.sh`, then run a thin
+`scripts/verify` shim over it (see [docs/ADOPTION.md](docs/ADOPTION.md)).
 
 ## Telemetry
 

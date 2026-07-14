@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "repo": "__DS_REPO_NAME__",
+  "stack": "meta-docs",
+  "scheduler_class": "local-only",
+  "budgets": {
+    "staged_seconds": 60,
+    "fast_seconds": 120,
+    "full_seconds": 300,
+    "audit_seconds": 60
+  },
+  "policy": {
+    "mutates_by_default": false,
+    "format_fix_staged_allowed": false,
+    "typed_eslint_in_precommit": false,
+    "block_new_dead_code_only": true
+  },
+  "paths": {
+    "reports": ".artifacts/reports/quality",
+    "baselines": ".artifacts/quality-baselines"
+  },
+  "generated": {
+    "hooks_dir": ".githooks"
+  },
+  "workspaces": [
+    {
+      "name": "root",
+      "path": ".",
+      "stack": "meta-docs",
+      "package_manager": "none"
+    }
+  ],
+  "filesets": [],
+  "tiers": {
+    "staged": [],
+    "fast": [
+      {
+        "name": "instance-docs-seeded",
+        "argv": [
+          "vendor/dev-standards/scripts/seed-review-guides.sh",
+          ".",
+          "--check"
+        ],
+        "timeout_seconds": 10
+      }
+    ],
+    "full": [
+      {
+        "name": "instance-docs-seeded",
+        "argv": [
+          "vendor/dev-standards/scripts/seed-review-guides.sh",
+          ".",
+          "--check"
+        ],
+        "timeout_seconds": 10
+      }
+    ],
+    "audit": []
+  },
+  "deep_review": {
+    "enabled": true,
+    "modes": [
+      "review-only",
+      "review-and-refactor"
+    ],
+    "budget": {
+      "seconds": 900
+    },
+    "guides_dir": ".claude/review-guides",
+    "no_touch_globs_ref": ".claude/project-facts.md",
+    "verify_after_fix": "--fast",
+    "verify_entry": "scripts/verify"
+  }
+}

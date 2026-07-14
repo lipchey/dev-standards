@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# run-gitleaks — pinned wrapper the deep-review engine resolves by convention
+# at `tools/run-gitleaks` (secret-scan.ts SCANNER_REL) to run this repo's
+# pinned gitleaks binary. Exit code passes through as-is; the engine
+# classifies it (0 clean / 1 hit / anything else unavailable).
+
+ROOT="$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)"
+
+exec "${ROOT}/.tools/gitleaks" "$@"

@@ -2,6 +2,34 @@
 
 Non-blocking, dated. Newest first.
 
+## 2026-07-14 — Hermetic installer/updater test suite (Gate P F13)
+
+`ds-install.sh` / `seed-consumer.sh` / `ds-update-pins.sh` ship with no automated
+tests. Add a hermetic suite driven by a **local-fixture upstream** (a bare repo
+served as origin, so no GitHub round-trip) covering the happy path AND the
+failure paths the design promises: dirty-tree abort, bad `--ref` abort,
+predates-kit rejection with clean-tree rollback, mid-seed failure rollback, and
+the pin-update forced-red rollback (old pin + stamps restored, other consumers
+untouched). Effort M.
+
+## 2026-07-14 — Template-migration policy for consumer-owned shims (Gate P F11)
+
+Pin updates rebuild bundles but never re-sync the consumer-owned shims/hooks/CI
+that `seed-consumer.sh` laid down copy-if-absent (`scripts/verify`,
+`scripts/deep-review`, `.githooks/*`, `.github/workflows/verify.yml`,
+`ds-bootstrap.sh`, `install-gitleaks.sh`, `tools/run-gitleaks`). When a newer pin
+changes a shim's expected contract, an old consumer copy silently drifts. Define
+a policy: version/stamp the templates, detect drift on `--check`, and offer an
+opt-in re-seed that respects consumer edits. Effort M.
+
+## 2026-07-14 — Non-Node worktree create/reuse test (Gate P F4)
+
+The deep-review worktree symlinks root `node_modules/` unconditionally
+(`worktree.ts`); `ds-bootstrap.sh` now `mkdir -p node_modules` for non-Node
+consumers so the symlink resolves. Add a test that exercises worktree
+create-then-reuse for a non-Node consumer (empty `node_modules/`, no
+`package-lock.json`) so this contract can't regress. Effort S.
+
 ## 2026-07-10 — Descriptor-relative confinement for skill-wrapper generation — MOOT (Phase 2, 2026-07-10)
 
 The confinement TOCTOU this tracked lived entirely in `generate-skill-wrappers.ts`,
