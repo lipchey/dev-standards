@@ -15,6 +15,23 @@
 > до gitleaks-гейта В CI); dependabot.yml = лише version-updates,
 > vulnerability-покриття вмикається окремо (alerts + security updates);
 > AGENTS.md-pointer — 3-рядковий файл, не symlink.
+> Фаза N2: ВИКОНАНО 2026-07-14 (core eafc03e = v0.12.0, пілот 7a9f7b9).
+> Скоуп-дельта: пілотні кроки 3.1–3.5 виявились уже ВИКОНАНИМИ самим пілотом
+> (quality.json — легальна поверхня тюнінгу; роадмап reality-synced, вкл.
+> проводку 4.1/4.2) — фаза стала core-side: self-lint ядра (eslint у fast+full,
+> report-only, op-exit [2]) + матеріалізація knip (devDep ^6 + knip.json +
+> full-tier чек, report-only); бюджети 150/420. Рішення 9-vs-10: ЛИШАЄМОСЬ на 9
+> (eslint-plugin-jsx-a11y і react-hooks@6 peer ≤^9 — будь-який консюмер на 10
+> ловить ERESOLVE); peerDep-чесність `^9.38.0`; блокери в eslint/README.
+> Улови першого прогону: consumer-template був синтаксично НЕВАЛІДНИЙ JS
+> (глоб `**/*.ts` у блок-коменті містить `*/`) — свіжий консюмер отримував би
+> непарсибельний eslint.config.js; globals.node у JS-блоках обох конфігів +
+> сідер WANT; engines-чесність `^20.19.0 || >=22.12.0` (knip floor); 26 мертвих
+> експортів; live-fire N1-гейта: check-new-deps=pass на staged маніфест-делті.
+> Крос-репо улов: метадані file:-лінка (devDeps/peerDeps/engines core)
+> в'їжджають у консюмерський lockfile — ds-update-pins впав на bootstrap і
+> штатно відкотився; бамп зроблено вручну (gitlink + npm install + lockfile
+> одним комітом). Флипи у blocking НЕ робились — лише за CALIBRATION.
 > Фаза N1: ВИКОНАНО 2026-07-14 (core 8203357, пілот e324e22+fb1ea40) — гейт
 > live у core fast і пілотному staged (записи в reports/quality/ обох),
 > mode report-only; флип у blocking НЕ зроблено — лише за CALIBRATION.
