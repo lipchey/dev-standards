@@ -55,6 +55,24 @@ test('deep_review with an explicit guides_dir -> loadConfig keeps it verbatim', 
   }
 });
 
+test('loadConfig rejects an absolute or escaping guides_dir (R2-4)', () => {
+  // An absolute/escaping guides_dir would make the fix-mode no-touch glob match nothing,
+  // leaving the overlay editable; reject it at load like verify_entry / required_reads.
+  for (const bad of ['/etc/guides', '../evil', '.claude/guides/', 'a/../../escape']) {
+    const dir = mkdtempSync(join(tmpdir(), 'ds-config-'));
+    try {
+      const manifest = {
+        ...MANIFEST_BASE,
+        deep_review: { enabled: true, modes: ['review-only'], guides_dir: bad },
+      };
+      writeFileSync(join(dir, 'quality.json'), JSON.stringify(manifest));
+      assert.throws(() => loadConfig(join(dir, 'quality.json')), /guides_dir/, `should reject ${bad}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test('deep_review without verify_entry -> loadConfig defaults to verify', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ds-config-'));
   try {
@@ -84,6 +102,42 @@ test('deep_review with an explicit verify_entry -> loadConfig keeps it verbatim'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('deep_review without required_reads -> loadConfig defaults to []', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ds-config-'));
+  try {
+    const manifest = { ...MANIFEST_BASE, deep_review: { enabled: true } };
+    writeFileSync(join(dir, 'quality.json'), JSON.stringify(manifest));
+    assert.deepEqual(loadConfig(join(dir, 'quality.json')).requiredReads, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('deep_review with required_reads -> loadConfig keeps repo-relative entries verbatim', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ds-config-'));
+  try {
+    const reads = ['.claude/CHECKLIST.md', '.claude/code-conventions.md'];
+    const manifest = { ...MANIFEST_BASE, deep_review: { enabled: true, required_reads: reads } };
+    writeFileSync(join(dir, 'quality.json'), JSON.stringify(manifest));
+    assert.deepEqual(loadConfig(join(dir, 'quality.json')).requiredReads, reads);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const bad of ['/abs/facts.md', '../escape.md', 'a/../../etc/passwd', 'win\\facts.md', 'trailing/']) {
+  test(`a required_read that is absolute or escapes the worktree is rejected: ${bad}`, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ds-config-'));
+    try {
+      const manifest = { ...MANIFEST_BASE, deep_review: { enabled: true, required_reads: [bad] } };
+      writeFileSync(join(dir, 'quality.json'), JSON.stringify(manifest));
+      assert.throws(() => loadConfig(join(dir, 'quality.json')), /required_reads must be a repo-relative path/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 for (const bad of ['/abs/verify', '../escape/verify', 'a/../../etc/verify', '..\\win\\verify', 'scripts\\verify', 'scripts/verify/']) {
   test(`verify_entry that is absolute or escapes the worktree is rejected: ${bad}`, () => {

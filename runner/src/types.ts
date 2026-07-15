@@ -83,6 +83,7 @@ export interface Manifest {
     verify_entry?: string;
     no_touch_globs_ref?: string;
     guides_dir?: string;
+    required_reads?: string[];
   };
 }
 

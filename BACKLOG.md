@@ -163,13 +163,13 @@ From the full disposition of `DEEP_REVIEW_FINDINGS.md` (58 findings; see its
 
 ## Deep-review hardening backlog (2026-07-14 systemic-gaps Gate C, non-blocking)
 
-- **Bake policy sources into the engine no-touch baseline.** `no-touch.ts`
-  protects the executable surface but not the policy the new self-review gate
-  judges by (`.claude/code-conventions.md`, `.claude/project-facts.md`, the
-  `deep_review.guides_dir` overlays): a fix slice could weaken policy before
-  judging itself. Interim: consumers list those paths in their project-facts
-  No-Touch Zones (pilot does as of the v0.14.0 adoption). Fix: add them to the
-  skill-owned baseline + attempted-policy-edit slice tests.
+- **Bake policy sources into the engine no-touch baseline.** ✅ DONE (ADR-016,
+  2026-07-15). `NO_TOUCH_BASELINE` now protects the enforcement MECHANISM
+  (`.claude/settings.json`, `.claude/hooks/**`, `scripts/deep-review`), and the
+  FIX-mode set unions the POLICY via `policyProtectedPaths` (every
+  `deep_review.required_reads` entry + the `guides_dir` overlay). `project-facts.md`
+  stays protected via `selfProtectedPaths`. Covered by
+  `no-touch.test.ts` (baseline + `policyProtectedPaths`).
 - **Same-pin rebuild window in the dist snapshot.** `snapshotDist` stamps are
   `rev-parse HEAD`; a concurrent re-bootstrap at the SAME pin (e.g. dirty-tree
   rebuild) can swap bundle content mid-copy without moving the stamp. Needs a

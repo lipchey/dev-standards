@@ -3,6 +3,7 @@
     "runner/src/validate-quality-manifest.ts",
     "runner/src/migrate-quality-manifest.ts",
     "tools/*.mjs",
+    "scripts/merge-deep-review-hooks.mjs",
     "eslint/consumer-template.eslint.config.js",
     "tests/**/*.test.ts",
     "tests/eslint/*.test.mjs"

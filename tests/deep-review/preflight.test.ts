@@ -25,6 +25,7 @@ function config(overrides: Partial<DeepReviewConfig> = {}): DeepReviewConfig {
     verifyAfterFix: undefined,
     verifyEntry: 'verify',
     reportsDir: 'reports/quality',
+    requiredReads: [],
     ...overrides,
   };
 }

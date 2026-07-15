@@ -118,7 +118,8 @@
         "verify_after_fix": { "type": "string", "enum": ["--fast", "--full"] },
         "verify_entry": { "type": "string", "minLength": 1 },
         "no_touch_globs_ref": { "type": "string", "minLength": 1 },
-        "guides_dir": { "type": "string", "minLength": 1 }
+        "guides_dir": { "type": "string", "minLength": 1 },
+        "required_reads": { "type": "array", "items": { "type": "string", "minLength": 1 } }
       }
     }
   },

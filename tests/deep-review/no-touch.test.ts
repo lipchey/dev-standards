@@ -7,6 +7,7 @@ import {
   isNoTouch,
   NoTouchSourceError,
   selfProtectedPaths,
+  policyProtectedPaths,
 } from '../../deep-review/src/no-touch.ts';
 
 // ── Test doubles ─────────────────────────────────────────────────────────────
@@ -54,7 +55,18 @@ Intro prose mentioning \`runner/**\` which must NOT be parsed (it is prose).
 test('NO_TOUCH_BASELINE matches a baseline path (e.g. tools/x.sh, auth/keys/a, .github/workflows/ci.yml, verify) -> no-touch', () => {
   assert.deepEqual(
     [...NO_TOUCH_BASELINE],
-    ['.githooks/**', '.github/workflows/**', 'verify', 'tools/**', 'auth/**', 'credentials/**'],
+    [
+      '.githooks/**',
+      '.github/workflows/**',
+      'verify',
+      'tools/**',
+      'auth/**',
+      'credentials/**',
+      '.claude/settings.json',
+      '.claude/hooks/**',
+      'scripts/deep-review',
+      'vendor/**',
+    ],
   );
   const set = [...NO_TOUCH_BASELINE];
   for (const p of [
@@ -64,6 +76,13 @@ test('NO_TOUCH_BASELINE matches a baseline path (e.g. tools/x.sh, auth/keys/a, .
     'verify',
     '.githooks/pre-commit',
     'credentials/token',
+    // The guides-read enforcement mechanism (ADR-016): a fix slice must never disarm it.
+    '.claude/settings.json',
+    '.claude/hooks/deep-review-guard.mjs',
+    'scripts/deep-review',
+    // The vendored dev-standards tree (ADR-016): guide templates + the gitlink pin.
+    'vendor/dev-standards/agents/review-guide-templates/security-review.md',
+    'vendor/dev-standards',
   ]) {
     assert.equal(isNoTouch(p, set), true, `${p} should be no-touch`);
   }
@@ -72,6 +91,20 @@ test('NO_TOUCH_BASELINE matches a baseline path (e.g. tools/x.sh, auth/keys/a, .
 test('a path under no baseline and no repo addition (e.g. runner/src/glob.ts) -> editable', () => {
   const set = [...NO_TOUCH_BASELINE];
   assert.equal(isNoTouch('runner/src/glob.ts', set), false);
+});
+
+test('policyProtectedPaths (ADR-016) protects every required_read + the whole guides overlay dir', () => {
+  const set = policyProtectedPaths(['.claude/CHECKLIST.md', './.claude/code-conventions.md'], '.claude/review-guides');
+  // A fix slice targeting a required guide or any overlay file is no-touch; canonicalized so
+  // a `./`-spelled required_read still matches its canonical slice path.
+  assert.equal(isNoTouch('.claude/CHECKLIST.md', set), true);
+  assert.equal(isNoTouch('.claude/code-conventions.md', set), true);
+  assert.equal(isNoTouch('.claude/review-guides/repo-extra.md', set), true);
+  // R2-4b: the BARE overlay dir is protected too (a gitlink/symlink AT that path that
+  // `<dir>/**` alone would not match), so a slice cannot repoint it.
+  assert.equal(isNoTouch('.claude/review-guides', set), true);
+  // An unrelated source file stays editable.
+  assert.equal(isNoTouch('src/logic.ts', set), false);
 });
 
 test('a repo project-facts.md ## No-Touch Zones bullet (e.g. .agents/**) extends the set -> .agents/x is no-touch', () => {

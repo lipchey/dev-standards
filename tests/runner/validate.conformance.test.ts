@@ -50,6 +50,7 @@ function validDeepReview(): Record<string, unknown> {
     verify_entry: 'scripts/verify',
     no_touch_globs_ref: '.agents/project-facts.md#no-touch-zones',
     guides_dir: '.agents/review-guides',
+    required_reads: ['.claude/CHECKLIST.md', '.claude/code-conventions.md'],
   };
 }
 
@@ -213,6 +214,33 @@ const batteryCases: readonly BatteryCase[] = [
     mutate: (m) => {
       const deepReview = validDeepReview();
       deepReview['unexpected_key'] = true;
+      setDeepReview(m, deepReview);
+    },
+    expectValid: false,
+  },
+  {
+    label: 'deep_review-required_reads-wrong-type-invalid',
+    mutate: (m) => {
+      const deepReview = validDeepReview();
+      deepReview['required_reads'] = '.claude/CHECKLIST.md';
+      setDeepReview(m, deepReview);
+    },
+    expectValid: false,
+  },
+  {
+    label: 'deep_review-required_reads-non-string-item-invalid',
+    mutate: (m) => {
+      const deepReview = validDeepReview();
+      deepReview['required_reads'] = ['.claude/CHECKLIST.md', 7];
+      setDeepReview(m, deepReview);
+    },
+    expectValid: false,
+  },
+  {
+    label: 'deep_review-required_reads-empty-string-item-invalid',
+    mutate: (m) => {
+      const deepReview = validDeepReview();
+      deepReview['required_reads'] = ['.claude/CHECKLIST.md', ''];
       setDeepReview(m, deepReview);
     },
     expectValid: false,

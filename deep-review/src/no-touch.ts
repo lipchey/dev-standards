@@ -18,6 +18,18 @@ export const NO_TOUCH_BASELINE = [
   'tools/**',
   'auth/**',
   'credentials/**',
+  /* The guides-read enforcement MECHANISM (ADR-016): a fix slice must never be able to
+     disarm the gate that governs it — rewrite the hook wiring, the hook handler, or the
+     engine shim the hook invokes. Protected unconditionally in every mode so the paths
+     can never even be classified fixable-now. */
+  '.claude/settings.json',
+  '.claude/hooks/**',
+  'scripts/deep-review',
+  /* The vendored dev-standards submodule (ADR-016): its guide templates ARE the review
+     policy and its gitlink pins the engine, so a fix slice must not edit a canonical guide
+     in place nor repoint the submodule after the reviewer read it. `vendor/**` covers the
+     whole vendored tree; the bare gitlink `vendor/dev-standards` is matched by it too. */
+  'vendor/**',
 ] as const;
 
 /* The default must match the instance-doc location created by the onboarding seeder. */
@@ -226,10 +238,38 @@ export function selfProtectedPaths(noTouchGlobsRef?: string): string[] {
   return ['quality.json', canonicalizeRef(stripFragment(ref))];
 }
 
-// A canonical repo-relative slash-path: `.`/`..` segments collapsed and a leading `./`
-// dropped, so the value matches a slice path built from the same canonicalization.
+/* The guides-read enforcement POLICY inputs (ADR-016), canonicalized so each pattern
+   matches a slice path built the same way and unioned into the FIX-mode no-touch set:
+   every configured required_read (a file the reviewer must read), the guides overlay dir,
+   and the package guide-templates dir (templatesRel — relative to the worktree; '' or an
+   escaping value is skipped). A fix slice can then never edit a guide it was reviewed
+   against. The mechanism (settings/hooks/shim/vendor) is protected by NO_TOUCH_BASELINE. */
+export function policyProtectedPaths(
+  requiredReads: readonly string[],
+  guidesDir: string,
+  templatesRel = '',
+): string[] {
+  const globs = requiredReads.map((entry) => canonicalizeRef(entry));
+  globs.push(...directoryGlobs(guidesDir));
+  if (templatesRel !== '' && !templatesRel.startsWith('..')) globs.push(...directoryGlobs(templatesRel));
+  return globs;
+}
+
+/* The patterns protecting a directory: BOTH `<dir>` (the bare entry — a gitlink or symlink AT
+   that path, which `<dir>/**` does NOT match) and `<dir>/**` (its contents). A trailing slash
+   or a `.`-collapsing spelling (`a/..`) must NOT yield `dir//**` or `./**` (globs that match no
+   slice path); canonicalize first, and a dir that collapses to the repo root becomes just `**`. */
+function directoryGlobs(directory: string): string[] {
+  const canonical = canonicalizeRef(directory);
+  if (canonical === '.' || canonical === '') return ['**'];
+  return [canonical, `${canonical}/**`];
+}
+
+/* A canonical repo-relative slash-path: `.`/`..` segments collapsed, a trailing slash
+   dropped, and a leading `./` dropped, so the value matches a slice path built from the
+   same canonicalization. */
 function canonicalizeRef(refPath: string): string {
-  const normalized = path.posix.normalize(refPath);
+  const normalized = path.posix.normalize(refPath).replace(/\/+$/, '');
   return normalized.startsWith('./') ? normalized.slice(2) : normalized;
 }
 

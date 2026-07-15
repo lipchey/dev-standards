@@ -102,6 +102,7 @@ const DEEP_REVIEW_KEYS = [
   'verify_entry',
   'no_touch_globs_ref',
   'guides_dir',
+  'required_reads',
 ] as const;
 const DEEP_REVIEW_TRIGGERS = ['manual-only'] as const;
 const DEEP_REVIEW_MODES = ['review-only', 'review-and-refactor'] as const;
@@ -517,6 +518,20 @@ function validateDeepReview(value: unknown, errors: ValidationError[]): void {
   }
   if (Object.hasOwn(deepReview, 'guides_dir')) {
     validateNonEmptyString(deepReview['guides_dir'], 'deep_review.guides_dir', errors);
+  }
+  if (Object.hasOwn(deepReview, 'required_reads')) {
+    validateStringArray(deepReview['required_reads'], 'deep_review.required_reads', 0, errors);
+    // Each entry must be a NON-EMPTY string, matching the schema's items.minLength:1 (else Ajv
+    // and this validator diverge). An empty entry is also a brick: it resolves to cwd, "exists",
+    // and its empty tail matches nothing, so the guides-read gate would block every review.
+    const reads = deepReview['required_reads'];
+    if (isUnknownArray(reads)) {
+      reads.forEach((item, index) => {
+        if (item === '') {
+          addError(errors, `deep_review.required_reads[${index}]`, 'min-length', 'must be a non-empty string', item);
+        }
+      });
+    }
   }
 }
 

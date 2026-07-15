@@ -27,15 +27,20 @@ const DEFAULT_BUDGET_SECONDS = 900;
 // the default. LIMITATION: the no-touch match is LEXICAL (like quality.json / the
 // project-facts ref / the baseline `verify`); a consumer that makes verify_entry a SYMLINK
 // to an unprotected in-repo file leaves that target editable — keep the shim a regular file.
-function requireRepoRelative(filePath: string, entry: string): string {
+/* Shared by verify_entry and every required_reads entry (§P2-2): both must resolve inside
+   the worktree, and the guides-read gate's tail match compares against these repo-relative
+   values, so an escaping/backslash/trailing-slash spelling must be rejected at the one
+   projection point rather than silently mis-anchoring the read-proof check. */
+function requireRepoRelative(manifestPath: string, field: string, entry: string): string {
   if (
+    entry === '' ||
     path.isAbsolute(entry) ||
     entry.includes('\\') ||
     entry.endsWith('/') ||
     entry.split('/').includes('..')
   ) {
     throw new Error(
-      `manifest at ${filePath} is invalid: deep_review.verify_entry must be a repo-relative path without '..' segments, backslashes, or a trailing slash, got ${JSON.stringify(entry)}`,
+      `manifest at ${manifestPath} is invalid: deep_review.${field} must be a repo-relative path without '..' segments, backslashes, or a trailing slash, got ${JSON.stringify(entry)}`,
     );
   }
   return entry;
@@ -53,6 +58,12 @@ export interface DeepReviewConfig {
   // Defaulted HERE (like guidesDir) so it is the single source; the spawn sites take it as required.
   verifyEntry: string;
   reportsDir: string;
+  /* Repo-relative project files the guides-read gate additionally requires the reviewer to
+     open (on top of the always-required package guide templates + overlay). Defaults to []:
+     a fresh consumer is only guaranteed the submodule guides, so a non-empty engine default
+     would demand reading files an adopter may not have yet. The consumer seed populates this
+     with files that repo actually ships (project-facts / code-conventions / CHECKLIST). */
+  requiredReads: string[];
 }
 
 export function loadConfig(filePath: string): DeepReviewConfig {
@@ -66,11 +77,17 @@ export function loadConfig(filePath: string): DeepReviewConfig {
     enabled: deepReview?.enabled ?? false,
     modes: deepReview?.modes ?? [],
     budget: deepReview?.budget ?? { seconds: DEFAULT_BUDGET_SECONDS },
-    /* One default keeps the engine and skill aligned on the optional overlay location. */
-    guidesDir: deepReview?.guides_dir ?? '.claude/review-guides',
+    /* One default keeps the engine and skill aligned on the optional overlay location.
+       Confined repo-relative like verify_entry: an absolute/escaping guides_dir would make the
+       fix-mode no-touch glob (`policyProtectedPaths`) match nothing, leaving the overlay
+       editable, and would need runtime confinement everywhere it is resolved. */
+    guidesDir: requireRepoRelative(filePath, 'guides_dir', deepReview?.guides_dir ?? '.claude/review-guides'),
     noTouchGlobsRef: deepReview?.no_touch_globs_ref,
     verifyAfterFix: deepReview?.verify_after_fix,
-    verifyEntry: requireRepoRelative(filePath, deepReview?.verify_entry ?? 'verify'),
+    verifyEntry: requireRepoRelative(filePath, 'verify_entry', deepReview?.verify_entry ?? 'verify'),
     reportsDir: result.manifest.paths.reports,
+    requiredReads: (deepReview?.required_reads ?? []).map((entry) =>
+      requireRepoRelative(filePath, 'required_reads', entry),
+    ),
   };
 }

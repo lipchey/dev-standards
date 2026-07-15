@@ -43,9 +43,11 @@ scripts/ds-install.sh /path/to/consumer [--ref vX.Y.Z] [--eslint]
 | `.claude/{CHECKLIST,code-conventions,gate-misses,project-facts}.md` | Instance docs (copy-if-absent; fill them in). |
 | `.claude/review-guides/` | Optional additive overlays (empty by default). |
 | `.claude/skills/deep-review-refactor/SKILL.md` | Static pointer to the canonical skill body. |
+| `.claude/settings.json` | Guides-read gate wiring (ADR-016): the `Stop` + `SubagentStop` hooks. Structurally MERGED, not copy-if-absent — a consumer's existing settings survive. |
 | `AGENTS.md` | Pointer to `CLAUDE.md` for agents that read only AGENTS.md (never a second source of truth). |
 
-Copy-if-absent everywhere: a filled consumer file is never overwritten. The
+Copy-if-absent everywhere EXCEPT `.claude/settings.json`, which is merged
+structurally (the guides-read hooks are added; existing keys/hooks are kept). The
 managed `CLAUDE.md` section and the `.gitignore` entries are appended only when
 missing.
 
@@ -107,6 +109,39 @@ can't express goes upstream (fix-upstream loop below).
 `deep-review-refactor` reviews a completed feature branch's diff (not the whole
 repo). The agent OFFERS it when feature work finishes and runs it **only with
 explicit user consent** — never automatically.
+
+### Guides-read enforcement (ADR-016)
+
+Adoption wires a hard gate: a `Stop` + `SubagentStop` hook in
+`.claude/settings.json` runs `scripts/deep-review guides-read --hook-stdin`, which
+BLOCKS a deep-review pass from concluding until the session transcript proves every
+mandated review guide was actually opened with a `Read` (the seven package
+templates, every `.claude/review-guides/` overlay, and every
+`deep_review.required_reads` entry). The starter sets `required_reads` to the three
+seeded instance docs. `seed-consumer.sh --check` fails if the hooks are not wired.
+
+- The gate only fires for real deep-review sessions (the harness stamps the skill
+  attribution); ordinary coding sessions are never blocked. Detection in v1 relies
+  on a readable, sufficiently-flushed transcript (the session's own file, written
+  asynchronously); an unreadable transcript, or one whose attribution line has not
+  yet flushed at Stop time, is treated as non-review and skipped — a
+  designed-but-unwired activation marker would make activation deterministic
+  regardless of flush timing (ADR-016).
+- **Ceiling (not absolute):** Claude Code force-continues after 8 consecutive
+  `Stop`-blocks, so the gate makes a determined skip LOUD (up to 8 recorded blocks
+  naming the unread guides) rather than strictly impossible; a single accidental
+  skip is caught on the first block.
+- **Escape hatch:** set `DEEP_REVIEW_GUARD_OFF=1` in the environment to disable the
+  gate unconditionally — the pressure valve if a gate bug ever blocks a session.
+- **Removing the gate entirely** (out-of-band, if needed): delete the `Stop` and
+  `SubagentStop` entries whose command contains `guides-read --hook-stdin` from
+  `.claude/settings.json`. Re-running the seeder re-adds them.
+
+**Migrating consumers seeded before this gate:** a pin bump touches only the
+gitlink, so it does not back-fill `.claude/settings.json` or `required_reads`. Run
+`scripts/seed-consumer.sh <root>` once (or
+`node vendor/dev-standards/scripts/merge-deep-review-hooks.mjs <root>`) to wire the
+hooks, and add `deep_review.required_reads` to `quality.json` by hand.
 
 ## Updating the pin
 
