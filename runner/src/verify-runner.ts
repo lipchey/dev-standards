@@ -147,9 +147,15 @@ export function runTier(
       assertBudget();
     }
 
-    // Fail closed before the success/report path: an empty/near-exhausted tier that
-    // slipped past the loops must not write a report and return 0 (FIX #2).
+    /* Fail closed before the success/report path (FIX #2), mode-independently: a spent
+       hard deadline fails the whole TIER even when the last check was report-only (which
+       never blocks) or the tier had zero checks. `remainingMs() <= 0` matches the per-check
+       `left <= 0` guard, which assertWithinBudget's strict elapsed>budget misses in the
+       final-millisecond floor window — so an exactly-spent budget can no longer false-green. */
     assertBudget();
+    if (remainingMs() <= 0) {
+      throw new Error(`Runtime budget exceeded: the ${scope} tier budget (${budgetSeconds}s) is spent.`);
+    }
   } catch (error) {
     // Report write here is best-effort — we're already past the deadline, so a partial
     // report is acceptable. Guard it in its own try so a report-write failure can never

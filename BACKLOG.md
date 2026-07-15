@@ -2,6 +2,55 @@
 
 Non-blocking, dated. Newest first.
 
+## 2026-07-15 — Supply-chain: detect a source SWAP on an EXISTING dep (inbox, deferred)
+
+`check-new-deps` enforces its positive spec grammar and lockfile pinning only on
+NEW deps (D3 lets any EXISTING-dep spec change pass once a lockfile is staged).
+The original inbox entry (2026-07-14) asked to extend the positive GRAMMAR to
+spec-CHANGED deps — which also rejects a changed dep going to `>=1.0.0`/`latest`/
+`*`, NOT only a source swap. That grammar tightening DIRECTLY conflicts with D3 (a
+lockfile-proven registry range change intentionally passes; see the D3 test), so
+the core, undecided question is grammar-strictness-vs-D3; the security-critical
+slice within it is the source swap (`"a":"^1.2.3"` → git/URL/tarball/alias/local),
+which D3 today lets through unflagged. Promoting this was attempted in the v0.20.x
+inbox batch and BACKED OUT after Gate P + Gate C found even the source-swap slice
+needs a real design, not a regex:
+
+- **Robust spec classification, not a hand-rolled regex.** npm accepts source
+  forms a `://`/prefix regex misses — scp-style git (`git@host:u/r.git`), bare
+  GitHub shorthand (`user/repo`), relative/absolute-path and scheme-less specs.
+  Use `npm-package-arg` (allow ONLY `version`/`range`/`tag` + the sanctioned
+  `file:vendor/dev-standards`; treat every other type / parse-failure as a
+  source) — but that adds a runtime dep to a tool that today imports only `node:`
+  builtins and runs from `vendor/` in every consumer, so settle the
+  dependency-availability story first.
+- **Lockfile-only vector.** An attacker can change a lockfile entry's `resolved`
+  to a tarball/git source with NO package.json change; the manifest-spec path
+  never sees it (evaluate returns early when the manifest is unstaged). Needs
+  staged-lock resolution inspection for existing deps too.
+- **Section precedence.** A first-match-across-sections base lookup is wrong: npm
+  gives `optionalDependencies` precedence over `dependencies`, so it can both hide
+  and fabricate swaps. Reject duplicate cross-section names or build an effective
+  map by npm precedence.
+- **Blocking vs report-only.** `check-new-deps` is `mode: "report-only"` in
+  `quality.json` + the seed, so ANY finding (new-dep or source-swap) is currently
+  non-blocking — decide whether the supply-chain gate should block before adding a
+  finding that assumes it does.
+
+Its own focused change + Gate P/C, not a batch drive-by. Effort M–L, security.
+
+## 2026-07-15 — Core comment-form sweep to block form (inbox #7, dogfooding)
+
+`core-code-guidelines.md §Comments` requires block form `/* */` in TS and does
+NOT exempt ordinary `//` (line form is legal only for directives/shebangs/
+line-based langs). Core's own `runner/src` + `deep-review/src` carry many
+non-directive `//` comments (added across the 70ade5a→add5420 range, inbox #7).
+The rule already exists; this is a bounded dogfooding sweep of the ACTUAL
+surviving violations (convert non-directive `//` → block, prune dividers/
+narration per the guide), NOT a new rule and not urgent. Scope by reading, not
+`git grep -c //` (which massively overcounts URLs/trailing/directive comments).
+Effort M.
+
 ## 2026-07-14 — diff-coverage: CI push `event.before` base-ref wiring (N3, parked)
 
 `diff-cover.mjs` defaults to `origin/main` (pre-push semantics; PR CI is

@@ -108,6 +108,17 @@ const FILES_TOKEN = /^\{files:([\w-]+)\}$/;
 // Expanded repo filenames must not become options or response files; manifest args are trusted.
 const OPTION_LIKE_OPERAND = /^[-@]/;
 
+/* Tools that glob-expand their file operands (eslint, prettier, …) silently
+   mis-resolve a staged filename containing a glob metacharacter — it matches as a
+   pattern instead of the literal file. Refuse, for EVERY {files:...} operand (both the
+   check runner and fix-staged): the always-magic `* ? [ ] { }`, the extglob triggers
+   `!( +( @(` (`?(`/`*(` are already covered by `?`/`*`), and a leading `!` (glob
+   negation). A formatter that globs its operands mis-resolves or drops such a file just
+   as a linter would, and this throw runs BEFORE any mutation, so a loud pre-mutation
+   refusal beats a silent skip. Ceiling: a BARE `(`/`)` (not an extglob trigger) stays
+   allowed — it is a common literal filename char, so a plain `foo(1).ts` passes. */
+const GLOB_METACHAR_OPERAND = /[*?[\]{}]|[!+@]\(|^!/;
+
 export function expandArgv(argv: string[], filesByName: Map<string, string[]>): string[] {
   const expanded: string[] = [];
   for (const element of argv) {
@@ -121,6 +132,14 @@ export function expandArgv(argv: string[], filesByName: Map<string, string[]>): 
               `fileset "${name}" produced an option-like operand ${JSON.stringify(file)}; ` +
                 'refusing to pass it as a command argument ' +
                 '(possible argv option or response-file injection)',
+            );
+          }
+          if (GLOB_METACHAR_OPERAND.test(file)) {
+            throw new Error(
+              `fileset "${name}" produced an operand ${JSON.stringify(file)} containing a glob ` +
+                'metacharacter (* ? [ ] { }, an extglob trigger !( +( @(, or a leading !); ' +
+                'refusing to pass it as a command argument ' +
+                '(a tool that glob-expands operands would silently mis-resolve it)',
             );
           }
           expanded.push(file);

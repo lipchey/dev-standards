@@ -176,3 +176,49 @@ test('FIX #2: a 0-check tier fails closed once the deadline is spent after files
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+/* inbox #4: a spent hard deadline must fail the TIER regardless of check mode. At the EXACT
+   boundary (elapsed == budget) the mode-independent `remainingMs() <= 0` gate must fire, where
+   assertWithinBudget's strict elapsed>budget does NOT — otherwise a report-only-only tier (whose
+   deadline-failed check never blocks) or a zero-check tier false-greens. The injected clock reads
+   startedAt=0, then the budget exactly (remaining floors to 0), which the old code let pass. */
+test('inbox #4: a 0-check tier at an exactly-spent deadline fails closed (not a strict overrun)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-deadline-eq-'));
+  try {
+    /* Must equal the manifest fast_seconds default so the injected clock lands the run exactly on
+       the deadline boundary (remaining floors to 0). */
+    const budgetMs = 300 * 1000;
+    let n = 0;
+    const clock = (): number => (n++ === 0 ? 0 : budgetMs);
+    const m = manifest({ filesets: [], tiers: { staged: [], fast: [], full: [], audit: [] } });
+    /* Match the gate's exact message (not a bare "deadline"), so a stray path-bearing error
+       from elsewhere cannot false-pass this injected-boundary test. */
+    assert.throws(() => runTier(m, root, 'fast', clock), /tier budget \(\d+s\) is spent/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('inbox #4: a report-only-only tier at an exactly-spent deadline fails closed (report-only cannot mask it)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-deadline-ro-'));
+  try {
+    const budgetMs = 300 * 1000;
+    let n = 0;
+    const clock = (): number => (n++ === 0 ? 0 : budgetMs);
+    const m = manifest({
+      filesets: [],
+      tiers: {
+        staged: [],
+        fast: [{ name: 'ro', argv: ['true'], timeout_seconds: 10, mode: 'report-only' }],
+        full: [],
+        audit: [],
+      },
+    });
+    /* The report-only check deadline-fails (non-blocking); the mode-independent tier gate must
+       still fail the tier so an exactly-spent budget cannot return 0. Assert the gate's exact
+       message so an unrelated path-bearing error cannot false-pass. */
+    assert.throws(() => runTier(m, root, 'fast', clock), /tier budget \(\d+s\) is spent/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

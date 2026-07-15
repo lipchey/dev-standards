@@ -136,17 +136,19 @@ test('a formatter that retypes an operand to a symlink is caught and rolled back
   assert.equal(stagedBlob(dir, 'src/a.ts'), 'staged\n', 'index unchanged');
 });
 
-test('a filename with glob metacharacters only affects itself (literal pathspecs)', () => {
+test('a staged filename with a glob metacharacter is refused before any mutation', () => {
   const dir = setupRepo();
-  writeAndStage(dir, 'src/ab.ts', 'plain\n'); // pathspec "a[b].ts" would glob-match this
+  writeAndStage(dir, 'src/ab.ts', 'plain\n');
   writeFileSync(join(dir, 'src/a[b].ts'), 'bracket\n');
   git(dir, '--literal-pathspecs', 'add', '--', 'src/a[b].ts');
-  writeFileSync(join(dir, 'src/ab.ts'), 'plain-edited\n'); // unstaged edit → ab.ts is partially staged
-  const { code } = run(manifest(['node', '-e', UPPERCASE]), dir);
-  assert.equal(code, 0);
-  assert.equal(stagedBlob(dir, 'src/a[b].ts'), 'BRACKET\n', 'the literal bracket file is formatted+staged');
-  assert.equal(stagedBlob(dir, 'src/ab.ts'), 'plain\n', 'ab.ts index must not be swept by the glob');
-  assert.equal(readFileSync(join(dir, 'src/ab.ts'), 'utf8'), 'plain-edited\n', 'ab.ts unstaged edit preserved');
+  /* A glob-metacharacter operand would be silently mis-resolved by a formatter that globs its
+     args, so expandArgv refuses it before the formatter runs (throws, like the option-like guard;
+     the CLI wrapper maps that to a clean exit 1). */
+  assert.throws(() => run(manifest(['node', '-e', UPPERCASE]), dir), /glob metacharacter/i);
+  /* Refused before any mutation: both files' index blobs and the worktree are untouched. */
+  assert.equal(stagedBlob(dir, 'src/a[b].ts'), 'bracket\n', 'the bracket file index is unchanged (never formatted)');
+  assert.equal(readFileSync(join(dir, 'src/a[b].ts'), 'utf8'), 'bracket\n', 'worktree unchanged');
+  assert.equal(stagedBlob(dir, 'src/ab.ts'), 'plain\n', 'sibling index unchanged');
 });
 
 test('a formatter that makes lstat throw (ENOTDIR) is caught, not propagated', () => {

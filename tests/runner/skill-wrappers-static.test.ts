@@ -11,7 +11,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, existsSync, lstatSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, lstatSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,6 +48,19 @@ function parseFrontmatter(raw: string): Record<string, string> {
     out[key] = line.slice(idx + 1).trim();
   }
   throw new Error('frontmatter fence never closed');
+}
+
+/* Walk every path component from just below repoRoot down to and including
+ * absPath: a symlinked ANCESTOR dir (not just the leaf file) can redirect a
+ * wrapper's SKILL.md to attacker-controlled content while the leaf lstat
+ * still sees a regular file. */
+function assertNoSymlinkedComponent(absPath: string, repoRoot: string): void {
+  const rel = path.relative(repoRoot, absPath);
+  let current = repoRoot;
+  for (const part of rel.split(path.sep)) {
+    current = path.join(current, part);
+    assert.equal(lstatSync(current).isSymbolicLink(), false, `path component must not be a symlink: ${current}`);
+  }
 }
 
 const canonical = parseFrontmatter(readLF(path.join(repoRoot, CANONICAL_SOURCE)));
@@ -104,5 +118,42 @@ test('no orphan wrappers: each runtime dir holds exactly the one expected wrappe
       lstatSync(path.join(abs, SKILL, 'SKILL.md')).isFile(),
       `${dir}/${SKILL}/SKILL.md must be a regular file, not a symlink`,
     );
+  }
+});
+
+test('wrapper path has no symlinked component', () => {
+  for (const [dir] of RUNTIMES) {
+    assertNoSymlinkedComponent(path.join(repoRoot, dir, SKILL, 'SKILL.md'), repoRoot);
+  }
+});
+
+/* Characterize the guard against each drift mode it replaces (testing.md): it must turn RED on a
+   symlinked leaf AND on a symlinked ANCESTOR (the case a leaf-only lstat misses), and stay green on
+   an all-real path. A temp tree keeps the mutations self-contained. */
+test('assertNoSymlinkedComponent rejects a symlinked leaf or ancestor, accepts an all-real path', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ds-wrapsym-'));
+  try {
+    mkdirSync(path.join(root, 'a', 'b'), { recursive: true });
+    writeFileSync(path.join(root, 'a', 'b', 'SKILL.md'), 'x');
+    assertNoSymlinkedComponent(path.join(root, 'a', 'b', 'SKILL.md'), root);
+
+    symlinkSync(path.join(root, 'a', 'b', 'SKILL.md'), path.join(root, 'a', 'b', 'link.md'));
+    assert.throws(
+      () => assertNoSymlinkedComponent(path.join(root, 'a', 'b', 'link.md'), root),
+      /must not be a symlink/,
+      'a symlinked leaf must be rejected',
+    );
+
+    /* A symlinked ancestor with a real leaf beneath it is the case a leaf-only lstat wrongly passes. */
+    mkdirSync(path.join(root, 'real'), { recursive: true });
+    writeFileSync(path.join(root, 'real', 'SKILL.md'), 'x');
+    symlinkSync(path.join(root, 'real'), path.join(root, 'alias'));
+    assert.throws(
+      () => assertNoSymlinkedComponent(path.join(root, 'alias', 'SKILL.md'), root),
+      /must not be a symlink/,
+      'a symlinked ancestor dir must be rejected even though the leaf is a real file',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

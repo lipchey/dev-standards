@@ -114,6 +114,40 @@ test('runCheck fails closed on an @-prefixed expanded operand (response-file inj
   );
 });
 
+test('expandArgv rejects every glob-metacharacter expanded file operand (silent glob mis-resolution)', () => {
+  /* eslint/prettier glob-expand operands; a glob metacharacter in a staged filename resolves as
+     a pattern instead of the literal file. Always-magic chars, the extglob triggers !( +( @(, and
+     a leading ! (negation) are refused for every caller. */
+  const bad = [
+    'src/a*b.ts', 'src/a?b.ts', 'src/a[b.ts', 'src/a]b.ts', 'src/foo[1].ts',
+    'src/a{b.ts', 'src/a}b.ts', 'src/a{1,2}.ts',
+    'src/+(foo).ts', 'src/@(foo).ts', 'src/!(foo).ts', '!foo.ts',
+  ];
+  for (const name of bad) {
+    assert.throws(
+      () => expandArgv(['eslint', '{files:ts}'], new Map([['ts', [name]]])),
+      /glob metacharacter/i,
+      `${name} must be refused`,
+    );
+  }
+});
+
+test('expandArgv passes a bare paren/plus/at filename that is not a glob trigger (no over-refusal)', () => {
+  /* A lone ( ) + @ is a literal filename char, not an extglob trigger, so these common names pass. */
+  for (const ok of ['src/foo(1).ts', 'src/a+b.ts', 'src/mod@2.ts']) {
+    assert.deepEqual(
+      expandArgv(['eslint', '{files:ts}'], new Map([['ts', [ok]]])),
+      ['eslint', ok],
+      `${ok} must pass`,
+    );
+  }
+});
+
+test('expandArgv passes through a normal filename unaffected by the glob-metacharacter guard', () => {
+  const out = expandArgv(['eslint', '{files:ts}'], new Map([['ts', ['src/good-file.ts']]]));
+  assert.deepEqual(out, ['eslint', 'src/good-file.ts']);
+});
+
 test('expandArgv passes through a literal option the manifest author wrote', () => {
   // Only fileset-expanded operands are guarded; manifest-authored flags are trusted.
   const out = expandArgv(

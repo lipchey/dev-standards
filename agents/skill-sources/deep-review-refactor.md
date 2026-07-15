@@ -210,7 +210,8 @@ Produce findings; change nothing. The runtime is six steps, in order:
    historical-regression finding (`language-review-sources.md` Cross-cutting)
    that CodeGraph and current-state review structurally cannot see.
 2. Deterministic first. Run or inspect the existing deterministic reports -
-   `./verify --fast` or `reports/quality/` - and never repeat a finding ESLint,
+   `./verify --fast` or the reports dir (`paths.reports`, default
+   `reports/quality/`) - and never repeat a finding ESLint,
    `tsc`, Knip, dependency-cruiser, or gitleaks already owns. This skill is
    judgment-only; it does not duplicate a gate.
 3. CodeGraph first for architecture, navigation, and impact questions.
@@ -257,7 +258,8 @@ engine's own CLI verbs, in this order:
 `select-worktree -> classify -> commit-slice -> verify -> report -> handoff`
 
 Every verb after `select-worktree` takes `--findings <path>`, a findings JSON
-file under `reports/quality/` that carries the running state (id,
+file under the reports dir (`paths.reports`, default `reports/quality/`) that
+carries the running state (id,
 classification, status, sha) across the whole run.
 
 1. `select-worktree` creates a dedicated `deep-review/<slug>` worktree from the
@@ -302,7 +304,8 @@ classification, status, sha) across the whole run.
    (`--full` default; `deep_review.verify_after_fix` overrides) across the applied
    slices in the worktree - the skill's own changes only, no base integration. Red
    means the whole refactor is `needs-human`; nothing proceeds to handoff.
-5. `report` writes `reports/quality/deep-review-<date>.md`, metadata-only and
+5. `report` writes `deep-review-<date>.md` under `paths.reports` (default
+   `reports/quality/`), metadata-only and
    secret-scanned: the fixed slices with their SHAs, the rejected buckets
    (no-touch, needs-plan, fix-failed), and the plan for the latter two.
 6. `handoff` emits the ADR-012 landing instruction once verify is green and no
