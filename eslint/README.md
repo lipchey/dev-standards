@@ -6,7 +6,7 @@ no per-project plugin install. Import what a stack needs; append your own layer.
 
 ```js
 // consumer eslint.config.js
-import { core, regexp, node, test, frontend, frontendVite, frontendNext, constantsHome } from "dev-standards/eslint";
+import { core, regexp, node, test, frontend, frontendVite, frontendNext, constantsHome, naming } from "dev-standards/eslint";
 
 export default tseslint.config(
   { ignores: [/* … */] },
@@ -18,6 +18,7 @@ export default tseslint.config(
   ...frontend({ files: ["apps/web/**/*.tsx", "apps/site/**/*.tsx"] }),
   ...frontendVite({ files: ["apps/web/**/*.tsx"] }),
   ...frontendNext({ files: ["apps/site/**/*.tsx"] }),
+  ...naming(),
   ...constantsHome({
     files: ["packages/*/src/**/*.ts", "apps/*/src/**/*.{ts,tsx}"],
     ignores: ["**/src/constants/**", "**/constants.ts", "**/*.d.ts"],
@@ -53,11 +54,34 @@ export default tseslint.config(
 | `frontendVite({files})` | frontend-web (Vite) | `react-refresh/only-export-components` — Fast-Refresh integrity. Vite only; Next runs its own |
 | `frontendNext({files})` | frontend-web (Next) | `@next/eslint-plugin-next` core-web-vitals. Next site only |
 | `constantsHome({files, ignores})` | all | custom `dev-standards/constants-home` (error): a module-scope `const` bound to a bare primitive literal must move to a constants home. A custom rule in an inline plugin — **not** `no-restricted-syntax` — so it never clobbers a consumer's own naming gate (see below) |
+| `naming({files, ignores, exemptNamedImports, extraRestrictedSyntax})` | all | the identifier floor: `no-restricted-syntax` min-3-chars over every name the repo's authors choose (vars, functions, classes, params, catch/destructured bindings, class members, ALL import locals incl. aliases) + `id-match` ASCII-only. `_` discard and object PROPERTY keys exempt. **Owns `no-restricted-syntax` in its scope** (see below) |
 
-The factory presets (`node`, `frontend*`, `constantsHome`) take `{ files }` (and
-`constantsHome` also `{ ignores }`) because a monorepo must scope stack rules to the
+The factory presets (`node`, `frontend*`, `constantsHome`, `naming`) take `{ files }`
+(and `{ ignores }`) because a monorepo must scope stack rules to the
 right subtree — React rules must not reach node packages, and the constants gate must
 not fire in the constants homes it points people toward.
+
+## `naming` — the length/ASCII floor for identifiers
+
+Promoted from the ai-prompter pilot (owner rules): every identifier the repo's authors
+choose is ≥3 chars and ASCII. The floor deliberately does NOT judge meaning — pair it
+with an OPERATIONAL naming section in the consumer's `.claude/code-conventions.md`
+(blessed-abbreviation allowlist per the code-conventions template), which is where the
+report message points.
+
+Flat config REPLACES same-rule options, so this preset **owns `no-restricted-syntax`
+within its scope**: a consumer block that also sets `no-restricted-syntax` on the same
+files would silently erase the floor (or be erased). Repo-specific selectors therefore
+go through the factory:
+
+```js
+...naming({
+  exemptNamedImports: ["vi"],                       // framework-canonical short externals; extend in the PR that adds one
+  extraRestrictedSyntax: [                          // repo-specific selectors ride the SAME rule entry
+    { selector: "DebuggerStatement", message: "no debugger" },
+  ],
+}),
+```
 
 ## `constantsHome` — value constants out of logic files
 

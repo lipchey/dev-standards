@@ -79,7 +79,7 @@
       "review-and-refactor"
     ],
     "budget": {
-      "seconds": 900
+      "seconds": 1800
     },
     "guides_dir": ".claude/review-guides",
     "no_touch_globs_ref": ".claude/project-facts.md",

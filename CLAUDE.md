@@ -17,6 +17,14 @@ their bootstrap script and run a thin `verify` shim). Pilot consumer:
 - **ADR discipline**: referencing a new ADR id in code requires a matching
   entry in `docs/ADR.md` (create the file on the first entry — known debt, see
   BACKLOG).
+- **Seed parity**: a batch that changes a consumer-facing standard (a gate, a
+  default, a preset, a config shape) updates the SEEDS in the SAME batch —
+  `templates/consumer/**` and `eslint/consumer-template.eslint.config.js` — so
+  a NEW consumer gets the standard from day one. The pilot consumer's own
+  config is an adopter, never the source of truth; decisions live HERE
+  (docs/ADR.md), the consumer journal records only its adoption + a pointer
+  (miss caught by the owner, 2026-07-15: constants-home/naming landed in the
+  pilot while the template still seeded the old behavior).
 - **`workflow/` (L3) has been removed** (BACKLOG, 2026-07-10): engine, tests,
   schema block, and validator checks are all gone. Do not reintroduce it or
   build anything on top of it.

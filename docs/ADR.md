@@ -96,3 +96,23 @@ making reviewer enforcement arbitrary.
   template with a concrete allowlist or stance.
 - The gate mechanism is shared; the rule configuration (which globs, which
   abbreviations) stays consumer-side, per the core/consumer split.
+
+### Amendment (2026-07-15, seed parity)
+
+The pilot's identifier floor is promoted to the shared **`naming` preset**
+(`eslint/naming.js`): `no-restricted-syntax` min-3-chars over every
+author-chosen name (variables, functions, classes, params incl.
+defaults/rest/catch and TS parameter-properties, destructured bindings, class
+members incl. `#private`, and ALL import locals including aliases) plus
+`id-match` ASCII-only; `_` discard and object/type PROPERTY keys exempt. The
+selector strings are the pilot contract verbatim — changing them is a standards
+decision recorded here, never silent drift. Because the preset owns
+`no-restricted-syntax` within its scope (flat-config replace semantics),
+consumer-specific selectors ride `extraRestrictedSyntax` and short
+framework-canonical externals ride `exemptNamedImports` (seed: vitest's `vi`).
+Both new-standard presets (`naming`, `constantsHome`) ship ACTIVE in
+`eslint/consumer-template.eslint.config.js`, and the starter
+`deep_review.budget.seconds` is 1800 so the ADR-013 `--full` default fits the
+run deadline — per the CLAUDE.md seed-parity rule: a consumer-facing standard
+lands in the seeds in the same batch, the pilot is an adopter, not the source
+of truth.

@@ -76,6 +76,10 @@ expect "A node_modules exists" test -d "$A/node_modules"
 expect "A overlay dir empty" test -z "$(ls -A "$A/.claude/review-guides" 2>/dev/null)"
 expect "A CLAUDE.md managed marker" grep -q "dev-standards:managed-section" "$A/CLAUDE.md"
 expect "A quality.json repo rendered" grep -q '"repo": "consumer-a"' "$A/quality.json"
+# The --full fix-verify default needs headroom inside the run deadline: the seeded
+# budget must stay 1800 (a silent revert to 900 starves the deep-review full tier).
+expect "A deep_review budget seeded at 1800" python3 -c "import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if m['deep_review']['budget']['seconds']==1800 else 1)" "$A/quality.json"
+expect "A deep_review fix verify seeded --full" python3 -c "import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if m['deep_review']['verify_after_fix']=='--full' else 1)" "$A/quality.json"
 expect "A dependabot.yml seeded" test -f "$A/.github/dependabot.yml"
 expect "A AGENTS.md pointer seeded" grep -q "CLAUDE.md" "$A/AGENTS.md"
 staged_oid=$(git -C "$A" ls-files -s -- vendor/dev-standards | awk '{print $2}')
