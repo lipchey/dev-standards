@@ -2,8 +2,8 @@
 
 - **Status:** Draft — pending owner approval (Gate P critique pending)
 - **Date:** 2026-07-15
-- **Owner ADR:** ADR-017 (to be written in this batch; amends ADR-014, supersedes
-  the ownership half of ADR-015)
+- **Owner ADRs:** ADR-017 (recall system; amends ADR-014, supersedes the
+  ownership half of ADR-015) + ADR-018 (two-stage development doctrine)
 
 ## Evidence
 
@@ -40,33 +40,51 @@ escapes, a canary (Tier 3). Mechanical rule classes move down into gates.
 
 ## Tier 1 — raise the gate floor (eslint presets, mechanism-only per ADR-014)
 
-Three additions to the shared inline plugin / presets. All follow the ADR-014
-mechanism: custom rules in the `dev-standards` inline plugin (never shared
-`no-restricted-syntax` entries — flat-config REPLACE semantics), presets
-hard-code no paths, the consumer owns `files`/`ignores`/options.
+Three additions to the shared presets. All follow the ADR-014 mechanism:
+presets hard-code no paths, the consumer owns `files`/`ignores`/options.
 
-1. **`dev-standards/inline-literals` (new rule).** Flags NUMERIC literals in
-   LOGIC positions that `constants-home` deliberately skipped: literals in
-   expressions/comparisons/call arguments/returns, function-local const
-   literal inits, and literal-only arithmetic. v1 is numeric-only: string
-   literals in logic (error messages, log labels, wire keys) are a huge
-   false-positive class and the entire evidence set is numeric — inline
-   strings stay profile-owned (P-naming). Default allowlist
-   (option-overridable): `0`, `1`, `-1`, array-index positions; consumer
-   option for extra allowed numbers. Tests are IN scope (the consumer decides
-   via globs; the pilot's convention already requires named consts at test
-   file top). This is the noisiest rule of the three — see Rollout below.
-2. **`naming` preset extension: property floor.** The min-3/ASCII floor gains
-   TS `interface`/type-literal property SIGNATURES and class field
-   declarations (author-owned domain shapes). Object-literal keys stay exempt
-   (they mirror a type; gating the type suffices). New `exemptPropertyKeys`
-   option (mirror of `exemptNamedImports`) for wire-format/external keys —
-   renaming a wire key is a data-format decision, not a lint fix.
-3. **`dev-standards/types-home` (new rule).** An EXPORTED `interface`/`type`
-   declared outside the types home is an error; mirror of `constants-home`
-   (consumer owns globs/ignores). Option `allowNamePattern` (seed:
-   `/Props$/`) keeps ADR-015's React-props carve-out. Non-exported local
-   helper types never fire.
+**Shared plugin object (Gate P F1, reproduced):** two flat-config entries
+defining DIFFERENT objects under `plugins["dev-standards"]` throw
+`Cannot redefine plugin` on overlapping files — so C1 first extracts ONE
+module-level plugin object (`eslint/plugin.js`) holding every custom rule;
+every factory (including the existing `constantsHome`) references that same
+object. A composition test enables all presets on one representative file.
+
+1. **`inlineLiterals()` preset — wraps `@typescript-eslint/no-magic-numbers`**
+   (Gate P F6: the installed dependency already ships the numeric rule with
+   mature options — no custom AST work). The preset pins curated defaults:
+   `ignore: [0, 1, -1]`, `ignoreArrayIndexes`, `ignoreEnums`,
+   `ignoreNumericLiteralTypes`, `ignoreReadonlyClassProperties`,
+   `ignoreTypeIndexes`; consumer may extend `ignore` and owns globs. v1 is
+   numeric-only: inline strings are a huge false-positive class and the
+   entire evidence set is numeric — strings stay profile-owned. Tests are IN
+   scope (pilot convention: named consts at test file top). C1 acceptance
+   verifies the rule fires on the 16 real pilot sites; any residual class
+   (e.g. a site the upstream rule's variable-assignment allowance skips) is
+   closed by extending the existing `constants-home` custom rule, not by a
+   new rule. Noisiest of the three — see Rollout below.
+2. **`dev-standards/property-naming` (new rule, shared plugin).** The min-3
+   floor for TS `interface`/type-literal property SIGNATURES only — class
+   fields are ALREADY covered by the naming preset's `PropertyDefinition`
+   selector (Gate P F7). A DISTINCT rule, not a naming-preset selector
+   extension: it needs its own severity (warn-ramp independent of the
+   existing `error` floor — one `no-restricted-syntax` entry has one
+   severity) and file-scoped exemptions. Wire-format shapes are exempted by
+   FILE (`ignores` globs on the wire-contract modules) or a narrow inline
+   disable — never a repo-global key list, which would exempt internal
+   same-named fields too and defeat the `.t` canary. Object-literal keys stay
+   exempt (they mirror a type; gating the type suffices).
+3. **`dev-standards/types-home` (new rule, shared plugin).** An EXPORTED
+   `interface`/`type` alias declared outside the types home is an error;
+   consumer owns globs/ignores. Export resolution is explicit (Gate P F8):
+   fires on a top-level declaration exported directly OR referenced by a
+   same-file `export { X }` / `export type { X }` / `export default X`;
+   ambient declarations and `.d.ts` are excluded via ignores; re-exports of
+   OTHER modules never fire. Option `allowNamePattern` is a validated STRING
+   regex (seed `"Props$"`) for ADR-015's React-props carve-out. Non-exported
+   local helper types never fire. Red/green test cases enumerate: direct
+   export, indirect type-only export, default export, re-export, ambient,
+   `.d.ts`, local helper, Props.
 
 Each rule ships with `tests/eslint/<rule>.test.mjs` (mirroring
 `constants-home.test.mjs`), is exported from `eslint/index.js`, documented in
@@ -138,14 +156,30 @@ contradictions, rule loopholes/over-reach) as a MANDATORY pass, not optional;
 
 - `deep-review/src/guides.ts` hardcodes the seven filenames — the const list
   changes to the new set, with its tests; the consumer inherits the new gate
-  via the pin bump. ADR-016's mechanism (main session reads EVERY mandated
-  file) is otherwise untouched — the main session now reads the contract +
-  all profiles (same content, reorganized); profiles narrow only what each
-  WORKER reads.
+  via the pin bump. **Full blast radius (Gate P F4, verified):** the corpus
+  is cross-referenced by `agents/skill-catalog.json` (provenance ledger;
+  INT-06 asserts set equality with the templates dir) and by
+  `tests/runner/review-guides-present.test.ts`,
+  `tests/deep-review/{guides-read,no-touch,preflight}.test.ts` — ALL are C2
+  files; provenance entries are remapped (`feeds_guides` → new filenames),
+  never dropped. C2 acceptance = the FULL repo suite (`npm test`, lint,
+  typecheck, build), not just deep-review tests.
+- **ADR-016 amendment (Gate P F2, explicit — not "untouched"):** the MAIN
+  session's obligation is unchanged (reads contract + ALL profiles — same
+  content, reorganized). What changes is the WORKER briefing rule in the
+  skill body (today: "brief each delegated worker to read every mandated
+  guide") — it becomes "brief each worker with `review-contract.md` + its
+  assigned profile (+ same-named overlay)". v1 fan-out runs on EXTERNAL
+  workers (separate runtimes the Stop/SubagentStop hook never sees — same
+  category as the Codex cross-run); in-session Agent-tool fan-out under an
+  attributed pass stays all-guides until a worker-scoped required set is
+  designed (deferred, recorded in ADR-017).
 - Overlay mechanism: same-named consumer overlays now extend profile files.
-  Old-named overlays degrade gracefully (an unmatched overlay name is already
-  defined as a repo-only extra guide — still read); re-keying them is part of
-  consumer adoption.
+  Old-named overlays keep being READ by the main session (unmatched name =
+  repo-only extra guide) but have no owning WORKER (Gate P F5) — so during
+  the migration window the skill broadcasts unmatched legacy overlays to
+  EVERY profile worker's brief; re-keying them is a named consumer-adoption
+  step, after which the broadcast naturally becomes a no-op.
 - Skill body (`agents/skill-sources/deep-review-refactor.md`): §Mandatory
   guide reads and §review-only step 4 re-reference the new corpus (read
   order: contract → baseline-bearing profiles per their conditionality);
@@ -159,12 +193,51 @@ contradictions, rule loopholes/over-reach) as a MANDATORY pass, not optional;
 - The independent Codex cross-run stays as-is — it is the recall-diversity
   backstop, not replaced by profiles.
 
+## Two-stage development doctrine (owner decision 2026-07-15 → ADR-018)
+
+Prose restrictions at WRITE time are weakly followed and dilute attention —
+so feature development becomes explicitly two-stage:
+
+- **Stage 1 — write functional code.** Minimal PROSE pre-reads (the goal is
+  working, tested code). Machine gates stay BLOCKING at their configured
+  severity — a gate is mechanical feedback, not an attention tax, and with
+  Tier 1 in place the mechanical standards (placement, constants, naming
+  floor) are gate-owned, not prose-owned. Behavior tests remain a Stage-1
+  duty (functional code includes its tests).
+- **Stage 2 — deep-review-refactor as the standard quality stage.** The
+  profile fan-out (Tier 2) applies the full standards corpus with targeted,
+  per-lens attention; architecture/quality intent is given to the AI HERE,
+  where recall is engineered, not at write time where it demonstrably decays.
+
+**The decline loophole (Gate P F3):** if Stage 2 were optional, declined
+reviews would leave Stage-1-reduced-standards code with no recovery — the
+doctrine would LOWER quality. So ADR-018 states: in a two-stage repo, Stage 2
+is a REQUIRED pipeline stage for feature work — consent governs WHEN it runs,
+not WHETHER; a skipped/postponed Stage 2 leaves the feature explicitly marked
+`stage-2 pending` (a tracked debt entry in the repo's status/memory doc), it
+is never silently "done". Two always-on layers survive in Stage 1 regardless:
+the machine gates and the Gate C cross-check (global rule, unchanged) — the
+doctrine removes prose PRE-READS from writing, not review coverage.
+
+Consequences in this batch: ADR-018 records the doctrine incl. the pending
+debt rule; `agents/checklist-template.md` frames its split explicitly as
+Stage-1 (blocks commit — gates) vs Stage-2 (review-owned — profiles); the
+deep-review-refactor skill's trigger section names the two-stage flow as the
+intended standing use (the consent gate itself is unchanged — ADR-012/016
+posture stays). Consumer-side rewording of "read the full checklist before
+code" pre-reads is adoption work (follow-up task, out of scope here).
+
 ## Tier 3 — recall ratchet (extend existing mechanisms, no new machinery)
 
-1. **`agents/gate-misses-template.md`:** fix routes gain `profile:<name>` for
-   judgment escapes; closing a judgment escape REQUIRES adding the escaped
-   case as a canary line to the owning profile file (the nondeterministic
-   analogue of "gate now red on the retained offense").
+1. **`agents/gate-misses-template.md` AND `docs/effectiveness-plan.md` (the
+   canonical ledger definition — both, same batch, Gate P F9):** a new entry
+   class `judgment-missed` and fix route `profile:<name>` for judgment
+   escapes. **Canaries are BLINDED:** they live in the ds-side registry
+   (`agents/review-guide-templates/TRACEABILITY.md`, which also carries the
+   migration table), NEVER in the worker-facing profile body — a canary
+   quoted in the brief would be parroted, not discovered. Closing a judgment
+   escape = a replay over the retained offending state where the worker is
+   NOT told the expected locations and still reports them.
 2. **`docs/CALIBRATION.md`:** the session gains a judgment-escape step —
    triage escapes per profile, and on any profile-file edit spot-check its
    canaries still get caught (cheap: include canaries in the next run's brief
@@ -188,8 +261,9 @@ One branch (`feature/review-recall`), three commits, one PR, tag after merge:
   `deep-review/src/guides.ts` const/test update + skill-body edits
   (orchestrator-owned — rule-bearing text). Doc-lens Gate C on this commit is
   mandatory before it is considered done.
-- **C3 (Tier 3):** gate-misses-template + CALIBRATION edits (orchestrator;
-  small).
+- **C3 (Tier 3 + doctrine):** gate-misses-template + CALIBRATION edits +
+  ADR-018 + checklist-template two-stage framing + skill trigger-section note
+  (orchestrator; small).
 
 Gate C (read-only Codex cross-check) runs on the full branch diff before the
 PR; the doc-focused lens applies (lost facts, new contradictions, rule
@@ -199,18 +273,32 @@ loopholes) since C2/C3 are rule-bearing docs.
 
 - Consumer adoption in `ai-prompter`: pin bump, eslint config globs/options,
   report-only ramp, fixing the flagged engine violations (closes the PR #25
-  comments), seeding the consumer gate-misses ledger. Separate follow-up task
-  in the consumer repo.
+  comments), overlay re-keying to profile names, seeding the consumer
+  gate-misses ledger. NOTE (Gate P F11): `scripts/seed-eslint-config.sh`
+  copies the template only when ABSENT — existing consumers receive nothing
+  automatically; the adoption task applies the config delta by hand.
+  Separate follow-up task in the consumer repo.
 - Corpus-loop findings from the engine review (10 needs-plan) — unrelated.
 - CLI changes (`scripts/deep-review` verbs) — the coverage matrix is
   orchestrator-runtime in v1; a `coverage` verb is a future promotion if the
   matrix proves valuable.
 
+## Considered and declined
+
+Gate P proposed keeping the seven guides + a thin ownership map (no rewrite).
+Declined by explicit owner decision (2026-07-15): a worker must receive ONE
+self-contained instruction file; the pointer model keeps the ~3k-line read
+problem. The rewrite risk is carried by the F4 blast-radius file list, the
+traceability table, and the mandatory doc-lens Gate C.
+
 ## Acceptance (whole batch)
 
-1. `node --test tests/eslint/` green, including negative cases per rule.
-2. Gate-proof: the three Tier-1 rules flag the 18 machine-catchable PR-#25
-   sites when run against the retained pilot state (documented in the ADR).
+1. `npm run test:eslint` green (the runnable script — `node --test` on the
+   bare dir fails), including negative cases per rule and the composition
+   test; `npm test` + lint + typecheck + build green for the whole branch.
+2. Gate-proof, DURABLE: minimal offense-shaped fixtures for all 18
+   machine-catchable PR-#25 classes live in the rule tests permanently; the
+   one-time run against the retained pilot state is documented in ADR-017.
 3. Traceability: every normative line of the old 7-guide corpus mapped to a
    profile section (table committed with C2); doc-lens Gate C reports no lost
    facts and no new contradictions.
