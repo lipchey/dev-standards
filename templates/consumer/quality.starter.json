@@ -84,6 +84,11 @@
     "guides_dir": ".claude/review-guides",
     "no_touch_globs_ref": ".claude/project-facts.md",
     "verify_after_fix": "--full",
-    "verify_entry": "scripts/verify"
+    "verify_entry": "scripts/verify",
+    "required_reads": [
+      ".claude/project-facts.md",
+      ".claude/code-conventions.md",
+      ".claude/CHECKLIST.md"
+    ]
   }
 }

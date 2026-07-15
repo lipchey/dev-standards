@@ -252,3 +252,84 @@ the props exception so a new consumer inherits both.
   it from firing on component-local props.
 - No guide seed sync (the seven guides are read in place from the package); the
   `code-conventions-template.md` change is the seed parity, same batch.
+
+---
+
+## ADR-016 — Mandated review guides are enforced by a transcript-reading hard gate
+
+- **Status:** Accepted
+- **Date:** 2026-07-15
+
+### Context
+
+The `deep-review-refactor` skill instructs the reviewer to read the seven package
+guide templates (plus repo overlays and project must-read docs) before judging. In
+practice an AI reviewer periodically SKIPS them — judging the code "clean enough" and
+substituting memory for the source — and every gate still passes green, because
+"did the reviewer read the guides" was never machine-checked. The instruction was
+advisory; nothing blocked a pass that ignored it. This must hold for a review the
+main session delegates to subagents too.
+
+### Decision
+
+A model-independent hard gate, shipped in dev-standards so every consumer inherits it.
+
+1. **Read-proof from the transcript, not self-report.** A new `deep-review
+   guides-read` verb (`deep-review/src/{transcript,guides-read}.ts`) parses the
+   session's JSONL transcript. Read-proof for a file = a genuine `Read` tool_use
+   whose correlated `tool_result` did not error and was not user-denied. A Bash
+   echo, a failed/denied read, or a read that never completed is NOT proof.
+   Activation is the harness-set `attributionSkill == deep-review-refactor` on the
+   transcript (the harness stamps it, not the model).
+2. **Required set, strict and fail-closed.** = the seven package templates (a
+   missing/blank template fails closed) ∪ every `*.md` in `deep_review.guides_dir`
+   (a listed-but-unreadable overlay fails closed; ENOENT = no overlay is fine) ∪
+   every `deep_review.required_reads` entry (a configured read that does not exist
+   fails closed). Paths are matched by repo-relative TAIL so a worktree root and the
+   main checkout satisfy the same guide.
+3. **Wired as `Stop` + `SubagentStop` hooks** calling `scripts/deep-review
+   guides-read --hook-stdin`. The hook blocks (`{"decision":"block","reason":…}`)
+   until every required file is proven read. STRICT main-session rule: the main
+   transcript must show the reads even when the review was delegated to subagents,
+   so delegation cannot launder the requirement.
+4. **The engine protects its own policy + mechanism.** `NO_TOUCH_BASELINE` gains
+   `.claude/settings.json`, `.claude/hooks/**`, `scripts/deep-review` (the
+   mechanism); the fix-mode no-touch set unions `required_reads` + the `guides_dir`
+   overlay (the policy). A fix slice can neither disarm the gate nor edit a guide it
+   was reviewed against.
+5. **Escape hatch.** The hook honors `DEEP_REVIEW_GUARD_OFF=1` (exit 0
+   immediately), so a gate bug can never brick a consumer's Claude sessions;
+   ADOPTION documents the out-of-band removal.
+
+### Consequences
+
+- **The guarantee is "hard up to the platform cap-8," not absolute.** Claude Code
+  force-continues after 8 consecutive Stop-blocks. So a determined skip becomes LOUD
+  (8 recorded `preventedContinuation`) rather than impossible; the realistic
+  accidental skip is caught on the first block with the unread files named. This
+  ceiling is the platform's and is stated honestly rather than papered over.
+- **Fix-verb attestation was deliberately NOT built.** Making the fix verbs
+  (`report`/`handoff`/`commit-slice`) fail-closed on read-proof would need the engine
+  to locate the session transcript from inside a fix verb — impossible robustly:
+  `CLAUDE_PROJECT_DIR` is absent from the Bash tool environment (only a hook-config
+  placeholder), the cwd at fix time is an engine worktree, and the transcript's
+  on-disk hash is keyed to the launch dir. Any resolver would be brittle and could
+  brick review-and-refactor on a hash-format change — a fragile security mechanism is
+  a net negative. `handoff` lands nothing and `report` is metadata-only, so nothing
+  auto-lands; the robust `Stop`/`SubagentStop` gate covers conclusion. Revisit only
+  if the harness exposes the transcript path to tool invocations.
+- **The activation MARKER is designed but not wired in v1.** The gate supports a
+  `.artifacts/deep-review/active-<session_id>` marker for deterministic fail-closed
+  activation, but no `PreToolUse[Skill]` hook writes it — that PreToolUse fires for
+  the `Skill` tool is unconfirmed, and shipping unconfirmed config is a liability.
+  Without it, activation depends on the harness attribution being present in a
+  readable, sufficiently-FLUSHED transcript: two edges fail open (skip) — an
+  unreadable transcript, and a transcript whose attribution line has not yet flushed
+  at Stop time (the harness writes it asynchronously). Both are unlikely for a real
+  review — the attribution is stamped on every assistant line, so it is present long
+  before conclusion — but they are honest gaps the marker would close. A pilot will
+  confirm whether the marker is worth wiring.
+- Adoption seeds the hooks by structured MERGE into `.claude/settings.json`
+  (`scripts/merge-deep-review-hooks.mjs`, never copy-if-absent — a consumer's
+  existing settings must survive) and sets `required_reads` in the starter manifest.
+  `seed-consumer.sh --check` fails if the hooks are not wired.

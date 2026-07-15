@@ -82,6 +82,9 @@ expect "A deep_review budget seeded at 1800" python3 -c "import json,sys; m=json
 expect "A deep_review fix verify seeded --full" python3 -c "import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if m['deep_review']['verify_after_fix']=='--full' else 1)" "$A/quality.json"
 expect "A dependabot.yml seeded" test -f "$A/.github/dependabot.yml"
 expect "A AGENTS.md pointer seeded" grep -q "CLAUDE.md" "$A/AGENTS.md"
+# The guides-read gate (ADR-016) is only armed if its hooks are wired + required_reads seeded.
+expect "A settings.json guides-read Stop/SubagentStop hooks wired" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); h=s.get('hooks',{}); cmd=lambda e: any(x.get('command')=='\"\$CLAUDE_PROJECT_DIR\"/scripts/deep-review guides-read --hook-stdin' for g in h.get(e,[]) for x in g.get('hooks',[])); sys.exit(0 if cmd('Stop') and cmd('SubagentStop') else 1)" "$A/.claude/settings.json"
+expect "A deep_review required_reads seeded (all three)" python3 -c "import json,sys; m=json.load(open(sys.argv[1])); r=m['deep_review'].get('required_reads',[]); sys.exit(0 if sorted(r)==sorted(['.claude/project-facts.md','.claude/code-conventions.md','.claude/CHECKLIST.md']) else 1)" "$A/quality.json"
 staged_oid=$(git -C "$A" ls-files -s -- vendor/dev-standards | awk '{print $2}')
 want_oid=$(git -C "$E2E/core-work" rev-parse 'v0.9.1-test^{commit}')
 if [ "$staged_oid" = "$want_oid" ]; then ok "A gitlink staged at default (latest) tag"; else bad "A gitlink: $staged_oid != $want_oid"; fi
@@ -93,6 +96,9 @@ mv "$A/.github/dependabot.yml" "$A/.github/dependabot.yml.bak"
 expect_fail "A --check red without dependabot.yml" "$INSTALL" "$A" --check
 mv "$A/.github/dependabot.yml.bak" "$A/.github/dependabot.yml"
 expect "A --check green after restore" "$INSTALL" "$A" --check
+mv "$A/.claude/settings.json" "$A/.claude/settings.json.bak"
+expect_fail "A --check red without guides-read hooks" "$INSTALL" "$A" --check
+mv "$A/.claude/settings.json.bak" "$A/.claude/settings.json"
 
 echo "=== B: failure paths"
 mkconsumer "$E2E/consumer-dirty"; touch "$E2E/consumer-dirty/untracked.txt"

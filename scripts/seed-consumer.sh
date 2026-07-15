@@ -83,6 +83,10 @@ if [ "$check_mode" = true ]; then
   [ -f "$consumer_root_abs/quality.json" ] || { echo "check: missing quality.json" >&2; ok=false; }
   [ -f "$consumer_root_abs/.github/dependabot.yml" ] || { echo "check: missing .github/dependabot.yml" >&2; ok=false; }
 
+  # The guides-read gate (ADR-016) is only armed if its Stop/SubagentStop hooks are wired.
+  node "$package_root/scripts/merge-deep-review-hooks.mjs" "$consumer_root_abs" --check \
+    || { echo "check: guides-read Stop/SubagentStop hooks not wired in .claude/settings.json" >&2; ok=false; }
+
   hooks_path=$(git -C "$consumer_root_abs" config --local --get core.hooksPath 2>/dev/null || true)
   [ "$hooks_path" = ".githooks" ] || { echo "check: core.hooksPath is '$hooks_path' (expected .githooks)" >&2; ok=false; }
 
@@ -216,6 +220,11 @@ else
     printf 'created:%s\n' "$claude_dest"
   fi
 fi
+
+# .claude/settings.json: merge the guides-read Stop/SubagentStop hooks (ADR-016)
+# structurally — never clobbers a consumer's existing settings, idempotent on re-run.
+# Prints `created:<abs>` (journaled by the caller) only when it creates the file.
+node "$package_root/scripts/merge-deep-review-hooks.mjs" "$consumer_root_abs"
 
 # Additive-overlay location; empty by default. Empty dirs don't show in git
 # status, so this is not journaled.

@@ -6,13 +6,14 @@
 // Logic stays behind the injected `deps` seam (process streams) so it is testable
 // without touching the real process, mirroring the runner CLI edge style.
 
-import { readFileSync, realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { join, relative, resolve } from 'node:path';
 import { EXIT_OK, EXIT_USAGE, EXIT_FAILURE, EXIT_PREFLIGHT, EXIT_DESCRIPTOR_MISMATCH } from './types.ts';
 import type { MachineError, FindingsFileV2 } from './types.ts';
 import { loadConfig } from './config.ts';
 import type { DeepReviewConfig } from './config.ts';
-import { buildNoTouchSet, isNoTouch, NoTouchSourceError, selfProtectedPaths } from './no-touch.ts';
+import { buildNoTouchSet, isNoTouch, NoTouchSourceError, policyProtectedPaths, selfProtectedPaths } from './no-touch.ts';
 import { readFindings, FindingsValidationError, FindingsConflictError } from './findings-io.ts';
 import { classifyAndBind } from './classify.ts';
 import { commitSlice, realSliceDeps } from './slice.ts';
@@ -27,6 +28,9 @@ import type { Deadline } from './deadline.ts';
 import { createSecretScanner } from './secret-scan.ts';
 import { readDescriptor, verifyDescriptor } from './descriptor.ts';
 import type { DescriptorVerdict, RunDescriptor, DeepReviewContext } from './descriptor.ts';
+import { evaluateGuidesRead } from './guides-read.ts';
+import type { GuidesReadDecision } from './guides-read.ts';
+import { REVIEW_GUIDE_TEMPLATES_DIR } from './guides.ts';
 
 export interface CliDeps {
   stdout: (text: string) => void;
@@ -45,6 +49,14 @@ export interface CliDeps {
   // realpath for the fix-mode no-touch-ref confinement (commit-slice); defaults to
   // fs.realpathSync.
   realpath?: (p: string) => string;
+  /* The guides-read hook edge (Stop/SubagentStop). Injected so the gate is unit-testable
+     without a real hook envelope on fd 0, the real environment, or the real marker file. */
+  readStdin?: () => string;
+  getEnv?: (name: string) => string | undefined;
+  fileExists?: (filePath: string) => boolean;
+  /* The linked worktrees of the repo at a cwd (approved roots for a guide read). Injected
+     so the gate is testable without a real git checkout; defaults to `git worktree list`. */
+  worktreeRoots?: (cwd: string) => string[];
 }
 
 // The full command surface. Each lands in its own later task; all are stubbed now.
@@ -56,6 +68,7 @@ const COMMANDS = [
   'select-worktree',
   'handoff',
   'verify',
+  'guides-read',
 ] as const;
 
 type Command = (typeof COMMANDS)[number];
@@ -191,7 +204,18 @@ function buildFixSet(env: ResolvedEnv, config: DeepReviewConfig): string[] {
     repoRootAbs: env.realpath(env.cwd),
     realpath: env.realpath,
   });
-  return [...new Set([...set, ...selfProtectedPaths(config.noTouchGlobsRef)])];
+  /* The package guide-templates dir relative to the worktree root: `vendor/dev-standards/
+     agents/review-guide-templates` in a consumer (already under the vendor/** baseline),
+     `agents/review-guide-templates` in dev-standards itself. An escaping relative (templates
+     outside the worktree — not a real deployment) is dropped by policyProtectedPaths. */
+  const templatesRel = relative(env.cwd, REVIEW_GUIDE_TEMPLATES_DIR);
+  return [
+    ...new Set([
+      ...set,
+      ...selfProtectedPaths(config.noTouchGlobsRef),
+      ...policyProtectedPaths(config.requiredReads, config.guidesDir, templatesRel),
+    ]),
+  ];
 }
 
 /* Preflight loads package guides plus the optional repo overlay before fix-mode verbs. */
@@ -533,6 +557,151 @@ function verifyCmd(rest: string[], deps: CliDeps): number {
   return result.exitCode;
 }
 
+// ── guides-read gate (ADR-016) ──────────────────────────────────────────────────
+
+/* The deterministic activation marker written by PreToolUse[Skill], keyed by session id
+   so parallel sessions do not collide and a review's marker survives across its turns. */
+function markerPath(cwd: string, sessionId: string): string {
+  return join(cwd, '.artifacts', 'deep-review', `active-${sessionId}`);
+}
+
+/* The repo's linked worktrees (their absolute roots), via `git worktree list --porcelain -z`.
+   A failure (not a git repo, git absent, timeout) degrades to [] — the cwd alone is then the
+   only approved root, which still evaluates. Bounded by a short timeout so a wedged git can
+   never hang session shutdown. `-z` is REQUIRED: `--porcelain` alone is line-delimited, so a
+   worktree whose path contains a newline (`…\nworktree /tmp/decoy`) would parse as a second,
+   attacker-chosen approved root — a fail-open. NUL records preserve the path bytes verbatim
+   (no trim, which would corrupt a path with trailing whitespace). */
+function realWorktreeRoots(cwd: string): string[] {
+  try {
+    const out = execFileSync('git', ['-C', cwd, 'worktree', 'list', '--porcelain', '-z'], {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    return out
+      .split('\0')
+      .filter((record) => record.startsWith('worktree '))
+      .map((record) => record.slice('worktree '.length))
+      .filter((worktreePath) => worktreePath !== '');
+  } catch {
+    return [];
+  }
+}
+
+/* The repo checkouts a guide read may legitimately live under: the pass cwd plus every linked
+   worktree of the same repo. A review runs in its own worktree while the guide it Reads may
+   sit under the main checkout (or another worktree) — both must count. Realpath'd + deduped so
+   the segment-suffix match in computeMissing cannot be satisfied by a same-named file OUTSIDE
+   the repo. */
+function resolveApprovedRoots(deps: CliDeps, env: ResolvedEnv, cwd: string): string[] {
+  const worktreeRoots = deps.worktreeRoots ?? realWorktreeRoots;
+  const resolved = [cwd, ...worktreeRoots(cwd)].map((root) => {
+    try {
+      return env.realpath(root);
+    } catch {
+      return root;
+    }
+  });
+  return [...new Set(resolved)];
+}
+
+/* Value of a `--name <value>` / `--name=<value>` flag, or undefined when absent (or the
+   flag is the trailing token). Generic sibling of parseFindingsFlag/parseSlugFlag. */
+function parseNamedFlag(rest: string[], name: string): string | undefined {
+  const inline = `${name}=`;
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === undefined) continue;
+    if (arg === name) return rest[i + 1];
+    if (arg.startsWith(inline)) return arg.slice(inline.length);
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/* Reads the transcript file named by a hook-envelope field; undefined when the field is
+   absent/empty or unreadable — an op-failure the gate turns into a block only once the
+   pass is active. */
+function readTranscript(env: ResolvedEnv, field: unknown): string | undefined {
+  if (typeof field !== 'string' || field === '') return undefined;
+  try {
+    return env.readFile(field);
+  } catch {
+    return undefined;
+  }
+}
+
+/* Serializes a decision for the direct `--transcript` mode (tests/manual inspection). */
+function describeDecision(decision: GuidesReadDecision): Record<string, unknown> {
+  if (decision.kind === 'skip') return { skipped: true, ok: true };
+  if (decision.kind === 'allow') return { skipped: false, ok: true };
+  return { skipped: false, ok: false, reason: decision.reason };
+}
+
+/* `guides-read --hook-stdin` (Stop/SubagentStop hook) | `guides-read --transcript <path>
+   [--cwd <path>]` (direct). The gate BLOCKS a deep-review pass from concluding until every
+   mandated guide has a successful Read in the transcript. DEEP_REVIEW_GUARD_OFF=1 disables
+   it unconditionally, so a gate bug can never brick a consumer's sessions. */
+function guidesReadCmd(rest: string[], deps: CliDeps): number {
+  const getEnv = deps.getEnv ?? ((name: string): string | undefined => process.env[name]);
+  if (getEnv('DEEP_REVIEW_GUARD_OFF') === '1') return EXIT_OK;
+  const env = resolveEnv(deps);
+  if (rest.includes('--hook-stdin')) return guidesReadHook(deps, env);
+  const transcriptPath = parseNamedFlag(rest, '--transcript');
+  if (transcriptPath === undefined || transcriptPath === '') {
+    deps.stderr('deep-review guides-read: requires --hook-stdin or --transcript <path>\n');
+    return EXIT_USAGE;
+  }
+  const cwd = parseNamedFlag(rest, '--cwd') ?? env.cwd;
+  const decision = evaluateGuidesRead({
+    transcriptText: readTranscript(env, transcriptPath),
+    markerPresent: false,
+    cwd,
+    loadConfig: (): DeepReviewConfig => loadConfig(resolve(cwd, 'quality.json')),
+    deps: { realpath: env.realpath, approvedRoots: resolveApprovedRoots(deps, env, cwd) },
+  });
+  deps.stdout(`${JSON.stringify(describeDecision(decision))}\n`);
+  return EXIT_OK;
+}
+
+/* The Stop/SubagentStop path: the transcript comes from the harness envelope on stdin
+   (agent_transcript_path for a SubagentStop, transcript_path otherwise), cwd + session id
+   locate the marker, and a `block` decision prints its {decision,reason} JSON (exit 0 is
+   the hook block protocol). An unparseable envelope is a harness-provided, not
+   model-controlled, input: never block a possibly-non-review session on our own parse
+   failure. */
+function guidesReadHook(deps: CliDeps, env: ResolvedEnv): number {
+  const readStdin = deps.readStdin ?? ((): string => readFileSync(0, 'utf8'));
+  let envelope: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(readStdin());
+    if (!isRecord(parsed)) return EXIT_OK;
+    envelope = parsed;
+  } catch {
+    return EXIT_OK;
+  }
+  const eventName = typeof envelope.hook_event_name === 'string' ? envelope.hook_event_name : '';
+  const transcriptField =
+    eventName === 'SubagentStop' ? envelope.agent_transcript_path : envelope.transcript_path;
+  const cwd = typeof envelope.cwd === 'string' && envelope.cwd !== '' ? envelope.cwd : env.cwd;
+  const sessionId = typeof envelope.session_id === 'string' ? envelope.session_id : '';
+  const fileExists = deps.fileExists ?? existsSync;
+  const decision = evaluateGuidesRead({
+    transcriptText: readTranscript(env, transcriptField),
+    markerPresent: sessionId !== '' && fileExists(markerPath(cwd, sessionId)),
+    cwd,
+    loadConfig: (): DeepReviewConfig => loadConfig(resolve(cwd, 'quality.json')),
+    deps: { realpath: env.realpath, approvedRoots: resolveApprovedRoots(deps, env, cwd) },
+  });
+  if (decision.kind === 'block') {
+    deps.stdout(`${JSON.stringify({ decision: 'block', reason: decision.reason })}\n`);
+  }
+  return EXIT_OK;
+}
+
 const DISPATCH: Record<Command, CommandHandler> = {
   'check-path': checkPath,
   classify,
@@ -541,6 +710,7 @@ const DISPATCH: Record<Command, CommandHandler> = {
   'select-worktree': selectWorktreeCmd,
   handoff: handoffCmd,
   verify: verifyCmd,
+  'guides-read': guidesReadCmd,
 };
 
 function isCommand(value: string): value is Command {
