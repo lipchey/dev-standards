@@ -64,3 +64,11 @@ deleted - the history is the second-use evidence.
 - [x] 2026-07-14 dev-standards ai-quality-plan N4 - tests: an expected value captured from the implementation's own output (snapshot, logged result) pins behavior, not spec — a tautology no matter who recorded it; prompt reviewers to check that the oracle derives from the spec, hand-computation, or an independent source instead (addition). **Promoted → core-code-guidelines.md §Tests** (new judgment prompt).
 - [x] 2026-07-14 dev-standards ai-quality-plan N4 - calibration prune/demote: name the sanctioned JS/TS mutation-evidence tool (StrykerJS) the prune rule already requires — run it on-demand at the prune decision against the guarded invariant with a fresh or `--incremental --force` run, since incremental mode reuses prior results for unchanged mutants — exactly the ones a prune decision asks about (addition). **Promoted → docs/CALIBRATION.md §Session steps step 4** (prune bullet names the tool; on-demand, never in tiers).
 - [x] 2026-07-14 dev-standards ai-quality-plan N4 - tests: for parser/serializer/round-trip/money paths, prompt whether a property-based test (e.g. fast-check in JS/TS) states the invariant better than hand-picked examples — a complement to a spec/golden oracle, since a parser and serializer can share a spec misreading and still round-trip green; an optional lens, never a mandated dependency or gate (addition). **Promoted → core-code-guidelines.md §Tests** (optional-lens judgment prompt; a lens, not a gate).
+
+- **Pending** (2026-07-15, ai-prompter adoption Gate C): gate-adoption doc
+  sweep — when a newly adopted machine gate covers a previously review-owned
+  ceiling, grep the consumer's docs for the old "not caught / review-owned"
+  claims in the same batch (ai-prompter: 3 docs — CHECKLIST, code-conventions,
+  project-facts — still claimed literal arithmetic was uncatchable after
+  inlineLiterals adoption). Candidate: one line in the consumer-template
+  adoption checklist.
