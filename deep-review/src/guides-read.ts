@@ -14,7 +14,7 @@
 
 import path from 'node:path';
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
-import { loadReviewGuides, REVIEW_GUIDE_TEMPLATES_DIR } from './guides.ts';
+import { loadReviewGuides, NON_GUIDE_TEMPLATE_NAMES, REVIEW_GUIDE_TEMPLATES_DIR } from './guides.ts';
 import type { ReviewGuideLoadOutcome } from './guides.ts';
 import type { DeepReviewConfig } from './config.ts';
 import { parseTranscript } from './transcript.ts';
@@ -50,8 +50,14 @@ export interface RequiredReadSetDeps {
 
 function realListOverlay(directory: string): string[] | undefined {
   try {
+    /* The reserved registry name never becomes a required overlay read — the loader
+       (guides.ts) excludes it from the merged corpus, so requiring it here would
+       demand reading a file the corpus ignores. */
     return readdirSync(directory, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+      .filter(
+        (entry) =>
+          entry.isFile() && entry.name.endsWith('.md') && !NON_GUIDE_TEMPLATE_NAMES.has(entry.name),
+      )
       .map((entry) => entry.name);
   } catch (error) {
     /* Only ENOENT means "no overlay" (optional). ENOTDIR (guides_dir points at a file),
@@ -149,6 +155,9 @@ export function requiredReadSet(
   const overlayNames = listOverlay(overlayDirectory);
   if (overlayNames !== undefined) {
     for (const name of overlayNames) {
+      /* Belt-and-braces vs injected listers: the reserved registry name is filtered
+         at the source (realListOverlay) AND here. */
+      if (NON_GUIDE_TEMPLATE_NAMES.has(name)) continue;
       tails.add(repoRelativeTail(cwd, path.join(overlayDirectory, name)));
     }
   }

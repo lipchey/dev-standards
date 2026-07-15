@@ -397,3 +397,131 @@ Gate P/C: `docs/source-swap-detection-plan.md`.
   expected registry host in `quality.json`.
 - Findings are non-blocking until a calibration session flips the gate with real
   catch evidence and zero operational noise.
+
+---
+
+## ADR-018 — Review-owned rule classes get named owners: gate floor, profile corpus, recall ratchet
+
+- **Status:** Accepted
+- **Date:** 2026-07-15
+- **Plan:** `docs/review-recall-plan.md` (Gate-P-reviewed)
+
+### Context
+
+Pilot evidence (ai-prompter PR #25, 2026-07-15): a package that had JUST passed a
+full deep-review (18 adversarially verified fixes, `verify --full` green) still
+drew 20 owner review comments — 16 inline magic numbers (src and tests), 3
+identifier-meaningfulness cases (`avgIdf`, a `.t` property signature, `pos`), 1
+type-placement case (`src/types.ts` outside the types home). Every one falls in a
+class ADR-014/ADR-015 assigned to review judgment. Verified root causes: ~3k
+lines of guide text per reviewer dilute per-rule recall; finders report examples,
+not rule saturation; nothing records which rule classes were checked against
+which files; verification filters false positives while nothing measures recall.
+"Review-owned ceiling" was a class with no enforced owner.
+
+### Decision
+
+1. **Ownership invariant.** A rule class may stay review-owned ONLY with a named
+   profile owner (below); a mechanically checkable class gets a gate, or an ADR
+   note recording why a gate is impossible/too noisy. This amends ADR-014's
+   "review-owned ceiling" and supersedes ADR-015's ownership assignment — the
+   ADR-015 review prompts survive as profile content, but the PRIMARY owner of
+   inline numeric literals and exported-type placement becomes the gate floor.
+2. **Gate floor.** One shared plugin object (`eslint/plugin.js`) carries every
+   custom rule — two flat-config entries defining different objects under the
+   same plugin key throw `Cannot redefine plugin` (reproduced), so factories must
+   share the object. New presets: `inlineLiterals()` wrapping
+   `@typescript-eslint/no-magic-numbers` with curated defaults (numeric-only v1);
+   `dev-standards/types-home` (exported `interface`/`type` outside the types
+   home; explicit export-resolution semantics; string-regex `allowNamePattern`,
+   seed `"Props$"`); `dev-standards/property-naming` (min-3 floor on TS property
+   SIGNATURES — class fields already covered by `naming`; a distinct rule so its
+   severity ramps independently; exemptions are file-scoped, never a global key
+   list, which would blind the `.t` canary class). Consumer template ships all
+   three at `error`; an existing consumer adopts at `warn` and CALIBRATION flips.
+3. **Profile corpus.** The seven guide templates are REWRITTEN into
+   `review-contract.md` + six self-contained lens profiles in the same directory
+   (owner decision: a fan-out worker receives ONE ready instruction file; the
+   keep-guides-plus-ownership-map alternative was considered and declined).
+   `TRACEABILITY.md` carries the migration table (every old normative section →
+   its new home) and the BLINDED canary registry (canaries never appear in
+   worker-facing profile bodies). The main session's ADR-016 obligations are
+   unchanged (it reads contract + all profiles); the skill's worker-briefing rule
+   changes to contract + assigned profile; v1 fan-out runs on external workers
+   (outside the Stop/SubagentStop gate, same category as the Codex cross-run) —
+   a worker-scoped required set for in-session subagents is deferred.
+4. **Recall ratchet.** The gate-miss ledger (template + the canonical
+   `effectiveness-plan.md` §5 definition) gains the `judgment-missed` class and
+   `profile:<name>` fix route. Closing a judgment escape requires a canary entry
+   and a BLINDED replay: the worker reports the retained offense without being
+   told the expected locations. The one-time gate-proof run against the retained
+   pilot state is recorded at consumer adoption; durable offense-shaped fixtures
+   live in the rule tests.
+
+Amendment 2026-07-15 (owner decision): `profile-structure-and-dependencies.md`
+was split three ways so each worker owns one mandate with size and attention
+parity.
+
+### Consequences
+
+- The 20-comment miss class becomes 18 deterministic lint errors + 2 named
+  profile canaries — the same escape cannot recur silently.
+- Review workers stop re-checking what gates own (the skill's
+  deterministic-first rule already forbids duplicating a gate) and spend recall
+  on judgment rules, one lens each, with coverage accounted per file × profile.
+- Legacy consumer overlays keep being read but lack a worker owner until
+  re-keyed — the skill broadcasts unmatched overlays to every profile worker
+  during the migration window.
+
+---
+
+## ADR-019 — Two-stage development: functional first, standards at review
+
+- **Status:** Accepted
+- **Date:** 2026-07-15
+- **Owner decision** (pilot owner, 2026-07-15)
+
+### Context
+
+Prose restrictions at write time are weakly followed: the pilot wrote code under
+mandatory pre-reads (conventions, checklist, guides) and still landed the ADR-018
+evidence set. Attention spent on rule prose while writing measurably decays;
+machine gates do not (they fire regardless of attention).
+
+### Decision
+
+Feature development in an adopting repo is explicitly two-stage:
+
+1. **Stage 1 — write functional code.** Goal: working code WITH its behavior
+   tests. Prose pre-reads shrink to a minimum; machine gates stay BLOCKING at
+   their configured severity (a gate is mechanical feedback, not an attention
+   tax — with ADR-018's floor, placement/constants/naming floors are gate-owned);
+   the always-on Gate C cross-check is unchanged.
+2. **Stage 2 — deep-review-refactor is a REQUIRED pipeline stage for feature
+   work.** The profile fan-out applies the full standards corpus with per-lens
+   attention; architecture/quality intent is given to the AI here, where recall
+   is engineered. Consent (ADR-012/016 posture) governs WHEN it runs, never
+   WHETHER: a skipped or postponed Stage 2 leaves the feature explicitly marked
+   `stage-2 pending` — a tracked debt entry in the repo's status doc — never
+   silently "done".
+
+The checklist template frames its sections as Stage-1 (blocks commit — gates)
+vs Stage-2 (review-owned — profiles). Consumer pre-read guidance is updated at
+adoption, not retroactively by this ADR.
+
+**Enforcement (v1, honest).** The `stage-2 pending` record is a skill-driven
+CONVENTION, not a machine gate: the deep-review offer step writes the debt
+entry on decline; no receipt schema, merge check, or hook enforces it (a
+machine-readable Stage-2 receipt is deferred — same deferral register as the
+worker-scoped read set, ADR-018). The calibration session reviews pending
+entries, which is where an unrecorded decline surfaces.
+
+### Consequences
+
+- Writing sessions carry less rule prose; standards enforcement concentrates in
+  the two layers that demonstrably hold: deterministic gates and the
+  high-recall Stage-2 review.
+- A declined Stage 2 lowers the bar VISIBLY when the convention is followed —
+  the debt entry survives session boundaries; making that impossible to skip
+  (receipt + gate) is the deferred hardening above.
+

@@ -16,8 +16,9 @@
    name (whole English words + a blessed-abbreviation allowlist) is the
    consumer's `.claude/code-conventions.md` §Naming and language — an
    OPERATIONAL standard per the code-conventions template. Deliberately NOT
-   enforced: object/type PROPERTY names (wire contracts pin short keys) and the
-   `_` discard. */
+   enforced here: object-literal PROPERTY keys (wire contracts pin short keys)
+   and the `_` discard. TYPE property signatures are owned by the separate
+   `propertyNaming` preset (file-scoped wire exemptions, ADR-018). */
 
 const NAME_TOO_SHORT =
   "Identifier too short (min 3 chars) — this gate is only the length/ASCII floor. For what counts as a meaningful name (English words + the blessed-abbreviation allowlist), see .claude/code-conventions.md §Naming and language.";

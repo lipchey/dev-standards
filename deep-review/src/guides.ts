@@ -7,17 +7,27 @@ import { join } from 'node:path';
 const PACKAGE_ROOT_URL = new URL('../../', import.meta.url);
 const BODY_SEPARATOR = '\n\n';
 
-/* The seven-guide contract: a partial or blank-body checkout must fail preflight,
-   not silently review with a thinner rulebook. */
+/* The nine-file corpus contract (ADR-018 profile rewrite): a partial or
+   blank-body checkout must fail preflight, not silently review with a thinner
+   rulebook. */
 const REQUIRED_TEMPLATE_NAMES = [
-  'architecture-deepening.md',
-  'clean-architecture.md',
-  'core-code-guidelines.md',
-  'language-review-sources.md',
-  'refactoring-checklist.md',
-  'review-output-format.md',
-  'security-review.md',
+  'profile-architecture-and-boundaries.md',
+  'profile-correctness-and-lifecycle.md',
+  'profile-module-depth.md',
+  'profile-naming-and-constants.md',
+  'profile-refactoring-and-smells.md',
+  'profile-security.md',
+  'profile-tests-quality.md',
+  'profile-types-and-contracts.md',
+  'review-contract.md',
 ] as const;
+
+/* TRACEABILITY.md shares the templates dir but is the migration/canary registry,
+   not review corpus: loading it would leak BLINDED canaries into the merged guide
+   bodies and force it into the ADR-016 required-read set. The name is reserved in
+   BOTH source kinds (package templates and consumer overlays) — guides-read.ts
+   filters its overlay enumeration with the same set. */
+export const NON_GUIDE_TEMPLATE_NAMES: ReadonlySet<string> = new Set(['TRACEABILITY.md']);
 
 export const REVIEW_GUIDE_TEMPLATES_DIR = join(
   fileURLToPath(PACKAGE_ROOT_URL),
@@ -80,7 +90,9 @@ export function loadReviewGuides(
 
   let templateNames: string[];
   try {
-    templateNames = listMarkdownFiles(templatesDirectory);
+    templateNames = listMarkdownFiles(templatesDirectory).filter(
+      (name) => !NON_GUIDE_TEMPLATE_NAMES.has(name),
+    );
   } catch {
     return { ok: false, templatesDir: templatesDirectory };
   }
@@ -105,10 +117,21 @@ export function loadReviewGuides(
     return { ok: false, templatesDir: templatesDirectory };
   }
 
+  /* Overlay absence is optional (ENOENT), but any OTHER enumeration error
+     (ENOTDIR, EACCES) must fail closed — an unreadable overlay silently dropped
+     would review with a thinner rulebook than the repo configured. The reserved
+     registry name is excluded here too: a consumer overlay named TRACEABILITY.md
+     would otherwise merge as a repo-extra guide, get broadcast to every profile
+     worker, and could unblind a copied canary registry. */
   let overlayNames: string[];
   try {
-    overlayNames = listMarkdownFiles(overlayDirectory);
-  } catch {
+    overlayNames = listMarkdownFiles(overlayDirectory).filter(
+      (name) => !NON_GUIDE_TEMPLATE_NAMES.has(name),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') {
+      return { ok: false, templatesDir: templatesDirectory };
+    }
     overlayNames = [];
   }
   for (const overlayName of overlayNames) {

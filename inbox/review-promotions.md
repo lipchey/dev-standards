@@ -7,8 +7,9 @@ editing a shared rule directly.
 
 This file is an **input** to `dev-standards`' own review/standards cycle, never
 a direct rule edit: a human (or a later `dev-standards` session) reviews each
-entry and decides whether to fold it into `core-code-guidelines.md`, a review
-guide, an ADR, or the schema/validator. It also doubles as ADR-010
+entry and decides whether to fold it into the owning review profile under
+`agents/review-guide-templates/`, `review-contract.md`, an ADR, or the
+schema/validator. It also doubles as ADR-010
 "extract on second use" evidence - repeated entries are the signal that a
 project-local practice has earned promotion to the shared standard.
 
@@ -39,6 +40,9 @@ deleted - the history is the second-use evidence.
 
 ## Pending
 
+- [ ] 2026-07-15 dev-standards review-recall C2 - types profile: deep immutability at boundaries — the current rule only asks whether shared/returned arrays and objects are `readonly`; `Readonly<T>` is shallow, so a nested mutable field still leaks write access across a boundary. Candidate: prompt for deep-immutability (`ReadonlyArray`/recursive readonly or a frozen structure) on data crossing a published boundary (addition; plan §Tier 2 named it, no old-corpus source — adding it is a new standard, not a reorganization).
+- [ ] 2026-07-15 dev-standards review-recall C2 - tests profile: vacuous async — a test whose assertions run after an unawaited promise (or inside a `.then` the runner never awaits) passes regardless of behavior; the current corpus covers missing-await/floating promises in CODE but has no test-side vacuous-async prompt (addition; plan §Tier 2 named it, no old-corpus source).
+- [ ] 2026-07-15 dev-standards review-recall C2 - correctness profile: stale-callback inertness as a general rule — the migrated React rules cover cleanup/stale-request cancellation and generic resource rules cover timers/listeners, but there is no framework-agnostic prompt that a callback surviving its owner's lifecycle must become inert (addition; plan §Tier 2 named it, no old-corpus source).
 - [ ] 2026-07-15 dev-standards DR-16 gate-C - tests: an ordering-contract regression test (guard-before-config, validate-before-mutate) must use a fixture where the step the guard must PRECEDE would produce a DIFFERENT observable outcome (e.g. a missing/throwing config → a distinct exit code), so reordering the guard past it turns the test red — a happy-fixture test pins the guard's existence, not its ordering, and silently survives the reorder (addition).
 
 ## Promoted

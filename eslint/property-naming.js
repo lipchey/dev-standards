@@ -1,9 +1,9 @@
 import { devStandardsPlugin } from "./plugin.js";
 
-export function constantsHome({ files, ignores } = {}) {
+export function propertyNaming({ files, ignores } = {}) {
   const entry = {
     plugins: { "dev-standards": devStandardsPlugin },
-    rules: { "dev-standards/constants-home": "error" },
+    rules: { "dev-standards/property-naming": "error" },
   };
   if (files) entry.files = files;
   if (ignores) entry.ignores = ignores;

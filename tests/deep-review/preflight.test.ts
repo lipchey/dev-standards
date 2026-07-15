@@ -12,8 +12,19 @@ import type { DeepReviewConfig } from '../../deep-review/src/config.ts';
 import { REVIEW_GUIDE_TEMPLATES_DIR } from '../../deep-review/src/guides.ts';
 import { EXIT_PREFLIGHT } from '../../deep-review/src/types.ts';
 
-const EXPECTED_TEMPLATE_GUIDE_COUNT = 7;
+const EXPECTED_TEMPLATE_GUIDE_COUNT = 9;
 const OVERLAY_BODY = 'OVERLAY CHECKLIST BODY\n';
+const CORPUS_NAMES = [
+  'profile-architecture-and-boundaries.md',
+  'profile-correctness-and-lifecycle.md',
+  'profile-module-depth.md',
+  'profile-naming-and-constants.md',
+  'profile-refactoring-and-smells.md',
+  'profile-security.md',
+  'profile-tests-quality.md',
+  'profile-types-and-contracts.md',
+  'review-contract.md',
+];
 
 function config(overrides: Partial<DeepReviewConfig> = {}): DeepReviewConfig {
   return {
@@ -53,7 +64,7 @@ test('non-gated verbs pass without loading guides', () => {
   }
 });
 
-test('all gated verbs load the seven real package templates without a consumer guides directory', () => {
+test('all gated verbs load the nine real package templates without a consumer guides directory', () => {
   withRoot((root) => {
     const missingOverlay = path.join(root, '.claude', 'review-guides');
     assert.equal(fs.existsSync(missingOverlay), false);
@@ -79,9 +90,11 @@ test('a same-named overlay body is loaded additively alongside its package templ
   withRoot((root) => {
     const overlayDirectory = path.join(root, '.claude', 'review-guides');
     fs.mkdirSync(overlayDirectory, { recursive: true });
+    /* TRACEABILITY.md sorts first but is loader-excluded — a same-named overlay
+       would load as overlay-only and break the additive-merge expectation. */
     const templateName = fs
       .readdirSync(REVIEW_GUIDE_TEMPLATES_DIR)
-      .filter((fileName) => fileName.endsWith('.md'))
+      .filter((fileName) => fileName.endsWith('.md') && fileName !== 'TRACEABILITY.md')
       .sort()[0];
     assert.notEqual(templateName, undefined);
     if (templateName === undefined) return;
@@ -171,15 +184,7 @@ test('an unavailable package template directory fails closed', () => {
 });
 
 test('guide load fails when a canonical template is missing or has a blank body', () => {
-  const names = [
-    'architecture-deepening.md',
-    'clean-architecture.md',
-    'core-code-guidelines.md',
-    'language-review-sources.md',
-    'refactoring-checklist.md',
-    'review-output-format.md',
-    'security-review.md',
-  ];
+  const names = CORPUS_NAMES;
   const withoutOne = loadReviewGuides('/no-overlay', {
     templatesDir: '/templates',
     listMarkdownFiles: () => names.slice(1),
@@ -190,7 +195,7 @@ test('guide load fails when a canonical template is missing or has a blank body'
   const withBlankBody = loadReviewGuides('/no-overlay', {
     templatesDir: '/templates',
     listMarkdownFiles: () => [...names],
-    readFile: (filePath) => (filePath.endsWith('core-code-guidelines.md') ? '  \n' : 'body'),
+    readFile: (filePath) => (filePath.endsWith('review-contract.md') ? '  \n' : 'body'),
   });
   assert.equal(withBlankBody.ok, false);
 
@@ -200,4 +205,66 @@ test('guide load fails when a canonical template is missing or has a blank body'
     readFile: () => 'body',
   });
   assert.equal(complete.ok, true);
+
+  /* The registry is excluded BEFORE the blank-body check: a TRACEABILITY.md listed
+     in the TEMPLATES dir never becomes a loaded guide and cannot fail the corpus as
+     blank. The lister must be directory-aware — the loader reuses it for the overlay
+     dir, and an overlay hit here would sneak the name back in as a repo-overlay. */
+  const withRegistry = loadReviewGuides('/no-overlay', {
+    templatesDir: '/templates',
+    listMarkdownFiles: (directory) =>
+      directory === '/templates' ? [...names, 'TRACEABILITY.md'] : [],
+    readFile: (filePath) => (filePath.endsWith('TRACEABILITY.md') ? '' : 'body'),
+  });
+  assert.equal(withRegistry.ok, true);
+  if (!withRegistry.ok) return;
+  assert.equal(
+    withRegistry.guides.some((guide) => guide.name === 'TRACEABILITY.md'),
+    false,
+  );
+});
+
+test('a consumer overlay named TRACEABILITY.md is reserved and never merges', () => {
+  withRoot((root) => {
+    const overlayDirectory = path.join(root, '.claude', 'review-guides');
+    fs.mkdirSync(overlayDirectory, { recursive: true });
+    fs.writeFileSync(path.join(overlayDirectory, 'TRACEABILITY.md'), OVERLAY_BODY);
+    fs.writeFileSync(path.join(overlayDirectory, 'repo-extra.md'), OVERLAY_BODY);
+
+    const outcome = runPreflight(config(), 'verify', overlayDirectory);
+    assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.machineError.message);
+    if (!outcome.ok) return;
+    assert.equal(
+      outcome.guides.some((guide) => guide.name === 'TRACEABILITY.md'),
+      false,
+      'the reserved registry name must never become a worker-facing guide',
+    );
+    assert.equal(outcome.guides.length, EXPECTED_TEMPLATE_GUIDE_COUNT + 1);
+  });
+});
+
+test('an overlay enumeration error other than ENOENT fails the guide load closed', () => {
+  const enotdir = loadReviewGuides('/overlay-is-a-file', {
+    templatesDir: '/templates',
+    listMarkdownFiles: (directory) => {
+      if (directory === '/templates') return [...CORPUS_NAMES];
+      const error = new Error('ENOTDIR: not a directory') as NodeJS.ErrnoException;
+      error.code = 'ENOTDIR';
+      throw error;
+    },
+    readFile: () => 'body',
+  });
+  assert.equal(enotdir.ok, false);
+
+  const enoent = loadReviewGuides('/no-overlay', {
+    templatesDir: '/templates',
+    listMarkdownFiles: (directory) => {
+      if (directory === '/templates') return [...CORPUS_NAMES];
+      const error = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
+    },
+    readFile: () => 'body',
+  });
+  assert.equal(enoent.ok, true);
 });
