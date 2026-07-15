@@ -12,7 +12,7 @@ decisions. Effectiveness telemetry design: `docs/effectiveness-plan.md`.
 2. The consumer's `.claude/gate-misses.md` — escapes since the last session.
 3. dev-standards `inbox/review-promotions.md` — pending rule candidates.
 4. `agents/review-guide-templates/TRACEABILITY.md` — the profile canary
-   registry + guide→profile migration table (ADR-017): stale ownership or
+   registry + guide→profile migration table (ADR-018): stale ownership or
    an orphaned section surfaces here.
 
 ## Session steps
@@ -49,7 +49,7 @@ decisions. Effectiveness telemetry design: `docs/effectiveness-plan.md`.
      review rules extend the package guides through same-named files in the
      optional `.claude/review-guides/` overlay; reusable rules change the package
      templates instead of copying them into each consumer;
-   - **triage `judgment-missed` escapes per owning profile** (ADR-017):
+   - **triage `judgment-missed` escapes per owning profile** (ADR-018):
      strengthen the profile's rule text, add the blinded canary to
      TRACEABILITY.md, and verify closure replays. Any profile-file edit since
      the last session gets a canary spot-check — its registered canaries must

@@ -2,7 +2,13 @@
 
 Non-blocking, dated. Newest first.
 
-## 2026-07-15 — Supply-chain: detect a source SWAP on an EXISTING dep (inbox, deferred)
+## 2026-07-15 — Supply-chain: detect a source SWAP on an EXISTING dep — DONE (v0.21.0, ADR-017)
+
+Shipped: `isSourceSpec` vendored classifier (no npm-package-arg dep; 0 false-neg
+vs npm-package-arg@14), manifest-side + three lock-only signals (source root spec,
+non-https `resolved`, registry-identity drift vs base lock), precedence
+effective-map, report-only. Design + Gate P/C: `docs/source-swap-detection-plan.md`;
+decision: ADR-017. Original spec kept below for provenance.
 
 `check-new-deps` enforces its positive spec grammar and lockfile pinning only on
 NEW deps (D3 lets any EXISTING-dep spec change pass once a lockfile is staged).
@@ -196,13 +202,15 @@ From the full disposition of `DEEP_REVIEW_FINDINGS.md` (58 findings; see its
 - **DR-14** — findings schema does not enforce 4 slice invariants (`line ≤ 0`,
   empty/duplicate `slice_files`, a `file` not in `slice_files`). Belongs with the
   Phase 5 §5.4 schema-v2 work; low risk (review-only until fix-mode ships).
-- **DR-16** — `check-path` CLI verb still lacks `assertSafeRepoPath` on its
-  repo-relative input (`deep-review/src/cli.ts`). Confinement nit; deep-review
-  writes already route through `writeConfined`.
-- **DEP-02 (auto-update half)** — core `.github/dependabot.yml` does not exist, so
-  the SHA-pinned GitHub Actions in `quality.yml` have no automated bump mechanism.
-  Add a `github-actions` ecosystem entry (S). The consumer template already seeds a
-  dependabot file; this is the *core repo's own* CI.
+- **DR-16** — ✅ DONE (v0.20.2, 2026-07-15). `check-path` now runs
+  `assertSafeRepoPath` argv-first (before config load, mirroring the
+  select-worktree slug gate): an escaping/absolute/glob/magic-pathspec operand
+  is EXIT_USAGE instead of a misleading `editable`. Regression + argv-first
+  ordering tests in `tests/deep-review/cli.test.ts`.
+- **DEP-02 (auto-update half)** — ✅ DONE (v0.20.2, 2026-07-15). Core
+  `.github/dependabot.yml` now bumps the SHA-pinned GitHub Actions weekly
+  (github-actions ecosystem, minor+patch grouped). Distinct from the npm
+  consumer seed — this is the *core repo's own* CI.
 - **Nits (optional):** a core-side coverage/format gate (INT-07 — core has
   eslint+knip but coverage/companion-tests are pilot-side only); narrow
   `RunnerReport.scope` from `string` to `TierName` (RUN-04 — the traversal exploit

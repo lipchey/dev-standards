@@ -14,7 +14,7 @@ import type { MachineError, FindingsFileV2 } from './types.ts';
 import { loadConfig } from './config.ts';
 import type { DeepReviewConfig } from './config.ts';
 import { buildNoTouchSet, isNoTouch, NoTouchSourceError, policyProtectedPaths, selfProtectedPaths } from './no-touch.ts';
-import { readFindings, FindingsValidationError, FindingsConflictError } from './findings-io.ts';
+import { assertSafeRepoPath, readFindings, FindingsValidationError, FindingsConflictError } from './findings-io.ts';
 import { classifyAndBind } from './classify.ts';
 import { commitSlice, realSliceDeps } from './slice.ts';
 import { writeReport, renderReport } from './report.ts';
@@ -281,6 +281,19 @@ function checkPath(rest: string[], deps: CliDeps): number {
   if (operand === undefined) {
     deps.stderr('deep-review check-path: missing <path> operand\n');
     return EXIT_USAGE;
+  }
+  /* Reject an operand that escapes the repo / is absolute / carries glob or magic-pathspec
+     metacharacters as EXIT_USAGE, argv-first (before config) like the select-worktree slug gate.
+     Without this the matcher printed a misleading `editable` for an out-of-repo path the fix verbs
+     later refuse (DR-16); the same `assertSafeRepoPath` floor governs finding paths in the engine. */
+  try {
+    assertSafeRepoPath(operand);
+  } catch (error) {
+    if (error instanceof FindingsValidationError) {
+      deps.stderr(`deep-review check-path: invalid <path> operand ${JSON.stringify(operand)}: ${error.message}\n`);
+      return EXIT_USAGE;
+    }
+    throw error;
   }
   const env = resolveEnv(deps);
   const config = loadConfig(resolve(env.cwd, 'quality.json'));

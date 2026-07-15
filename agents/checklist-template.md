@@ -5,7 +5,7 @@ onboarding seeder copies this file to `.claude/CHECKLIST.md`; replace each
 fill-in prompt with repository-specific commands and rules, then remove this
 paragraph.
 
-Sections 1 and 2 map onto the two-stage doctrine (ADR-018): section 1 is
+Sections 1 and 2 map onto the two-stage doctrine (ADR-019): section 1 is
 STAGE 1's floor — machine gates that block while writing functional code;
 section 2 is STAGE 2's domain — judgment rules the deep-review profiles own,
 applied at review, not held in the writer's head.
@@ -13,7 +13,7 @@ applied at review, not held in the writer's head.
 ## 0. Load order
 
 Fill in the short reading order for project facts, code conventions, relevant
-review guides, and the change brief. Under ADR-018 keep the Stage-1 list
+review guides, and the change brief. Under ADR-019 keep the Stage-1 list
 MINIMAL (facts + the change brief); the full standards corpus is Stage-2
 review material, not a pre-write read.
 

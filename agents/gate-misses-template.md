@@ -3,7 +3,7 @@
 Append-only ledger of defects that an earlier quality stage could or should
 have caught, but that reached a later stage instead (Gate C review,
 deep-review, runtime, a user report). Two kinds of escape share it: gaps a
-deterministic `verify` check should have closed, and — since ADR-017 —
+deterministic `verify` check should have closed, and — since ADR-018 —
 judgment escapes an owning review profile missed (`judgment-missed`).
 Copied into a consumer repo as `.claude/gate-misses.md` at onboarding;
 entries are counted by the calibration session (`docs/CALIBRATION.md` in
@@ -30,7 +30,7 @@ Append one checklist line per miss, newest at the bottom of `## Pending`:
   report-only check fired and was ignored (`report-only-ignored`), the
   check runs in a tier the workflow skipped (`wrong-tier`), or the rule is
   judgment-owned and the owning review profile missed it
-  (`judgment-missed`, ADR-017).
+  (`judgment-missed`, ADR-018).
 - `<fix route>` — `consumer:<quality.json tweak / guide rule>`,
   `core:<analyzer/runner/schema change>`, or `profile:<name>` (the owning
   review profile of a `judgment-missed` escape). A core or profile route

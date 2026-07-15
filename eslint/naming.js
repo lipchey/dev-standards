@@ -18,7 +18,7 @@
    OPERATIONAL standard per the code-conventions template. Deliberately NOT
    enforced here: object-literal PROPERTY keys (wire contracts pin short keys)
    and the `_` discard. TYPE property signatures are owned by the separate
-   `propertyNaming` preset (file-scoped wire exemptions, ADR-017). */
+   `propertyNaming` preset (file-scoped wire exemptions, ADR-018). */
 
 const NAME_TOO_SHORT =
   "Identifier too short (min 3 chars) — this gate is only the length/ASCII floor. For what counts as a meaningful name (English words + the blessed-abbreviation allowlist), see .claude/code-conventions.md §Naming and language.";

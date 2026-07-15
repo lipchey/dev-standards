@@ -206,3 +206,133 @@ test('new dep + a broken staged lockfile -> operational error blocks despite rep
     cleanup(fx);
   }
 });
+
+/* ADR-017: existing-dep source swap end to end. A manifest-only source swap would
+   be a WEAK test (D8 reports every manifest-only spec change even without source
+   detection), so `a` is a committed existing registry dep and the swap ships WITH
+   a matching lockfile — D8 is satisfied, leaving the source classification as the
+   finding under test. */
+function commitExistingDepA(fx: Fixture): void {
+  fs.writeFileSync(
+    path.join(fx.repo, 'package.json'),
+    JSON.stringify({ name: 'fixture-pkg', version: '1.0.0', dependencies: { a: '^1.2.3' }, devDependencies: {} }, null, 2),
+  );
+  fs.writeFileSync(
+    path.join(fx.repo, 'package-lock.json'),
+    JSON.stringify(
+      {
+        name: 'fixture-pkg',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-pkg', version: '1.0.0', dependencies: { a: '^1.2.3' } },
+          'node_modules/a': { version: '1.2.3', resolved: 'https://registry.npmjs.org/a/-/a-1.2.3.tgz' },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  git(fx.repo, ['add', '--', 'package.json', 'package-lock.json'], fx.env);
+  git(fx.repo, ['commit', '-q', '-m', 'add existing dep a'], fx.env);
+}
+
+test('an existing-dep source swap (manifest + matching lock) -> report-only fail, runner exits 0', () => {
+  const fx = setupRepo();
+  try {
+    commitExistingDepA(fx);
+    const gitSpec = 'git+ssh://git@example.com/u/a.git';
+    stage(fx, 'package.json', JSON.stringify({ name: 'fixture-pkg', version: '1.0.0', dependencies: { a: gitSpec }, devDependencies: {} }, null, 2));
+    stage(
+      fx,
+      'package-lock.json',
+      JSON.stringify(
+        {
+          name: 'fixture-pkg',
+          version: '1.0.0',
+          lockfileVersion: 3,
+          requires: true,
+          packages: {
+            '': { name: 'fixture-pkg', version: '1.0.0', dependencies: { a: gitSpec } },
+            'node_modules/a': { version: '1.2.3', resolved: `${gitSpec}#abc123` },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const run = runStaged(fx);
+    assert.equal(run.status, 0, `report-only finding must not fail the tier; stderr:\n${run.stderr}`);
+    assert.equal(record(fx).status, 'fail');
+  } finally {
+    cleanup(fx);
+  }
+});
+
+test('a lock-only HTTPS package swap is caught only via the committed base lock -> report-only fail, exits 0', () => {
+  const fx = setupRepo();
+  try {
+    /* Base lock resolves `a` from …/a/-/a-1.2.3.tgz. Stage a lock that keeps the
+       same host but pivots to a DIFFERENT package (…/evil/…). Signals 1 and 2 pass
+       (registry root spec, https resolved); ONLY signal 3's identity diff against
+       the loaded HEAD lock catches it — so deleting main()'s base-lock read turns
+       this red (core-code-guidelines changed-behavior testing). */
+    commitExistingDepA(fx);
+    stage(
+      fx,
+      'package-lock.json',
+      JSON.stringify(
+        {
+          name: 'fixture-pkg',
+          version: '1.0.0',
+          lockfileVersion: 3,
+          requires: true,
+          packages: {
+            '': { name: 'fixture-pkg', version: '1.0.0', dependencies: { a: '^1.2.3' } },
+            'node_modules/a': { version: '9.9.9', resolved: 'https://registry.npmjs.org/evil/-/evil-9.9.9.tgz' },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const run = runStaged(fx);
+    assert.equal(run.status, 0, `report-only finding must not fail the tier; stderr:\n${run.stderr}`);
+    assert.equal(record(fx).status, 'fail');
+  } finally {
+    cleanup(fx);
+  }
+});
+
+test('a lock-only source swap (manifest unstaged) -> report-only fail, runner exits 0', () => {
+  const fx = setupRepo();
+  try {
+    commitExistingDepA(fx);
+    /* Only the lockfile is staged: `a`'s resolved is swapped to a git source while
+       package.json still says ^1.2.3 — the vector invisible to the manifest path. */
+    stage(
+      fx,
+      'package-lock.json',
+      JSON.stringify(
+        {
+          name: 'fixture-pkg',
+          version: '1.0.0',
+          lockfileVersion: 3,
+          requires: true,
+          packages: {
+            '': { name: 'fixture-pkg', version: '1.0.0', dependencies: { a: '^1.2.3' } },
+            'node_modules/a': { version: '1.2.3', resolved: 'git+ssh://git@example.com/u/a.git#abc123' },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const run = runStaged(fx);
+    assert.equal(run.status, 0, `report-only finding must not fail the tier; stderr:\n${run.stderr}`);
+    assert.equal(record(fx).status, 'fail');
+  } finally {
+    cleanup(fx);
+  }
+});

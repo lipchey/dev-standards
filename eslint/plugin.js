@@ -14,7 +14,7 @@ const CONSTANTS_HOME_MESSAGE =
    numeric literal, expressionless template, each also under a TS `as` cast).
    Deliberately NOT caught here: arithmetic operands (`45 * 60 * 1000`) belong to
    the inlineLiterals preset; object/array literals and derived values stay
-   review-owned (ADR-017, naming-and-constants profile). */
+   review-owned (ADR-018, naming-and-constants profile). */
 function isPrimitiveLiteralInit(node) {
   if (!node) return false;
   if (node.type === "TSAsExpression") return isPrimitiveLiteralInit(node.expression);

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 const PACKAGE_ROOT_URL = new URL('../../', import.meta.url);
 const BODY_SEPARATOR = '\n\n';
 
-/* The nine-file corpus contract (ADR-017 profile rewrite): a partial or
+/* The nine-file corpus contract (ADR-018 profile rewrite): a partial or
    blank-body checkout must fail preflight, not silently review with a thinner
    rulebook. */
 const REQUIRED_TEMPLATE_NAMES = [

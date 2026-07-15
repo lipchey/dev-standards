@@ -2,8 +2,8 @@
 
 - **Status:** Draft — pending owner approval (Gate P critique pending)
 - **Date:** 2026-07-15
-- **Owner ADRs:** ADR-017 (recall system; amends ADR-014, supersedes the
-  ownership half of ADR-015) + ADR-018 (two-stage development doctrine)
+- **Owner ADRs:** ADR-018 (recall system; amends ADR-014, supersedes the
+  ownership half of ADR-015) + ADR-019 (two-stage development doctrine)
 
 ## Evidence
 
@@ -32,7 +32,7 @@ Root causes (verified against the run's transcript and configs):
    at module-scope consts BY DESIGN and hands the rest to review (ADR-014,
    ADR-015) — but nothing makes the review actually run that specific check.
 
-## Decision shape (ADR-017)
+## Decision shape (ADR-018)
 
 A rule class may stay review-owned ONLY if a machine gate is impossible or too
 noisy — and then it must have a named profile owner (Tier 2) and, once it
@@ -187,7 +187,7 @@ contradictions, rule loopholes/over-reach) as a MANDATORY pass, not optional;
   workers (separate runtimes the Stop/SubagentStop hook never sees — same
   category as the Codex cross-run); in-session Agent-tool fan-out under an
   attributed pass stays all-guides until a worker-scoped required set is
-  designed (deferred, recorded in ADR-017).
+  designed (deferred, recorded in ADR-018).
 - Overlay mechanism: same-named consumer overlays now extend profile files.
   Old-named overlays keep being READ by the main session (unmatched name =
   repo-only extra guide) but have no owning WORKER (Gate P F5) — so during
@@ -207,7 +207,7 @@ contradictions, rule loopholes/over-reach) as a MANDATORY pass, not optional;
 - The independent Codex cross-run stays as-is — it is the recall-diversity
   backstop, not replaced by profiles.
 
-## Two-stage development doctrine (owner decision 2026-07-15 → ADR-018)
+## Two-stage development doctrine (owner decision 2026-07-15 → ADR-019)
 
 Prose restrictions at WRITE time are weakly followed and dilute attention —
 so feature development becomes explicitly two-stage:
@@ -225,7 +225,7 @@ so feature development becomes explicitly two-stage:
 
 **The decline loophole (Gate P F3):** if Stage 2 were optional, declined
 reviews would leave Stage-1-reduced-standards code with no recovery — the
-doctrine would LOWER quality. So ADR-018 states: in a two-stage repo, Stage 2
+doctrine would LOWER quality. So ADR-019 states: in a two-stage repo, Stage 2
 is a REQUIRED pipeline stage for feature work — consent governs WHEN it runs,
 not WHETHER; a skipped/postponed Stage 2 leaves the feature explicitly marked
 `stage-2 pending` (a tracked debt entry in the repo's status/memory doc), it
@@ -233,7 +233,7 @@ is never silently "done". Two always-on layers survive in Stage 1 regardless:
 the machine gates and the Gate C cross-check (global rule, unchanged) — the
 doctrine removes prose PRE-READS from writing, not review coverage.
 
-Consequences in this batch: ADR-018 records the doctrine incl. the pending
+Consequences in this batch: ADR-019 records the doctrine incl. the pending
 debt rule; `agents/checklist-template.md` frames its split explicitly as
 Stage-1 (blocks commit — gates) vs Stage-2 (review-owned — profiles); the
 deep-review-refactor skill's trigger section names the two-stage flow as the
@@ -266,7 +266,7 @@ code" pre-reads is adoption work (follow-up task, out of scope here).
 
 One branch (`feature/review-recall`), three commits, one PR, tag after merge:
 
-- **C1 (Tier 1):** 3 rule changes + tests + template seeds + ADR-017.
+- **C1 (Tier 1):** 3 rule changes + tests + template seeds + ADR-018.
   Implementation delegated to Codex (full spec in brief; ADR-014 mechanism and
   `constants-home.js`/`naming.js` as reference); orchestrator runs the tests
   and reviews the diff.
@@ -277,7 +277,7 @@ One branch (`feature/review-recall`), three commits, one PR, tag after merge:
   (orchestrator-owned — rule-bearing text). Doc-lens Gate C on this commit is
   mandatory before it is considered done.
 - **C3 (Tier 3 + doctrine):** gate-misses-template + CALIBRATION edits +
-  ADR-018 + checklist-template two-stage framing + skill trigger-section note
+  ADR-019 + checklist-template two-stage framing + skill trigger-section note
   (orchestrator; small).
 
 Gate C (read-only Codex cross-check) runs on the full branch diff before the
@@ -313,11 +313,11 @@ traceability table, and the mandatory doc-lens Gate C.
    test; `npm test` + lint + typecheck + build green for the whole branch.
 2. Gate-proof, DURABLE: minimal offense-shaped fixtures for all 18
    machine-catchable PR-#25 classes live in the rule tests permanently; the
-   one-time run against the retained pilot state is documented in ADR-017.
+   one-time run against the retained pilot state is documented in ADR-018.
 3. Traceability: every normative line of the old 7-guide corpus mapped to a
    profile section (table committed with C2); doc-lens Gate C reports no lost
    facts and no new contradictions.
 4. Skill body: profile fan-out + coverage matrix contract present; ADR-016
    mechanism intact (`deep-review` tests green after the guides.ts change).
 5. Seed parity: consumer template + `templates/consumer/**` updated in C1.
-6. ADR-017 recorded; ADR-014/015 cross-referenced (amend/supersede notes).
+6. ADR-018 recorded; ADR-014/015 cross-referenced (amend/supersede notes).

@@ -336,7 +336,71 @@ A model-independent hard gate, shipped in dev-standards so every consumer inheri
 
 ---
 
-## ADR-017 — Review-owned rule classes get named owners: gate floor, profile corpus, recall ratchet
+## ADR-017 — check-new-deps flags a source SWAP on an existing dependency
+
+- **Status:** Accepted
+- **Date:** 2026-07-15
+
+### Context
+
+`check-new-deps` enforced its positive spec grammar and lockfile pinning only on
+NEW deps; D3 deliberately lets a lockfile-proven registry RANGE change on an
+existing dep pass. That left the security-critical gap: an existing dep silently
+re-pointed from a registry version/range/tag to a git repo, tarball URL, `npm:`
+alias, or local path (a supply-chain source SWAP) passed unflagged. A v0.20.x
+attempt was backed out because a `://` regex is not a robust classifier (misses
+scp-git `git@host:` and bare `user/repo`) and because the lock-only vector,
+section precedence, and blocking posture were undecided. Design +
+Gate P/C: `docs/source-swap-detection-plan.md`.
+
+### Decision
+
+- **Scope: source-swap only.** A registry range/tag change on an existing dep
+  stays passing (the D3 contract); only a change to a non-registry SOURCE is
+  flagged. Grammar-tightening on changed deps is explicitly deferred.
+- **A vendored classifier, no runtime dependency.** `npm-package-arg` is
+  unavailable to a tool that imports only `node:` builtins and runs from
+  `vendor/` in every consumer (a top-level import would hard-crash the gate
+  before its own error handling). `isSourceSpec` is a fail-closed port of
+  npm-package-arg's registry-vs-source partition — source iff the spec starts
+  with `.`, contains `\`, contains `:` or `/`, or ends `.tgz`/`.tar`/`.tar.gz`;
+  else registry. Verified against `npm-package-arg@14` (0 false negatives / 84
+  specs). No `file:vendor/dev-standards` exemption in the classifier (a
+  registry→vendor-path change is a real swap); the sanctioned vendored dep is
+  exempt naturally because an unchanged dep has no delta. An `npm:` alias is
+  deliberately treated as source.
+- **The lock-only vector is inspected too.** Because `npm ci` installs the lock's
+  `resolved` verbatim, a swap that leaves `package.json` unchanged is caught by
+  three staged-lock signals for existing deps: a source root spec, a non-https
+  `resolved`, and a `resolved` registry-identity (host + package path) that
+  drifts from the base HEAD lock — the last catches an https↔https swap including
+  a same-host pivot to a different package. `link:true` (local/workspace)
+  resolutions are exempt. Residual ceilings (documented): a `link:` swap and a
+  first-time tarball with no base entry to diff.
+- **Precedence, not rejection.** Cross-section duplicate names are resolved by an
+  effective map (optional > deps > dev), not rejected — npm permits a name in
+  more than one section.
+- **Report-only.** Source-swap findings ride the existing exit-1 channel; the gate
+  stays `mode: "report-only"` in both `quality.json` and the seed. The
+  report-only → blocking flip is a separate CALIBRATION decision.
+
+### Consequences
+
+- The gate's registration shape is unchanged (mode / exit codes / skip / timeout),
+  so there is no seed-config delta — the behavior lives entirely inside the tool,
+  and both `quality.json` and `templates/consumer/quality.starter.json` stay as
+  they were (confirmed same batch).
+- A workspace repo does not false-fail: `link:true` resolutions are exempt from
+  the URL signals.
+- The residual lock-only ceilings (`link:` swaps; first-time same-registry
+  tarballs with no base entry) are honest gaps, upgradable later by pinning the
+  expected registry host in `quality.json`.
+- Findings are non-blocking until a calibration session flips the gate with real
+  catch evidence and zero operational noise.
+
+---
+
+## ADR-018 — Review-owned rule classes get named owners: gate floor, profile corpus, recall ratchet
 
 - **Status:** Accepted
 - **Date:** 2026-07-15
@@ -411,7 +475,7 @@ parity.
 
 ---
 
-## ADR-018 — Two-stage development: functional first, standards at review
+## ADR-019 — Two-stage development: functional first, standards at review
 
 - **Status:** Accepted
 - **Date:** 2026-07-15
@@ -420,7 +484,7 @@ parity.
 ### Context
 
 Prose restrictions at write time are weakly followed: the pilot wrote code under
-mandatory pre-reads (conventions, checklist, guides) and still landed the ADR-017
+mandatory pre-reads (conventions, checklist, guides) and still landed the ADR-018
 evidence set. Attention spent on rule prose while writing measurably decays;
 machine gates do not (they fire regardless of attention).
 
@@ -431,7 +495,7 @@ Feature development in an adopting repo is explicitly two-stage:
 1. **Stage 1 — write functional code.** Goal: working code WITH its behavior
    tests. Prose pre-reads shrink to a minimum; machine gates stay BLOCKING at
    their configured severity (a gate is mechanical feedback, not an attention
-   tax — with ADR-017's floor, placement/constants/naming floors are gate-owned);
+   tax — with ADR-018's floor, placement/constants/naming floors are gate-owned);
    the always-on Gate C cross-check is unchanged.
 2. **Stage 2 — deep-review-refactor is a REQUIRED pipeline stage for feature
    work.** The profile fan-out applies the full standards corpus with per-lens
@@ -449,7 +513,7 @@ adoption, not retroactively by this ADR.
 CONVENTION, not a machine gate: the deep-review offer step writes the debt
 entry on decline; no receipt schema, merge check, or hook enforces it (a
 machine-readable Stage-2 receipt is deferred — same deferral register as the
-worker-scoped read set, ADR-017). The calibration session reviews pending
+worker-scoped read set, ADR-018). The calibration session reviews pending
 entries, which is where an unrecorded decline surfaces.
 
 ### Consequences
@@ -460,3 +524,4 @@ entries, which is where an unrecorded decline surfaces.
 - A declined Stage 2 lowers the bar VISIBLY when the convention is followed —
   the debt entry survives session boundaries; making that impossible to skip
   (receipt + gate) is the deferred hardening above.
+

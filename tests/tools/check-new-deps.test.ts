@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isAllowedSpec, evaluate, OperationalError } from '../../tools/check-new-deps.mjs';
+import { isAllowedSpec, isSourceSpec, evaluate, OperationalError } from '../../tools/check-new-deps.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.join(HERE, '..', '..', 'tools', 'check-new-deps.mjs');
@@ -261,6 +261,247 @@ test('evaluate: a lockfile whose packages is missing or non-object is operationa
   assert.throws(
     () => evaluate({ stagedManifest: { dependencies: {} }, stagedLockfile: makeLockfile([] as unknown as Record<string, unknown>), lockfileStaged: true }),
     OperationalError,
+  );
+});
+
+/* ADR-017 — source-swap on an EXISTING dep. */
+
+/* Both lists double as the isSourceSpec classifier proof (faithful to
+   npm-package-arg@14's registry-vs-source partition): deleting a rule from the
+   classifier turns a specific spec here red. `.zip`/`.tar.bz2` are npa-registry
+   and MUST stay registry; the `npm:` alias is npa-registry but DELIBERATELY a
+   source (you declare `a`, install `other`). */
+const REGISTRY_SPECS = [
+  '1.2.3', '^1.2.3', '~1.2.3', '>=1.0.0', '<=2', '1.x', '*', '', 'latest', 'next', 'beta',
+  'foo.bar', 'a.b.c', 'x.tar.bz2', 'pkg.zip', '^1 || ^2', '1.2.3 - 2.0.0', '1.2.3+build',
+];
+const SOURCE_SPECS = [
+  'git+ssh://git@h/u/r.git', 'git+https://github.com/u/r.git', 'git://h/r.git', 'github:u/r', 'gitlab:u/r',
+  'bitbucket:u/r', 'u/r', 'git@github.com:u/r.git', 'npm:other@^1', 'https://x/y.tgz', 'http://x/y.tar.gz',
+  'file:vendor/dev-standards', 'file:../x', './x', '../x', '/abs', '~/home', 'pkg.tgz', 'foo.tar',
+  'foo.tar.gz', 'FOO.TGZ', '.', '..', '.vendor', '.\\pkg',
+  /* `pkg\subdir` isolates the backslash rule: no leading `.`, no `:`/`/`, no
+     archive suffix, so ONLY `includes('\\')` classifies it — delete that rule and
+     this fixture turns red (testing-guide: fixtures outside the generic fallback). */
+  'pkg\\subdir',
+];
+
+test('ADR-017 classifier: registry version/range/tag specs are not sources', () => {
+  for (const s of REGISTRY_SPECS) assert.ok(!isSourceSpec(s), `${JSON.stringify(s)} should be registry`);
+});
+
+test('ADR-017 classifier: git/remote/alias/file/path/archive specs are sources', () => {
+  for (const s of SOURCE_SPECS) assert.ok(isSourceSpec(s), `${JSON.stringify(s)} should be source`);
+});
+
+test('ADR-017 classifier: a non-string spec is fail-closed to source', () => {
+  for (const bad of [null, undefined, 42, {}, []] as unknown[]) assert.ok(isSourceSpec(bad));
+});
+
+/* Existing dep `a` is `^1.2.3` in base; stage a change to `spec` with a matching
+   lockfile so D8 is satisfied and the source classification is the sole finding. */
+function swapCase(spec: string): string[] {
+  return evaluate({
+    baseManifest: { dependencies: { a: '^1.2.3' } },
+    stagedManifest: { dependencies: { a: spec } },
+    stagedLockfile: makeLockfile({ '': { dependencies: { a: spec } }, 'node_modules/a': {} }),
+    lockfileStaged: true,
+  });
+}
+
+test('evaluate: an existing dep changed to a source spec is a source swap (manifest-side)', () => {
+  for (const spec of [
+    'git+ssh://git@h/u/r.git', 'github:u/r', 'u/r', 'git@github.com:u/r.git', 'npm:other@^1',
+    'file:../x', './x', '/abs', 'https://x.tgz', 'pkg.tgz', '.vendor',
+  ]) {
+    const findings = swapCase(spec);
+    assert.ok(
+      findings.some((f: string) => /existing dependency "a" changed to a non-registry source/.test(f)),
+      `${JSON.stringify(spec)} must flag a source swap; got ${JSON.stringify(findings)}`,
+    );
+  }
+});
+
+test('evaluate: an existing dep range/tag change stays allowed (D3 preserved)', () => {
+  for (const spec of ['>=1.0.0', 'latest', '*', '1.x', 'x.tar.bz2', 'pkg.zip']) {
+    assert.deepEqual(swapCase(spec), [], `${JSON.stringify(spec)} must NOT flag`);
+  }
+});
+
+test('evaluate: removing a source spec (source -> registry) is not a swap', () => {
+  assert.deepEqual(
+    evaluate({
+      baseManifest: { dependencies: { a: 'github:u/r' } },
+      stagedManifest: { dependencies: { a: '^1.2.3' } },
+      stagedLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': {} }),
+      lockfileStaged: true,
+    }),
+    [],
+  );
+});
+
+test('evaluate: the vendored dep is exempt when unchanged but a registry->vendor swap flags (no classifier exemption)', () => {
+  const V = 'file:vendor/dev-standards';
+  assert.deepEqual(
+    evaluate({
+      baseManifest: { dependencies: { d: V } },
+      stagedManifest: { dependencies: { d: V } },
+      stagedLockfile: makeLockfile({ '': { dependencies: { d: V } }, 'node_modules/d': { link: true, resolved: 'vendor/dev-standards' } }),
+      lockfileStaged: true,
+    }),
+    [],
+  );
+  assert.ok(swapCase(V).some((f: string) => /existing dependency "a" changed to a non-registry source/.test(f)));
+});
+
+test('evaluate: a lock-only source swap (manifest unstaged) is caught via the resolved scheme (signal 2)', () => {
+  const findings = evaluate({
+    baseManifest: { dependencies: { a: '^1.2.3' } },
+    stagedManifest: null,
+    stagedLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { resolved: 'git+ssh://git@h/u/r.git' } }),
+    lockfileStaged: true,
+  });
+  assert.ok(findings.some((f: string) => /existing dependency "a" resolves to a non-registry source/.test(f)));
+});
+
+test('evaluate: a lock root spec swapped to a source while the manifest stays registry is caught (signal 1)', () => {
+  const findings = evaluate({
+    baseManifest: { dependencies: { a: '^1.2.3' } },
+    stagedManifest: { dependencies: { a: '^1.2.3' } },
+    stagedLockfile: makeLockfile({
+      '': { dependencies: { a: 'github:u/r' } },
+      'node_modules/a': { resolved: 'https://registry.npmjs.org/a/-/a-1.2.3.tgz' },
+    }),
+    lockfileStaged: true,
+  });
+  assert.ok(findings.some((f: string) => /existing dependency "a" is pinned to a non-registry source/.test(f)));
+});
+
+test('evaluate: an arbitrary-tarball lock swap (both https, different host) is caught by identity-drift (signal 3)', () => {
+  const findings = evaluate({
+    baseManifest: { dependencies: { a: '^1.2.3' } },
+    stagedManifest: null,
+    baseLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { resolved: 'https://registry.npmjs.org/a/-/a-1.2.3.tgz' } }),
+    stagedLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { resolved: 'https://evil.example/a.tgz' } }),
+    lockfileStaged: true,
+  });
+  assert.ok(findings.some((f: string) => /changed its resolved package/.test(f) && /evil\.example/.test(f)));
+});
+
+test('evaluate: a SAME-host pivot to a different package is caught by identity-drift (Gate C P1)', () => {
+  /* `…/a/-/a-1.2.3.tgz` -> `…/evil/-/evil-9.9.9.tgz` keeps the host but swaps the
+     package; a host-only comparison would miss it. npm ci installs evil verbatim. */
+  const findings = evaluate({
+    baseManifest: { dependencies: { a: '^1.2.3' } },
+    stagedManifest: null,
+    baseLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { resolved: 'https://registry.npmjs.org/a/-/a-1.2.3.tgz' } }),
+    stagedLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { resolved: 'https://registry.npmjs.org/evil/-/evil-9.9.9.tgz' } }),
+    lockfileStaged: true,
+  });
+  assert.ok(findings.some((f: string) => /changed its resolved package/.test(f)));
+});
+
+test('evaluate: a present-but-malformed existing-dep lock entry is flagged, not passed (N1 value-shape)', () => {
+  for (const bad of [null, 7, []] as unknown[]) {
+    const findings = evaluate({
+      baseManifest: { dependencies: { a: '^1.2.3' } },
+      stagedManifest: null,
+      stagedLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': bad }),
+      lockfileStaged: true,
+    });
+    assert.ok(
+      findings.some((f: string) => /has a malformed lock entry/.test(f)),
+      `node_modules/a = ${JSON.stringify(bad)} must be flagged, not silently passed`,
+    );
+  }
+});
+
+test('evaluate: a link:true resolution (workspace / vendored) is not a source-swap false positive', () => {
+  assert.deepEqual(
+    evaluate({
+      baseManifest: { dependencies: { a: '^1.2.3' } },
+      stagedManifest: null,
+      stagedLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { link: true, resolved: 'packages/a' } }),
+      lockfileStaged: true,
+    }),
+    [],
+  );
+});
+
+/* Lock-only resolved-fingerprint edge cases (Gate C round 2). */
+function driftCase(baseResolved: string, stagedResolved: string, name = 'a'): string[] {
+  return evaluate({
+    baseManifest: { dependencies: { [name]: '^1.2.3' } },
+    stagedManifest: null,
+    baseLockfile: makeLockfile({ '': { dependencies: { [name]: '^1.2.3' } }, [`node_modules/${name}`]: { resolved: baseResolved } }),
+    stagedLockfile: makeLockfile({ '': { dependencies: { [name]: '^1.2.3' } }, [`node_modules/${name}`]: { resolved: stagedResolved } }),
+    lockfileStaged: true,
+  });
+}
+
+test('evaluate: a query-addressed package swap is caught by the fingerprint (Gate C R2 #1)', () => {
+  assert.ok(
+    driftCase('https://reg.ex/download?pkg=a&version=1', 'https://reg.ex/download?pkg=evil&version=9').some((f: string) =>
+      /changed its resolved package/.test(f),
+    ),
+  );
+});
+
+test('evaluate: a link that indirects into node_modules is not exempt — it is flagged (Gate C R2 #2)', () => {
+  const findings = evaluate({
+    baseManifest: { dependencies: { a: '^1.2.3' } },
+    stagedManifest: null,
+    stagedLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { link: true, resolved: 'node_modules/evil' } }),
+    lockfileStaged: true,
+  });
+  assert.ok(findings.some((f: string) => /resolves to a non-registry source/.test(f)));
+});
+
+test('evaluate: a flat-CDN version bump (no /-/ marker) is not a false positive, but a pivot is caught (Gate C R2 #3)', () => {
+  assert.deepEqual(driftCase('https://cdn.ex/download/a-1.0.0.tgz', 'https://cdn.ex/download/a-1.0.1.tgz'), []);
+  assert.ok(driftCase('https://cdn.ex/download/a-1.0.0.tgz', 'https://cdn.ex/download/evil-9.tgz').some((f: string) => /changed its resolved package/.test(f)));
+});
+
+test('evaluate: a digit-bearing package name is not confused by the fingerprint (base64 -> base32)', () => {
+  assert.ok(
+    driftCase('https://registry.npmjs.org/base64/-/base64-1.0.0.tgz', 'https://registry.npmjs.org/base32/-/base32-1.0.0.tgz', 'base64').some(
+      (f: string) => /changed its resolved package/.test(f),
+    ),
+  );
+});
+
+test('evaluate: a same-host version bump is not an identity-drift finding', () => {
+  assert.deepEqual(
+    evaluate({
+      baseManifest: { dependencies: { a: '^1.2.3' } },
+      stagedManifest: null,
+      baseLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { resolved: 'https://registry.npmjs.org/a/-/a-1.2.3.tgz' } }),
+      stagedLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { resolved: 'https://registry.npmjs.org/a/-/a-1.2.4.tgz' } }),
+      lockfileStaged: true,
+    }),
+    [],
+  );
+});
+
+test('evaluate: effective-spec precedence — an optionalDependencies swap wins over a clean dependencies entry', () => {
+  const findings = evaluate({
+    baseManifest: { dependencies: { a: '^1.2.3' }, optionalDependencies: { a: '^1.2.3' } },
+    stagedManifest: { dependencies: { a: '^1.2.3' }, optionalDependencies: { a: 'git+ssh://git@h/u/r.git' } },
+    stagedLockfile: makeLockfile({ '': { optionalDependencies: { a: 'git+ssh://git@h/u/r.git' } }, 'node_modules/a': {} }),
+    lockfileStaged: true,
+  });
+  assert.ok(findings.some((f: string) => /existing dependency "a" changed to a non-registry source/.test(f)));
+});
+
+test('evaluate: a name in both dependencies and optionalDependencies (clean) is not a false positive', () => {
+  assert.deepEqual(
+    evaluate({
+      baseManifest: { dependencies: { a: '^1.2.3' }, optionalDependencies: { a: '^1.2.3' } },
+      stagedManifest: { dependencies: { a: '^1.2.3' }, optionalDependencies: { a: '^1.2.3' } },
+      stagedLockfile: makeLockfile({ '': { dependencies: { a: '^1.2.3' } }, 'node_modules/a': { resolved: 'https://registry.npmjs.org/a/-/a-1.2.3.tgz' } }),
+      lockfileStaged: true,
+    }),
+    [],
   );
 });
 

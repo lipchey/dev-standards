@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /* INT-06 integrity guard, strengthened in the guides revamp (Gate-P F5),
-   re-keyed to the profile corpus (ADR-017 rewrite): the canonical corpus is
+   re-keyed to the profile corpus (ADR-018 rewrite): the canonical corpus is
    the *.md names in agents/review-guide-templates/ minus TRACEABILITY.md (the
    migration/canary registry the loader excludes). This test pins that set
    from two independent directions:

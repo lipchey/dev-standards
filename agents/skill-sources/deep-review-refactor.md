@@ -25,7 +25,7 @@ judge those files with enough surrounding context for the architecture calls.
 Declined = do not re-ask for the same feature. A human can still invoke the
 skill manually at any scope.
 
-Under the two-stage doctrine (ADR-018) this pass IS the standard quality stage
+Under the two-stage doctrine (ADR-019) this pass IS the standard quality stage
 for feature work, not an optional extra: Stage 1 writes functional code under
 the machine gates alone; the standards corpus is applied HERE, where per-lens
 attention is engineered. Consent still gates every run - it decides WHEN the
@@ -33,7 +33,7 @@ stage happens, not WHETHER it is part of the work. On a declined or postponed
 offer, the offering session RECORDS `stage-2 pending` for that feature in the
 repo's status doc (e.g. `.claude/memory/status.md`) in the same turn - this
 recording is the skill's own step, a convention with no machine gate behind it
-(v1 limit, ADR-018 §Enforcement); a decline is never a silently waived stage. Two modes only:
+(v1 limit, ADR-019 §Enforcement); a decline is never a silently waived stage. Two modes only:
 
 - `review-only` (default) - prioritized findings, change nothing.
 - `review-and-refactor` (explicit ask, e.g. `/deep-review --fix`, or upfront
@@ -74,7 +74,7 @@ decisions for itself.
   blocks the Stop hook. Worker briefs are narrower (one profile each, below),
   but that never substitutes for the main session's own in-session reads.
 
-**Profile fan-out (ADR-017) - the review's recall engine.** Scope permitting,
+**Profile fan-out (ADR-018) - the review's recall engine.** Scope permitting,
 dispatch ONE review worker per applicable lens profile, each briefed to read
 and apply exactly TWO corpus files - `review-contract.md` + its assigned
 `profile-<lens>.md` - plus the same-named consumer overlay if one exists.
@@ -91,7 +91,7 @@ one worker carries the whole corpus. Rules:
 - v1 fan-out runs on EXTERNAL workers (separate runtimes the Stop/SubagentStop
   hooks never see - the same category as the Codex cross-run). In-session
   Agent-tool fan-out under an attributed pass stays all-guides until a
-  worker-scoped required set is designed (deferred, ADR-017).
+  worker-scoped required set is designed (deferred, ADR-018).
 - The main session MERGES per-profile findings with provenance labels,
   adversarially verifies them (same doctrine as the Codex cross-run: verdict +
   evidence, never "the worker said so"), and assembles a **coverage matrix** -
