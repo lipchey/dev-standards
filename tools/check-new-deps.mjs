@@ -12,6 +12,18 @@
  * makes a hallucinated/typosquatted package impossible to introduce without a
  * lockfile that actually resolved it.
  *
+ * Every EXISTING dependency (ADR-017): a spec CHANGE to a non-registry SOURCE
+ * (git / URL / tarball / npm: alias / local path) is a source SWAP and is
+ * flagged; a registry version/range/tag change stays allowed (the D3 contract).
+ * `isSourceSpec` is a vendored, fail-closed port of npm-package-arg's registry-
+ * vs-source partition (no runtime dep — this tool imports only node: builtins).
+ * A lock-only swap (manifest unchanged, only the lockfile edited) is caught by
+ * three lock signals — a source root spec, a non-https `resolved`, and a
+ * `resolved` registry-identity (host + package path) that drifts from the base
+ * lock — because npm ci installs the lock's `resolved` verbatim. Residual
+ * ceilings: a `link:true` (local/workspace) swap and a FIRST-time tarball with no
+ * base entry to diff against are not caught.
+ *
  * DATA SOURCE INVARIANT: only the git index (`git show :path`) and HEAD
  * (`git show HEAD:path`) are read, via fixed argv + shell:false — NEVER the
  * working tree. A dep must be *committed* to be proven; a working-tree-only
@@ -60,6 +72,32 @@ export function isAllowedSpec(spec, { exactOnly = false } = {}) {
   return false;
 }
 
+/* Source-swap classifier (ADR-017): true ⇒ the spec resolves to a non-registry
+   SOURCE (git / remote tarball / bare archive / npm: alias / file / local path),
+   i.e. a supply-chain swap; false ⇒ a registry version/range/tag. A faithful,
+   fail-closed port of npm-package-arg's registry-vs-source partition WITHOUT the
+   dependency (this tool imports only node: builtins and runs from vendor/ in every
+   consumer). `:`/`/` alone is NOT enough — npm-package-arg@14 also classifies bare
+   archive filenames (`pkg.tgz`, `foo.tar`, `foo.tar.gz`; but NOT `.zip`/`.bz2`)
+   and leading-dot / backslash paths (`.`, `..`, `.vendor`, `.\pkg`) as source with
+   no such marker, so those are handled explicitly. Verified vs npm-package-arg@14
+   over 84 specs: zero false negatives on {git,remote,file,directory}, zero
+   non-alias false positives on {version,range,tag}. An `npm:other@1` alias
+   (npm-package-arg `registry:true`) is DELIBERATELY treated as source — you declare
+   `a` and silently install `other`. Unlike isAllowedSpec, this does NOT special-case
+   FILE_SPEC: `file:vendor/dev-standards` is a source here, so a registry→vendor-path
+   *change* is flagged; a pre-existing, unchanged vendored dep produces no delta and
+   is never reached. */
+export function isSourceSpec(spec) {
+  if (typeof spec !== 'string') return true;
+  if (spec === '') return false; /* npm reads "" as "*" (a registry range) */
+  if (spec.startsWith('.')) return true; /* . .. .vendor ./x ..\y — npa: directory */
+  if (spec.includes('\\')) return true; /* windows path */
+  if (spec.includes(':') || spec.includes('/')) return true; /* proto / scp / shorthand / path / alias */
+  const low = spec.toLowerCase();
+  return low.endsWith('.tgz') || low.endsWith('.tar') || low.endsWith('.tar.gz');
+}
+
 /* A manifest section as a plain object; a missing or non-object section (e.g.
    `"dependencies": null`) reads as empty rather than throwing — malformed dep
    *values* become grammar findings, not operational faults. */
@@ -95,6 +133,94 @@ function hasDepBearingDelta(base, staged) {
   return false;
 }
 
+/* Effective spec per dep name across the 3 checked sections, by npm precedence
+   (optionalDependencies overrides dependencies overrides devDependencies — npm
+   permits a name in more than one, so a first-match union would compare a swap
+   against the wrong section's spec). Iterated low→high precedence so the winner
+   overwrites. (ADR-017) */
+function effectiveSpecs(manifest) {
+  const map = new Map();
+  for (const sec of ['devDependencies', 'dependencies', 'optionalDependencies']) {
+    for (const [name, spec] of Object.entries(section(manifest, sec))) map.set(name, spec);
+  }
+  return map;
+}
+
+/* Lock `packages[""]` root section map (validated shape), or {}. */
+function lockRoot(lockfile) {
+  const packages = lockfile?.packages;
+  const root = packages !== null && typeof packages === 'object' && !Array.isArray(packages) ? packages[''] : undefined;
+  return root !== null && typeof root === 'object' && !Array.isArray(root) ? root : {};
+}
+
+/* The lock's declared root spec for a name, by npm precedence. Object.hasOwn so a
+   dep literally named `constructor`/`toString` isn't proven by the prototype
+   chain. Returns the spec (any type — caller string-guards) or undefined. */
+function lockRootSpec(lockfile, name) {
+  const root = lockRoot(lockfile);
+  for (const sec of ['optionalDependencies', 'dependencies', 'devDependencies']) {
+    const map = root[sec];
+    if (map !== null && typeof map === 'object' && Object.hasOwn(map, name)) return map[name];
+  }
+  return undefined;
+}
+
+/* A name's node_modules descriptor, distinguishing ABSENT (no key) from
+   PRESENT-but-invalid (key with a null/scalar/array value — hand-edited junk,
+   N1 gate-C). Object.hasOwn so a name like `constructor` isn't matched on the
+   prototype. `entry` is set only when valid. */
+function lockEntry(lockfile, name) {
+  const packages = lockfile?.packages;
+  if (packages === null || typeof packages !== 'object' || Array.isArray(packages)) {
+    return { present: false, valid: false, entry: undefined };
+  }
+  const key = `node_modules/${name}`;
+  if (!Object.hasOwn(packages, key)) return { present: false, valid: false, entry: undefined };
+  const entry = packages[key];
+  const valid = entry !== null && typeof entry === 'object' && !Array.isArray(entry);
+  return { present: true, valid, entry: valid ? entry : undefined };
+}
+
+/* The `resolved` install location of a name (base-lock read for signal 3), or
+   undefined for an absent/malformed descriptor. */
+function lockResolved(lockfile, name) {
+  const { valid, entry } = lockEntry(lockfile, name);
+  return valid ? entry.resolved : undefined;
+}
+
+/* Version-independent FINGERPRINT of a `resolved` URL for dep `name`, or null if
+   absent / unparseable. Two `resolved`s with the same fingerprint are the same
+   package at (possibly) different versions; a different fingerprint is a package /
+   host / query pivot. Layouts:
+   - npm registry (`…/<pkg>/-/<pkg>-<v>.tgz`): everything before `/-/` — excludes
+     the versioned filename entirely, so no version heuristic is needed and a
+     digit-bearing name (`base64` vs `base32`) is NOT confused (Gate C R2).
+   - flat CDN / query registry (no `/-/`): anchor on the dep's OWN name — strip a
+     `<unscoped>-<version>.<ext>` tail so `…/a-1.0.0.tgz`→`…/a-1.0.1.tgz` matches
+     (Gate C R2 #3), but a filename NOT starting with the dep name keeps the full
+     path so a pivot to a different package differs (fail-closed).
+   `url.search` is included so a query-addressed swap (`?pkg=a`→`?pkg=evil`,
+   Gate C R2 #1) differs. A git+ssh/bare shorthand won't parse (→ null); the
+   non-https signal catches those, fingerprint-drift is for URL↔URL swaps. */
+function resolvedFingerprint(resolved, name) {
+  if (typeof resolved !== 'string') return null;
+  let url;
+  try {
+    url = new URL(resolved);
+  } catch {
+    return null;
+  }
+  const path = url.pathname;
+  const marker = path.indexOf('/-/');
+  if (marker !== -1) return `${url.host}${path.slice(0, marker)}${url.search}`;
+  const slash = path.lastIndexOf('/');
+  const dir = path.slice(0, slash + 1);
+  const base = path.slice(slash + 1);
+  const unscoped = String(name).slice(String(name).lastIndexOf('/') + 1).toLowerCase();
+  const anchored = unscoped && base.toLowerCase().startsWith(`${unscoped}-`) ? `${dir}${unscoped}` : path;
+  return `${url.host}${anchored}${url.search}`;
+}
+
 /* D5: a staged lockfile is shape-validated before ANY dep iteration, so a
    corrupt/v2 lockfile on a removal- or metadata-commit (zero new deps) still
    fails loud rather than passing silently. */
@@ -113,13 +239,15 @@ function assertLockfileShape(lockfile) {
   }
 }
 
-/* Pure decision core — no git, no I/O. `baseManifest`/`stagedLockfile` nullable;
-   `stagedManifest` null means the manifest was deleted/absent (nothing to
-   analyse, but a staged lockfile is still validated up-front). Throws
-   OperationalError on a malformed staged lockfile; otherwise returns findings. */
+/* Pure decision core — no git, no I/O. All manifest/lockfile inputs nullable.
+   `stagedManifest` null means the manifest is unstaged/absent — new-dep grammar
+   and D8 don't run, but a staged lockfile is still shape-validated up front AND
+   a lock-only commit still inspects EXISTING deps for a source swap (ADR-017).
+   Throws OperationalError on a malformed staged lockfile or non-object staged
+   manifest; otherwise returns findings. */
 /**
  * @param {{ baseManifest?: unknown, stagedManifest?: unknown,
- *   stagedLockfile?: unknown, lockfileStaged?: boolean,
+ *   stagedLockfile?: unknown, baseLockfile?: unknown, lockfileStaged?: boolean,
  *   exactOnly?: boolean }} [input]
  * @returns {string[]}
  */
@@ -127,45 +255,50 @@ export function evaluate({
   baseManifest = null,
   stagedManifest = null,
   stagedLockfile = null,
+  baseLockfile = null,
   lockfileStaged = false,
   exactOnly = false,
 } = {}) {
   const findings = [];
   if (lockfileStaged) assertLockfileShape(stagedLockfile);
-  if (stagedManifest === null || stagedManifest === undefined) return findings;
-  /* D5 symmetry: a valid-JSON-but-non-object manifest (`[]`, `"x"`, `42`) is
-     malformed. Without this it slips past — `section()` coerces a non-object to
-     `{}`, so zero new deps are found and the tool prints "ok", contradicting the
-     stated "unparseable/non-object manifest is operational" contract. */
-  if (typeof stagedManifest !== 'object' || Array.isArray(stagedManifest)) {
+
+  const manifestPresent = stagedManifest !== null && stagedManifest !== undefined;
+  /* D5 symmetry: a valid-JSON-but-non-object staged manifest (`[]`, `"x"`, `42`)
+     is malformed. Without this it slips past — `section()` coerces a non-object to
+     `{}`, zero new deps are found, the tool prints "ok" — contradicting the
+     "non-object manifest is operational" contract. */
+  if (manifestPresent && (typeof stagedManifest !== 'object' || Array.isArray(stagedManifest))) {
     throw new OperationalError('staged package.json is not a JSON object');
   }
+  if (!manifestPresent && !lockfileStaged) return findings;
 
   const base = baseManifest ?? {};
   const baseNames = baseNameSet(base);
 
   const newDeps = [];
-  for (const sec of SECTIONS) {
-    for (const [name, spec] of Object.entries(section(stagedManifest, sec))) {
-      if (baseNames.has(name)) continue;
-      newDeps.push({ name, section: sec, spec });
-      if (!isAllowedSpec(spec, { exactOnly })) {
-        findings.push(
-          `new dependency "${name}" (${sec}) has a disallowed version spec ${JSON.stringify(spec)} — ` +
-            `allowed: exact X.Y.Z, ^/~ ranges over X[.Y[.Z]], or ${FILE_SPEC}`,
-        );
+  if (manifestPresent) {
+    for (const sec of SECTIONS) {
+      for (const [name, spec] of Object.entries(section(stagedManifest, sec))) {
+        if (baseNames.has(name)) continue;
+        newDeps.push({ name, section: sec, spec });
+        if (!isAllowedSpec(spec, { exactOnly })) {
+          findings.push(
+            `new dependency "${name}" (${sec}) has a disallowed version spec ${JSON.stringify(spec)} — ` +
+              `allowed: exact X.Y.Z, ^/~ ranges over X[.Y[.Z]], or ${FILE_SPEC}`,
+          );
+        }
       }
+    }
+
+    if (hasDepBearingDelta(base, stagedManifest) && !lockfileStaged) {
+      findings.push(
+        'dependency change staged without a staged package-lock.json — stage the updated ' +
+          'lockfile so added/changed deps are pinned',
+      );
     }
   }
 
-  if (hasDepBearingDelta(base, stagedManifest) && !lockfileStaged) {
-    findings.push(
-      'dependency change staged without a staged package-lock.json — stage the updated ' +
-        'lockfile so added/changed deps are pinned',
-    );
-  }
-
-  if (lockfileStaged) {
+  if (lockfileStaged && manifestPresent) {
     const packages = stagedLockfile.packages;
     const root =
       packages[''] !== null && typeof packages[''] === 'object' && !Array.isArray(packages[''])
@@ -196,6 +329,96 @@ export function evaluate({
         findings.push(
           `new dependency "${dep.name}" has no resolution entry (node_modules/${dep.name}) ` +
             'in the staged package-lock.json',
+        );
+      }
+    }
+  }
+
+  /* Source-swap on an EXISTING dep (ADR-017). Manifest-side classification is the
+     primary signal; on a lock-only commit (manifest unchanged) the base manifest
+     supplies the existing deps and the three lockfile signals stand in. Each dep
+     yields at most one finding — the `continue`s dedupe manifest- vs lock-side. */
+  const currentManifest = manifestPresent ? stagedManifest : base;
+  const currentEff = effectiveSpecs(currentManifest);
+  const baseEff = effectiveSpecs(base);
+  for (const [name, spec] of currentEff) {
+    if (!baseNames.has(name)) continue; /* new deps handled above */
+    /* Manifest-side: an existing dep whose effective spec CHANGED to a source. */
+    if (manifestPresent && isSourceSpec(spec) && baseEff.get(name) !== spec) {
+      findings.push(
+        `existing dependency "${name}" changed to a non-registry source spec ${JSON.stringify(spec)} — ` +
+          'a source swap (git/URL/tarball/npm: alias/local path); only registry version/range/tag changes are allowed',
+      );
+      continue;
+    }
+    /* A source spec that is unchanged (or pre-existing on a lock-only commit) is
+       not a swap introduced here, and its lock entry legitimately points at that
+       source — so the lock signals below don't apply. */
+    if (isSourceSpec(spec)) continue;
+    if (!lockfileStaged) continue; /* lock signals need the staged lock */
+
+    /* Signal 1: the lock DECLARES a source for a dep the manifest says is registry
+       (an internally-consistent source-swapped lock). */
+    const lockSpec = lockRootSpec(stagedLockfile, name);
+    if (typeof lockSpec === 'string' && isSourceSpec(lockSpec)) {
+      findings.push(
+        `existing dependency "${name}" is pinned to a non-registry source ${JSON.stringify(lockSpec)} in the ` +
+          'staged package-lock.json while its manifest spec is a registry range — possible lockfile source swap',
+      );
+      continue;
+    }
+
+    /* The node_modules descriptor must be an actual object (N1 gate-C: a
+       presence-only proof accepts null/scalar/array junk). A PRESENT-but-invalid
+       entry for an existing dep is a hand-edited/malformed lock — flag it; the
+       D3-valid empty `{}` descriptor stays valid and falls through to the signals. */
+    const { present, valid, entry } = lockEntry(stagedLockfile, name);
+    if (present && !valid) {
+      findings.push(
+        `existing dependency "${name}" has a malformed lock entry (node_modules/${name} is not an object) ` +
+          'in the staged package-lock.json',
+      );
+      continue;
+    }
+    /* A `link:true` descriptor to a genuine LOCAL source dir (npm workspace
+       package, vendored dep) is not a remote swap — exempt it from the URL signals
+       (else a workspace repo false-fails). But exempt ONLY a real local path: a
+       link `resolved` that is a URL, or that indirects INTO `node_modules/` (a
+       crafted link → a remotely-resolved target descriptor, Gate C R2 #2), is NOT
+       exempt and falls through to the signals below. */
+    const resolved = valid ? entry.resolved : undefined;
+    const linkPath = valid && entry.link === true && typeof resolved === 'string' ? resolved.replace(/\\/g, '/') : null;
+    const exemptLink =
+      valid &&
+      entry.link === true &&
+      resolvedFingerprint(resolved, name) === null &&
+      (linkPath === null || !linkPath.split('/').includes('node_modules'));
+
+    /* Signal 2: the resolution installs from a non-registry location. A registry
+       install is always an http(s) tarball URL; a git scheme, hosted shorthand,
+       bare `user/repo`, `file:`, or a non-exempt link path in `resolved` is not
+       (Gate P P1 #3). */
+    if (!exemptLink && typeof resolved === 'string' && !/^https?:/i.test(resolved)) {
+      findings.push(
+        `existing dependency "${name}" resolves to a non-registry source ${JSON.stringify(resolved)} in the ` +
+          'staged package-lock.json — expected an https registry URL; possible lockfile source swap',
+      );
+      continue;
+    }
+
+    /* Signal 3: the resolution FINGERPRINT (host + package, version-independent)
+       changed while the manifest spec did not — the signal that catches an
+       https↔https swap npm ci installs verbatim, including a same-host pivot to a
+       DIFFERENT package (`…/a/-/a-1.2.3.tgz` → `…/evil/-/evil-9.tgz`) or a
+       query-addressed pivot (Gate C P1/R2). A version-only change keeps the
+       fingerprint. Needs a base resolved to diff against. */
+    if (!exemptLink) {
+      const stagedFp = resolvedFingerprint(resolved, name);
+      const baseFp = resolvedFingerprint(lockResolved(baseLockfile, name), name);
+      if (baseFp !== null && stagedFp !== null && baseFp !== stagedFp) {
+        findings.push(
+          `existing dependency "${name}" changed its resolved package in the staged package-lock.json ` +
+            `(${baseFp} → ${stagedFp}) with no manifest change — possible lockfile source swap`,
         );
       }
     }
@@ -308,9 +531,12 @@ export function main(argv) {
       ? parseJson(git(['show', ':package.json'], root), 'staged package.json')
       : null;
 
+    /* Base manifest is read on a lock-ONLY commit too (not just a manifest
+       change): the existing-dep source-swap inspection enumerates existing deps
+       from the base when the manifest itself is unchanged (ADR-017). */
     let baseManifest = null;
     if (
-      manifestStagedChange &&
+      (manifestStagedChange || lockfileStaged) &&
       hasHead &&
       /* ls-tree lists nothing (exit 0) when the path is absent — absence is not
          a git failure, a distinction the base read depends on. */
@@ -319,7 +545,23 @@ export function main(argv) {
       baseManifest = parseJson(git(['show', 'HEAD:package.json'], root), 'base package.json');
     }
 
-    const findings = evaluate({ baseManifest, stagedManifest, stagedLockfile, lockfileStaged, exactOnly });
+    /* Base lockfile powers signal 3 (resolved identity-drift). A git READ failure
+       stays operational (the git() call throws → exit 2); only a malformed/legacy
+       HEAD lock is tolerated — its JSON.parse alone is caught, leaving signal 3
+       without a baseline (the staged lock's own shape is still validated in
+       evaluate()). Narrow catch, not a broad one, so a read failure can't silently
+       fail the identity signal open. */
+    let baseLockfile = null;
+    if (lockfileStaged && hasHead && git(['ls-tree', 'HEAD', '--', 'package-lock.json'], root).trim() !== '') {
+      const baseLockText = git(['show', 'HEAD:package-lock.json'], root);
+      try {
+        baseLockfile = JSON.parse(baseLockText);
+      } catch {
+        baseLockfile = null;
+      }
+    }
+
+    const findings = evaluate({ baseManifest, stagedManifest, stagedLockfile, baseLockfile, lockfileStaged, exactOnly });
     if (findings.length === 0) {
       process.stdout.write('check-new-deps: ok\n');
       return 0;

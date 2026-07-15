@@ -2,7 +2,13 @@
 
 Non-blocking, dated. Newest first.
 
-## 2026-07-15 — Supply-chain: detect a source SWAP on an EXISTING dep (inbox, deferred)
+## 2026-07-15 — Supply-chain: detect a source SWAP on an EXISTING dep — DONE (v0.21.0, ADR-017)
+
+Shipped: `isSourceSpec` vendored classifier (no npm-package-arg dep; 0 false-neg
+vs npm-package-arg@14), manifest-side + three lock-only signals (source root spec,
+non-https `resolved`, registry-identity drift vs base lock), precedence
+effective-map, report-only. Design + Gate P/C: `docs/source-swap-detection-plan.md`;
+decision: ADR-017. Original spec kept below for provenance.
 
 `check-new-deps` enforces its positive spec grammar and lockfile pinning only on
 NEW deps (D3 lets any EXISTING-dep spec change pass once a lockfile is staged).
