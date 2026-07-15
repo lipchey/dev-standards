@@ -50,7 +50,7 @@ function withRoot(callback: (root: string) => void): void {
   }
 }
 
-const GATED_VERBS = ['select-worktree', 'commit-slice', 'verify', 'handoff'] as const;
+const GATED_VERBS = ['select-worktree', 'commit-slice', 'self-review', 'verify', 'handoff'] as const;
 
 test('non-gated verbs pass without loading guides', () => {
   const throwingDeps: Partial<PreflightDeps> = {
@@ -138,20 +138,24 @@ test('an overlay-only markdown file is included without replacing package guides
   });
 });
 
-test('disabled fix mode fails before guide loading', () => {
-  const outcome = runPreflight(config({ enabled: false }), 'commit-slice', '/missing-overlay');
-  assert.equal(outcome.ok, false);
-  if (outcome.ok) return;
-  assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
-  assert.match(outcome.machineError.message, /disabled|enabled/);
+test('all gated verbs fail disabled mode before guide loading', () => {
+  for (const verb of GATED_VERBS) {
+    const outcome = runPreflight(config({ enabled: false }), verb, '/missing-overlay');
+    assert.equal(outcome.ok, false, verb);
+    if (outcome.ok) continue;
+    assert.equal(outcome.exitCode, EXIT_PREFLIGHT, verb);
+    assert.match(outcome.machineError.message, /disabled|enabled/, verb);
+  }
 });
 
-test('missing review-and-refactor mode fails preflight', () => {
-  const outcome = runPreflight(config({ modes: ['review-only'] }), 'verify', '/missing-overlay');
-  assert.equal(outcome.ok, false);
-  if (outcome.ok) return;
-  assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
-  assert.match(outcome.machineError.message, /review-and-refactor/);
+test('all gated verbs fail when review-and-refactor mode is disallowed', () => {
+  for (const verb of GATED_VERBS) {
+    const outcome = runPreflight(config({ modes: ['review-only'] }), verb, '/missing-overlay');
+    assert.equal(outcome.ok, false, verb);
+    if (outcome.ok) continue;
+    assert.equal(outcome.exitCode, EXIT_PREFLIGHT, verb);
+    assert.match(outcome.machineError.message, /review-and-refactor/, verb);
+  }
 });
 
 test('overlay paths that escape the repo fail the lexical guard', () => {
@@ -173,14 +177,16 @@ test('in-root overlay path spellings pass the lexical guard', () => {
   });
 });
 
-test('an unavailable package template directory fails closed', () => {
-  const outcome = runPreflight(config(), 'verify', '/missing-overlay', {
-    loadGuides: () => ({ ok: false, templatesDir: '/broken/package/agents/review-guide-templates' }),
-  });
-  assert.equal(outcome.ok, false);
-  if (outcome.ok) return;
-  assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
-  assert.match(outcome.machineError.message, /canonical guide templates unavailable/);
+test('all gated verbs fail closed when canonical guides are missing', () => {
+  for (const verb of GATED_VERBS) {
+    const outcome = runPreflight(config(), verb, '/missing-overlay', {
+      loadGuides: () => ({ ok: false, templatesDir: '/broken/package/agents/review-guide-templates' }),
+    });
+    assert.equal(outcome.ok, false, verb);
+    if (outcome.ok) continue;
+    assert.equal(outcome.exitCode, EXIT_PREFLIGHT, verb);
+    assert.match(outcome.machineError.message, /canonical guide templates unavailable/, verb);
+  }
 });
 
 test('guide load fails when a canonical template is missing or has a blank body', () => {

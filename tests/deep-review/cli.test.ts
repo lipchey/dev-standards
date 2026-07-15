@@ -53,7 +53,7 @@ function writeFindings(dir: string, over: Record<string, unknown> = {}): string 
   fs.writeFileSync(
     fpath,
     `${JSON.stringify(
-      { schema: 2, mode: 'review-and-refactor', generated_at: 't', run_id: 'run-1', base_sha: 'base-1', revision: 0, verification: null, findings: [], ...over },
+      { schema: 2, mode: 'review-and-refactor', generated_at: 't', run_id: 'run-1', base_sha: 'base-1', revision: 0, verification: null, self_review: null, findings: [], ...over },
       null,
       2,
     )}\n`,
@@ -171,6 +171,24 @@ test('preflight ORDER: select-worktree with a missing --slug -> EXIT_USAGE', () 
   assert.equal(runCli(['select-worktree'], cap.deps), EXIT_USAGE);
 });
 
+test('self-review invalid --verdict -> EXIT_USAGE before disabled-mode preflight', () => {
+  const dir = dirWithFixMode({ enabled: false });
+  const fpath = writeFindings(dir);
+  const cap = capture(dir);
+  const code = runCli(['self-review', '--findings', fpath, '--verdict', 'maybe'], cap.deps);
+  assert.equal(code, EXIT_USAGE);
+  assert.match(cap.errLines().join('\n'), /invalid --verdict/);
+});
+
+test('self-review --note swallowing the next option (--note --findings f) -> EXIT_USAGE, no bogus note', () => {
+  const dir = dirWithFixMode({ enabled: false });
+  const fpath = writeFindings(dir);
+  const cap = capture(dir);
+  const code = runCli(['self-review', '--verdict', 'clean', '--note', '--findings', fpath], cap.deps);
+  assert.equal(code, EXIT_USAGE);
+  assert.match(cap.errLines().join('\n'), /--note requires a value/);
+});
+
 // ── §5.2 identity-mismatch matrix (commit-slice / verify / handoff) ────────────
 
 test('identity: verifyDescriptor refuses (root/branch mismatch) -> EXIT_DESCRIPTOR_MISMATCH before any mutation', () => {
@@ -205,10 +223,11 @@ test('identity: UNBOUND findings (run_id null) -> EXIT_DESCRIPTOR_MISMATCH (no p
   assert.match(lastError(cap.errLines()).message, /unbound/);
 });
 
-test('identity mismatch also gates verify and handoff', () => {
+test('identity mismatch also gates self-review, verify, and handoff', () => {
   const dir = dirWithFixMode();
   const fpath = writeFindings(dir);
   const fail = (): DescriptorVerdict => ({ ok: false, reason: 'branch mismatch' });
+  assert.equal(runCli(['self-review', '--findings', fpath, '--verdict', 'clean'], capture(dir, fail).deps), EXIT_DESCRIPTOR_MISMATCH);
   assert.equal(runCli(['verify', '--findings', fpath], capture(dir, fail).deps), EXIT_DESCRIPTOR_MISMATCH);
   assert.equal(runCli(['handoff', '--findings', fpath], capture(dir, fail).deps), EXIT_DESCRIPTOR_MISMATCH);
 });

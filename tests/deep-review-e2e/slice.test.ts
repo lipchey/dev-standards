@@ -61,7 +61,7 @@ function waitDead(pid: number, timeoutMs = 5000): boolean {
   }
 }
 
-test('happy vertical: classify -> commit-slice (green, trailer) -> verify -> handoff', () => {
+test('happy vertical: classify -> commit-slice (green, trailer) -> self-review -> verify -> handoff', () => {
   const box = initCoreRepo();
   try {
     const { worktree } = preparedRun(box);
@@ -81,11 +81,20 @@ test('happy vertical: classify -> commit-slice (green, trailer) -> verify -> han
     const trailer = git(worktree, ['log', '-1', '--format=%(trailers:key=Deep-Review-Slice,valueonly=true)'], box.env).trim();
     assert.equal(trailer, 'f-001');
 
+    const selfReview = runVerb(worktree, ['self-review', '--findings', FINDINGS_REL, '--verdict', 'clean'], box.env);
+    assert.equal(selfReview.status, EXIT_OK, `self-review failed: ${selfReview.stderr}`);
+
     const ver = runVerb(worktree, ['verify', '--findings', FINDINGS_REL, '--scope', '--fast'], box.env);
     assert.equal(ver.status, EXIT_OK, `verify failed: ${ver.stderr}`);
-    const record = JSON.parse(fs.readFileSync(path.join(worktree, FINDINGS_REL), 'utf8')) as { verification: { sha: string } | null };
+    const record = JSON.parse(fs.readFileSync(path.join(worktree, FINDINGS_REL), 'utf8')) as {
+      verification: { sha: string } | null;
+      self_review: { sha: string; verdict: string; noted_at: string } | null;
+    };
     assert.notEqual(record.verification, null);
     assert.equal(record.verification?.sha, headSha);
+    assert.equal(record.self_review?.sha, headSha);
+    assert.equal(record.self_review?.verdict, 'clean');
+    assert.notEqual(record.self_review?.noted_at, '');
 
     const handoff = runVerb(worktree, ['handoff', '--findings', FINDINGS_REL], box.env);
     assert.equal(handoff.status, EXIT_OK, `handoff refused: ${handoff.stderr}`);

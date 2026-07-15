@@ -43,6 +43,7 @@ function validFile(findings: FindingRecord[], mode: FindingsFileV2['mode'] = 're
     base_sha: null,
     revision: 0,
     verification: null,
+    self_review: null,
     findings,
   };
 }

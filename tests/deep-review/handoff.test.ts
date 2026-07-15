@@ -57,6 +57,7 @@ function mkFile(findings: FindingRecord[], over: Partial<FindingsFileV2> = {}): 
     base_sha: 'base-1',
     revision: 3,
     verification: { sha: HEAD_SHA, scope: 'verify:fast', completed_at: 't' },
+    self_review: { sha: HEAD_SHA, verdict: 'clean', noted_at: 't' },
     findings,
     ...over,
   };
@@ -145,6 +146,40 @@ test('blocked: verification stale (sha != HEAD) -> EXIT_WRONG_STATE', () => {
   const result = decideHandoff(mkFile([mkFinding()]), deps); // verification sha is HEAD_SHA (a…)
   assert.equal(result.exitCode, EXIT_WRONG_STATE);
   assert.match(result.machineError?.message ?? '', /stale/);
+});
+
+test('blocked: self_review == null -> EXIT_WRONG_STATE', () => {
+  const { deps, calls } = spyDeps();
+  const result = decideHandoff(mkFile([mkFinding()], { self_review: null }), deps);
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.match(result.machineError?.message ?? '', /self-review/);
+  assert.equal(calls.getBranch, 0);
+});
+
+test('blocked: self_review verdict violation -> EXIT_WRONG_STATE', () => {
+  const { deps } = spyDeps();
+  const result = decideHandoff(
+    mkFile([mkFinding()], { self_review: { sha: HEAD_SHA, verdict: 'violation', noted_at: 't' } }),
+    deps,
+  );
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.match(result.machineError?.message ?? '', /violation/);
+});
+
+test('blocked: self_review sha is stale -> EXIT_WRONG_STATE', () => {
+  const { deps } = spyDeps();
+  const result = decideHandoff(
+    mkFile([mkFinding()], { self_review: { sha: 'b'.repeat(40), verdict: 'clean', noted_at: 't' } }),
+    deps,
+  );
+  assert.equal(result.exitCode, EXIT_WRONG_STATE);
+  assert.match(result.machineError?.message ?? '', /self-review is stale/);
+});
+
+test('accepted: clean self_review at current HEAD satisfies the self-review handoff predicate', () => {
+  const { deps } = spyDeps();
+  const result = decideHandoff(mkFile([mkFinding()]), deps);
+  assert.equal(result.exitCode, EXIT_OK);
 });
 
 test('blocked: a dirty worktree (git status --porcelain non-empty) -> EXIT_WRONG_STATE', () => {
@@ -269,7 +304,17 @@ test('CLI handoff (real git, complete run): all fixed + verification@HEAD + clea
 
   // Findings OUTSIDE the repo (handoff never mutates, so no confinement / dirtiness).
   const fpath = path.join(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-handoff-f-'))), 'findings.json');
-  fs.writeFileSync(fpath, `${JSON.stringify(mkFile([mkFinding({ status: 'fixed' })], { verification: { sha: headSha, scope: 'verify:fast', completed_at: 't' } }), null, 2)}\n`);
+  fs.writeFileSync(
+    fpath,
+    `${JSON.stringify(
+      mkFile([mkFinding({ status: 'fixed' })], {
+        verification: { sha: headSha, scope: 'verify:fast', completed_at: 't' },
+        self_review: { sha: headSha, verdict: 'clean', noted_at: 't' },
+      }),
+      null,
+      2,
+    )}\n`,
+  );
 
   const descriptor: RunDescriptor = {
     schema: 1, run_id: 'run-1', created_at: 't', canonical_root: repo, git_dir: path.join(repo, '.git'),

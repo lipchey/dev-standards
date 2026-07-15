@@ -105,6 +105,13 @@ export interface VerificationRecord {
   completed_at: string;
 }
 
+export interface SelfReviewRecord {
+  sha: string;
+  verdict: 'clean' | 'violation';
+  noted_at: string;
+  note?: string;
+}
+
 // The findings file, schema v2. `mode`/`generated_at` are carried forward from v1
 // (slice/report/handoff still read them). `run_id`+`base_sha` are either BOTH null
 // (an unbound draft) or BOTH set (bound to a run, immutable thereafter). `revision`
@@ -117,5 +124,6 @@ export interface FindingsFileV2 {
   base_sha: string | null;
   revision: number;
   verification: VerificationRecord | null;
+  self_review: SelfReviewRecord | null;
   findings: FindingRecord[];
 }

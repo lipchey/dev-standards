@@ -361,6 +361,7 @@ export interface FindingsOver {
   run_id?: string | null;
   base_sha?: string | null;
   verification?: unknown;
+  self_review?: unknown;
 }
 
 export function findingsFile(findings: Array<Record<string, unknown>>, over: FindingsOver = {}): string {
@@ -372,6 +373,7 @@ export function findingsFile(findings: Array<Record<string, unknown>>, over: Fin
     base_sha: over.base_sha ?? null,
     revision: 0,
     verification: over.verification ?? null,
+    self_review: over.self_review ?? null,
     findings,
   };
   return `${JSON.stringify(file, null, 2)}\n`;
@@ -387,9 +389,9 @@ export function placeFindings(cwd: string, json: string): string {
   return FINDINGS_REL;
 }
 
-function readFindingsJson(cwd: string): { revision: number; verification: unknown; findings: Array<Record<string, unknown>> } {
+function readFindingsJson(cwd: string): { revision: number; verification: unknown; self_review: unknown; findings: Array<Record<string, unknown>> } {
   const raw = fs.readFileSync(path.join(cwd, FINDINGS_REL), 'utf8');
-  return JSON.parse(raw) as { revision: number; verification: unknown; findings: Array<Record<string, unknown>> };
+  return JSON.parse(raw) as { revision: number; verification: unknown; self_review: unknown; findings: Array<Record<string, unknown>> };
 }
 
 export function findingById(cwd: string, id: string): Record<string, unknown> | undefined {

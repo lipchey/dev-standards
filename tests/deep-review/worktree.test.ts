@@ -402,6 +402,21 @@ function realFsToolingDeps(fx: { main: string; wt: string }, pinned: string, ove
   };
 }
 
+function captureError(run: () => void): unknown {
+  try {
+    run();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+function tempDirsBeside(dest: string): string[] {
+  const parent = path.dirname(dest);
+  const prefix = `${path.basename(dest)}.tmp-`;
+  return fs.existsSync(parent) ? fs.readdirSync(parent).filter((name) => name.startsWith(prefix)) : [];
+}
+
 test('tooling: a repo WITHOUT a vendor/dev-standards gitlink is a no-op (no symlinks, no throw)', () => {
   const { deps: d, links } = toolingDeps(null);
   assert.doesNotThrow(() => setupWorktreeTooling(d, '/wt'));
@@ -432,6 +447,135 @@ test('tooling: a fresh stamp COPIES the dist dirs (immutable real snapshots) and
     fs.rmSync(fx.root, { recursive: true, force: true });
   }
 });
+
+for (const [rel, entrypoint] of TOOLING_DISTS) {
+  test(`tooling: ${rel} same-pin invalid-UTF-8 bundle mutation -> concurrent ToolingError, no published/temp dist`, () => {
+    const pinned = 'abc123def456';
+    const fx = makeToolingFixture(pinned);
+    const sourceDist = path.join(fx.main, rel);
+    const sourceBundle = path.join(sourceDist, entrypoint);
+    const destinationDist = path.join(fx.wt, rel);
+    let mutationRan = false;
+    try {
+      fs.writeFileSync(sourceBundle, Buffer.from([0x2f, 0x2a, 0x20, 0x80, 0x20, 0x2a, 0x2f, 0x0a]));
+      const error = captureError(() =>
+        setupWorktreeTooling(
+          realFsToolingDeps(fx, pinned, {
+            copyDir: (src, dest) => {
+              fs.cpSync(src, dest, { recursive: true });
+              if (src !== sourceDist) return;
+              const bytes = fs.readFileSync(sourceBundle);
+              const byteIndex = bytes.indexOf(0x80);
+              if (byteIndex === -1) throw new Error('invalid UTF-8 mutation byte missing');
+              bytes[byteIndex] = 0x81;
+              fs.writeFileSync(sourceBundle, bytes);
+              mutationRan = true;
+            },
+          }),
+          fx.wt,
+        ),
+      );
+
+      assert.deepEqual(
+        {
+          mutationRan,
+          concurrentContentError:
+            error instanceof ToolingError && /concurrent/i.test(error.message) && /content mismatch/i.test(error.message),
+          sourceStamp: fs.readFileSync(path.join(sourceDist, '.built-from'), 'utf8').trim(),
+          destinationExists: fs.existsSync(destinationDist),
+          tempDirs: tempDirsBeside(destinationDist),
+        },
+        {
+          mutationRan: true,
+          concurrentContentError: true,
+          sourceStamp: pinned,
+          destinationExists: false,
+          tempDirs: [],
+        },
+      );
+    } finally {
+      fs.rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('tooling: source removal during the post-copy hash fails closed as a concurrent bootstrap', () => {
+  const pinned = 'abc123def456';
+  const fx = makeToolingFixture(pinned);
+  const [rel, entrypoint] = TOOLING_DISTS[0];
+  const sourceDist = path.join(fx.main, rel);
+  const destinationDist = path.join(fx.wt, rel);
+  let sourceRemoved = false;
+  try {
+    const error = captureError(() =>
+      setupWorktreeTooling(
+        realFsToolingDeps(fx, pinned, {
+          existsSync: (p) => {
+            const exists = fs.existsSync(p);
+            if (!sourceRemoved && p.startsWith(`${destinationDist}.tmp-`) && path.basename(p) === entrypoint) {
+              fs.rmSync(sourceDist, { recursive: true, force: true });
+              sourceRemoved = true;
+            }
+            return exists;
+          },
+        }),
+        fx.wt,
+      ),
+    );
+
+    assert.deepEqual(
+      {
+        sourceRemoved,
+        concurrentContentError:
+          error instanceof ToolingError && /concurrent/i.test(error.message) && /content mismatch/i.test(error.message),
+        destinationExists: fs.existsSync(destinationDist),
+        tempDirs: tempDirsBeside(destinationDist),
+      },
+      {
+        sourceRemoved: true,
+        concurrentContentError: true,
+        destinationExists: false,
+        tempDirs: [],
+      },
+    );
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+for (const fault of ['copy', 'rename'] as const) {
+  test(`tooling: a throwing ${fault} leaves no .tmp-* snapshot`, () => {
+    const pinned = 'abc123def456';
+    const fx = makeToolingFixture(pinned);
+    const [rel] = TOOLING_DISTS[0];
+    const sourceDist = path.join(fx.main, rel);
+    const destinationDist = path.join(fx.wt, rel);
+    try {
+      if (fault === 'rename') {
+        fs.mkdirSync(path.dirname(destinationDist), { recursive: true });
+        fs.writeFileSync(destinationDist, 'occupied');
+      }
+      const error = captureError(() =>
+        setupWorktreeTooling(
+          realFsToolingDeps(fx, pinned, {
+            copyDir: (src, dest) => {
+              fs.cpSync(src, dest, { recursive: true });
+              if (fault === 'copy' && src === sourceDist) throw new Error('injected copy failure');
+            },
+          }),
+          fx.wt,
+        ),
+      );
+
+      assert.deepEqual(
+        { threw: error instanceof Error, tempDirs: tempDirsBeside(destinationDist) },
+        { threw: true, tempDirs: [] },
+      );
+    } finally {
+      fs.rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+}
 
 test('tooling: a concurrent re-bootstrap changing the SOURCE stamp mid-copy -> ToolingError, no dist at the destination (temp cleaned up)', () => {
   const pinned = 'abc123def456';
