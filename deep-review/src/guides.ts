@@ -7,17 +7,23 @@ import { join } from 'node:path';
 const PACKAGE_ROOT_URL = new URL('../../', import.meta.url);
 const BODY_SEPARATOR = '\n\n';
 
-/* The seven-guide contract: a partial or blank-body checkout must fail preflight,
-   not silently review with a thinner rulebook. */
+/* The seven-file corpus contract (ADR-017 profile rewrite): a partial or
+   blank-body checkout must fail preflight, not silently review with a thinner
+   rulebook. */
 const REQUIRED_TEMPLATE_NAMES = [
-  'architecture-deepening.md',
-  'clean-architecture.md',
-  'core-code-guidelines.md',
-  'language-review-sources.md',
-  'refactoring-checklist.md',
-  'review-output-format.md',
-  'security-review.md',
+  'profile-correctness-and-lifecycle.md',
+  'profile-naming-and-constants.md',
+  'profile-security.md',
+  'profile-structure-and-dependencies.md',
+  'profile-tests-quality.md',
+  'profile-types-and-contracts.md',
+  'review-contract.md',
 ] as const;
+
+/* TRACEABILITY.md shares the templates dir but is the migration/canary registry,
+   not review corpus: loading it would leak BLINDED canaries into the merged guide
+   bodies and force it into the ADR-016 required-read set. */
+const NON_GUIDE_TEMPLATE_NAMES = new Set(['TRACEABILITY.md']);
 
 export const REVIEW_GUIDE_TEMPLATES_DIR = join(
   fileURLToPath(PACKAGE_ROOT_URL),
@@ -80,7 +86,9 @@ export function loadReviewGuides(
 
   let templateNames: string[];
   try {
-    templateNames = listMarkdownFiles(templatesDirectory);
+    templateNames = listMarkdownFiles(templatesDirectory).filter(
+      (name) => !NON_GUIDE_TEMPLATE_NAMES.has(name),
+    );
   } catch {
     return { ok: false, templatesDir: templatesDirectory };
   }

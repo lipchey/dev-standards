@@ -81,7 +81,7 @@ test('NO_TOUCH_BASELINE matches a baseline path (e.g. tools/x.sh, auth/keys/a, .
     '.claude/hooks/deep-review-guard.mjs',
     'scripts/deep-review',
     // The vendored dev-standards tree (ADR-016): guide templates + the gitlink pin.
-    'vendor/dev-standards/agents/review-guide-templates/security-review.md',
+    'vendor/dev-standards/agents/review-guide-templates/profile-security.md',
     'vendor/dev-standards',
   ]) {
     assert.equal(isNoTouch(p, set), true, `${p} should be no-touch`);

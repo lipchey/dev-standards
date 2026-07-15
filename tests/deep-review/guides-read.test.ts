@@ -22,9 +22,11 @@ import type { DeepReviewConfig } from '../../deep-review/src/config.ts';
 import { runCli } from '../../deep-review/src/cli.ts';
 import type { CliDeps } from '../../deep-review/src/cli.ts';
 
+/* TRACEABILITY.md shares the templates dir but is the blinded canary registry the
+   loader excludes — never a mandated read (see guides.ts NON_GUIDE_TEMPLATE_NAMES). */
 const TEMPLATE_NAMES = fs
   .readdirSync(REVIEW_GUIDE_TEMPLATES_DIR)
-  .filter((name) => name.endsWith('.md'))
+  .filter((name) => name.endsWith('.md') && name !== 'TRACEABILITY.md')
   .sort();
 const TEMPLATE_ANCHOR = 'agents/review-guide-templates';
 
@@ -163,6 +165,11 @@ test('requiredReadSet requires every package template as an anchored tail', () =
   }
 });
 
+test('requiredReadSet excludes TRACEABILITY.md — the canary registry is not corpus', () => {
+  const tails = requiredReadSet('/repo', config(), isolatedDeps());
+  assert.equal(tails.includes(`${TEMPLATE_ANCHOR}/TRACEABILITY.md`), false);
+});
+
 test('requiredReadSet fails closed (GuidesUnavailable) when the templates are unavailable', () => {
   assert.throws(
     () => requiredReadSet('/repo', config(), { loadGuides: () => ({ ok: false, templatesDir: '/broken' }), listOverlay: () => undefined, exists: () => true }),
@@ -234,11 +241,11 @@ test('requiredReadSet fails closed when guides_dir is an in-repo SYMLINK escapin
 // ── computeMissing (tail match, root-agnostic, realpath) ──────────────────────────
 
 test('computeMissing matches a template read under ANY approved repo root (worktree vs main)', () => {
-  const tail = `${TEMPLATE_ANCHOR}/security-review.md`;
+  const tail = `${TEMPLATE_ANCHOR}/profile-security.md`;
   const worktreeRoot = '/Users/x/worktrees/w';
   const mainRoot = '/Users/x/proj';
-  const worktreeRead = { path: guideRead(worktreeRoot, 'security-review.md'), ok: true };
-  const mainRead = { path: guideRead(mainRoot, 'security-review.md'), ok: true };
+  const worktreeRead = { path: guideRead(worktreeRoot, 'profile-security.md'), ok: true };
+  const mainRead = { path: guideRead(mainRoot, 'profile-security.md'), ok: true };
   // Both roots approved (the review's worktree + the main checkout), as cli.ts resolves them.
   const approvedRoots = [worktreeRoot, mainRoot];
   assert.deepEqual(computeMissing({ requiredTails: [tail], reads: [worktreeRead], approvedRoots, realpath: (value) => value }), []);
@@ -246,27 +253,27 @@ test('computeMissing matches a template read under ANY approved repo root (workt
 });
 
 test('computeMissing ignores a NOT-ok read (failed/denied does not satisfy the requirement)', () => {
-  const tail = `${TEMPLATE_ANCHOR}/security-review.md`;
-  const failed = { path: guideRead('/repo', 'security-review.md'), ok: false };
+  const tail = `${TEMPLATE_ANCHOR}/profile-security.md`;
+  const failed = { path: guideRead('/repo', 'profile-security.md'), ok: false };
   assert.deepEqual(computeMissing({ requiredTails: [tail], reads: [failed], approvedRoots: ['/repo'], realpath: (value) => value }), [tail]);
 });
 
 test('computeMissing does not match a bare-basename lookalike outside the anchored tail', () => {
-  const tail = `${TEMPLATE_ANCHOR}/security-review.md`;
-  const lookalike = { path: '/tmp/security-review.md', ok: true };
+  const tail = `${TEMPLATE_ANCHOR}/profile-security.md`;
+  const lookalike = { path: '/tmp/profile-security.md', ok: true };
   assert.deepEqual(computeMissing({ requiredTails: [tail], reads: [lookalike], approvedRoots: ['/repo'], realpath: (value) => value }), [tail]);
 });
 
 test('computeMissing rejects an exact-tail read under an UNAPPROVED root (P1-1)', () => {
-  const tail = `${TEMPLATE_ANCHOR}/security-review.md`;
+  const tail = `${TEMPLATE_ANCHOR}/profile-security.md`;
   // A same-anchored guide read from OUTSIDE the repo (e.g. a decoy tree) must not satisfy it.
-  const decoy = { path: guideRead('/tmp/evil', 'security-review.md'), ok: true };
+  const decoy = { path: guideRead('/tmp/evil', 'profile-security.md'), ok: true };
   assert.deepEqual(computeMissing({ requiredTails: [tail], reads: [decoy], approvedRoots: ['/repo'], realpath: (value) => value }), [tail]);
 });
 
 test('computeMissing rejects an IN-repo decoy at the wrong depth — exact-anchor match, not suffix (R2-2)', () => {
-  const tail = `${TEMPLATE_ANCHOR}/security-review.md`;
-  // `<root>/decoy/agents/review-guide-templates/security-review.md` shares the tail but is
+  const tail = `${TEMPLATE_ANCHOR}/profile-security.md`;
+  // `<root>/decoy/agents/review-guide-templates/profile-security.md` shares the tail but is
   // neither `<root>/<tail>` nor `<root>/vendor/dev-standards/<tail>` — a suffix match would
   // wrongly accept it.
   const decoy = { path: path.join('/repo', 'decoy', ...tail.split('/')), ok: true };
@@ -274,14 +281,14 @@ test('computeMissing rejects an IN-repo decoy at the wrong depth — exact-ancho
 });
 
 test('computeMissing matches a dev-standards-SELF read (no vendor prefix) at the checkout root (R2-2)', () => {
-  const tail = `${TEMPLATE_ANCHOR}/security-review.md`;
+  const tail = `${TEMPLATE_ANCHOR}/profile-security.md`;
   const selfRead = { path: path.join('/repo', ...tail.split('/')), ok: true };
   assert.deepEqual(computeMissing({ requiredTails: [tail], reads: [selfRead], approvedRoots: ['/repo'], realpath: (value) => value }), []);
 });
 
 test('computeMissing DROPS a read whose realpath fails — non-proof, not a raw fallback (R2-2)', () => {
-  const tail = `${TEMPLATE_ANCHOR}/security-review.md`;
-  const read = { path: guideRead('/repo', 'security-review.md'), ok: true };
+  const tail = `${TEMPLATE_ANCHOR}/profile-security.md`;
+  const read = { path: guideRead('/repo', 'profile-security.md'), ok: true };
   // A raw-path fallback would let this lexical in-root path satisfy the tail; a realpath failure
   // means the file is gone → cannot prove it was read → still missing.
   const realpath = (value: string): string => {
@@ -292,8 +299,8 @@ test('computeMissing DROPS a read whose realpath fails — non-proof, not a raw 
 });
 
 test('computeMissing realpaths reads AND roots so a /tmp symlink prefix still matches', () => {
-  const tail = `${TEMPLATE_ANCHOR}/clean-architecture.md`;
-  const read = { path: guideRead('/tmp/root', 'clean-architecture.md'), ok: true };
+  const tail = `${TEMPLATE_ANCHOR}/profile-structure-and-dependencies.md`;
+  const read = { path: guideRead('/tmp/root', 'profile-structure-and-dependencies.md'), ok: true };
   const realpath = (value: string): string => value.replace('/tmp/', '/private/tmp/');
   assert.deepEqual(computeMissing({ requiredTails: [tail], reads: [read], approvedRoots: ['/tmp/root'], realpath }), []);
 });
@@ -332,7 +339,7 @@ test('an active pass that skipped a guide is BLOCKED, naming the unread guide', 
   });
   assert.equal(decision.kind, 'block');
   if (decision.kind !== 'block') return;
-  assert.match(decision.reason, new RegExp(TEMPLATE_NAMES[TEMPLATE_NAMES.length - 1] ?? 'security-review.md'));
+  assert.match(decision.reason, new RegExp(TEMPLATE_NAMES[TEMPLATE_NAMES.length - 1] ?? 'profile-security.md'));
 });
 
 test('the marker activates the gate even when the transcript is unreadable (fail-closed)', () => {

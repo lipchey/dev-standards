@@ -90,8 +90,8 @@ function fingerprint() {
 const fp = fingerprint();
 if (process.argv.includes('--write')) {
   /* Random-suffix temp opened O_CREAT|O_EXCL (`wx`) then atomic rename: a predictable
-     `.tmp` written with truncating semantics is a symlink-race (core-code-guidelines.md
-     temp-write rule) -- an attacker-planted symlink at the fixed name would be followed
+     `.tmp` written with truncating semantics is a symlink-race (profile-security.md
+     §Path confinement) -- an attacker-planted symlink at the fixed name would be followed
      and its target truncated. */
   const tmp = `${stampPath}.${randomBytes(6).toString('hex')}.tmp`;
   const fd = openSync(tmp, 'wx');

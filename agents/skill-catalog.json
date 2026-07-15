@@ -1,16 +1,20 @@
 {
-  "comment": "Provenance ledger for agents/review-guide-templates/. One entry per concrete upstream repo (Gate-P F4, guides-revamp 2026-07-11); multiple entries may feed one guide. INT-06 asserts set equality: templates dir *.md == union(feeds_guides) + core-code-guidelines.md (baseline, no upstream). 'rejected' entries are audit-only - do not re-add them as sources without new evidence.",
+  "comment": "Provenance ledger for agents/review-guide-templates/. One entry per concrete upstream repo (Gate-P F4, guides-revamp 2026-07-11; profile rewrite review-recall 2026-07-15); multiple entries may feed one file. INT-06 asserts set equality: templates dir *.md minus TRACEABILITY.md (migration/canary registry, not corpus) == union(feeds_guides). Old-corpus filenames inside 'rejected' reasons are historical audit text - TRACEABILITY.md maps them. 'rejected' entries are audit-only - do not re-add them as sources without new evidence.",
   "sources": [
     {
       "id": "ramziddin/solid-skills",
       "url": "https://github.com/ramziddin/solid-skills",
       "license": "MIT (README §License; no root LICENSE file)",
       "pinned_ref": "b113ce6871c05e4799b0edfa0d268bde8e04a8a6",
-      "paths": ["skills/solid/references/"],
+      "paths": [
+        "skills/solid/references/"
+      ],
       "feeds_guides": [
-        "clean-architecture.md",
-        "refactoring-checklist.md",
-        "architecture-deepening.md"
+        "profile-correctness-and-lifecycle.md",
+        "profile-naming-and-constants.md",
+        "profile-structure-and-dependencies.md",
+        "profile-tests-quality.md",
+        "profile-types-and-contracts.md"
       ],
       "applicability": "strong:class-heavy-ts; light:script-ts; none:bash-n8n",
       "decision": "adapt-excerpts-only; do not import blindly (overfits NestJS/class-heavy)"
@@ -25,7 +29,9 @@
         "docs/engineering/codebase-design.md",
         "docs/engineering/domain-modeling.md"
       ],
-      "feeds_guides": ["architecture-deepening.md"],
+      "feeds_guides": [
+        "profile-structure-and-dependencies.md"
+      ],
       "applicability": "strong:ts-services-and-shared-modules; light:one-off-scripts",
       "decision": "ideas-only in practice (clone carries overview pages, not full skill bodies); deep-module vocabulary traces to Ousterhout - lineage named in the guide header"
     },
@@ -48,9 +54,13 @@
         "assets/pr-review-template.md"
       ],
       "feeds_guides": [
-        "language-review-sources.md",
-        "security-review.md",
-        "review-output-format.md"
+        "review-contract.md",
+        "profile-correctness-and-lifecycle.md",
+        "profile-naming-and-constants.md",
+        "profile-security.md",
+        "profile-structure-and-dependencies.md",
+        "profile-tests-quality.md",
+        "profile-types-and-contracts.md"
       ],
       "applicability": "load only the language section matching the surface under review",
       "decision": "adapt-excerpts; per-language dispatch only; no lenses for stacks consumers do not use"
@@ -60,8 +70,16 @@
       "url": "https://github.com/wondelai/skills",
       "license": "MIT",
       "pinned_ref": "326b3801223ad277ae7082ff85435ba1d36e1903",
-      "paths": ["clean-architecture/SKILL.md", "clean-architecture/references/"],
-      "feeds_guides": ["clean-architecture.md"],
+      "paths": [
+        "clean-architecture/SKILL.md",
+        "clean-architecture/references/"
+      ],
+      "feeds_guides": [
+        "profile-naming-and-constants.md",
+        "profile-structure-and-dependencies.md",
+        "profile-tests-quality.md",
+        "profile-types-and-contracts.md"
+      ],
       "applicability": "strong:class-heavy-ts and shared modules; weigh against the anti-overfit banner",
       "decision": "adapt-excerpts (dependency rule, boundaries, entities/use-cases, component principles); resolves the former clean-hexagonal-architecture-community placeholder"
     },
@@ -70,8 +88,15 @@
       "url": "https://github.com/affaan-m/everything-claude-code",
       "license": "MIT",
       "pinned_ref": "40927950c49f6e742d341e20ff7b9b7e1e7bfff5",
-      "paths": ["skills/hexagonal-architecture/SKILL.md"],
-      "feeds_guides": ["clean-architecture.md"],
+      "paths": [
+        "skills/hexagonal-architecture/SKILL.md"
+      ],
+      "feeds_guides": [
+        "profile-naming-and-constants.md",
+        "profile-structure-and-dependencies.md",
+        "profile-tests-quality.md",
+        "profile-types-and-contracts.md"
+      ],
       "applicability": "strong:class-heavy-ts; secondary to wondelai/skills",
       "decision": "adapt-excerpts (ports-first workflow, composition root, per-boundary contract tests, hexagonal anti-patterns); kept because the rewrite actually used this material"
     },
@@ -80,8 +105,12 @@
       "url": "https://github.com/agamm/claude-code-owasp",
       "license": "MIT",
       "pinned_ref": "f5dfa3d66da1fdfeb36b7428c35b17abaff6465b",
-      "paths": [".claude/skills/owasp-security/"],
-      "feeds_guides": ["security-review.md"],
+      "paths": [
+        ".claude/skills/owasp-security/"
+      ],
+      "feeds_guides": [
+        "profile-security.md"
+      ],
       "applicability": "security lens only; emphasis by surface per the guide banner",
       "decision": "adapt-excerpts (OWASP Top-10:2025 mapping, authn/authz, crypto, supply chain, JS/TS+Bash+Python quirks); resolves the former codex-security-skills placeholder"
     }

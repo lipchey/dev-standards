@@ -79,9 +79,11 @@ test('a same-named overlay body is loaded additively alongside its package templ
   withRoot((root) => {
     const overlayDirectory = path.join(root, '.claude', 'review-guides');
     fs.mkdirSync(overlayDirectory, { recursive: true });
+    /* TRACEABILITY.md sorts first but is loader-excluded — a same-named overlay
+       would load as overlay-only and break the additive-merge expectation. */
     const templateName = fs
       .readdirSync(REVIEW_GUIDE_TEMPLATES_DIR)
-      .filter((fileName) => fileName.endsWith('.md'))
+      .filter((fileName) => fileName.endsWith('.md') && fileName !== 'TRACEABILITY.md')
       .sort()[0];
     assert.notEqual(templateName, undefined);
     if (templateName === undefined) return;
@@ -172,13 +174,13 @@ test('an unavailable package template directory fails closed', () => {
 
 test('guide load fails when a canonical template is missing or has a blank body', () => {
   const names = [
-    'architecture-deepening.md',
-    'clean-architecture.md',
-    'core-code-guidelines.md',
-    'language-review-sources.md',
-    'refactoring-checklist.md',
-    'review-output-format.md',
-    'security-review.md',
+    'profile-correctness-and-lifecycle.md',
+    'profile-naming-and-constants.md',
+    'profile-security.md',
+    'profile-structure-and-dependencies.md',
+    'profile-tests-quality.md',
+    'profile-types-and-contracts.md',
+    'review-contract.md',
   ];
   const withoutOne = loadReviewGuides('/no-overlay', {
     templatesDir: '/templates',
@@ -190,7 +192,7 @@ test('guide load fails when a canonical template is missing or has a blank body'
   const withBlankBody = loadReviewGuides('/no-overlay', {
     templatesDir: '/templates',
     listMarkdownFiles: () => [...names],
-    readFile: (filePath) => (filePath.endsWith('core-code-guidelines.md') ? '  \n' : 'body'),
+    readFile: (filePath) => (filePath.endsWith('review-contract.md') ? '  \n' : 'body'),
   });
   assert.equal(withBlankBody.ok, false);
 
@@ -200,4 +202,21 @@ test('guide load fails when a canonical template is missing or has a blank body'
     readFile: () => 'body',
   });
   assert.equal(complete.ok, true);
+
+  /* The registry is excluded BEFORE the blank-body check: a TRACEABILITY.md listed
+     in the TEMPLATES dir never becomes a loaded guide and cannot fail the corpus as
+     blank. The lister must be directory-aware — the loader reuses it for the overlay
+     dir, and an overlay hit here would sneak the name back in as a repo-overlay. */
+  const withRegistry = loadReviewGuides('/no-overlay', {
+    templatesDir: '/templates',
+    listMarkdownFiles: (directory) =>
+      directory === '/templates' ? [...names, 'TRACEABILITY.md'] : [],
+    readFile: (filePath) => (filePath.endsWith('TRACEABILITY.md') ? '' : 'body'),
+  });
+  assert.equal(withRegistry.ok, true);
+  if (!withRegistry.ok) return;
+  assert.equal(
+    withRegistry.guides.some((guide) => guide.name === 'TRACEABILITY.md'),
+    false,
+  );
 });
