@@ -10,7 +10,16 @@ import globals from "globals";
 /* Per-stack presets (node, frontend, frontendVite, frontendNext) are imported
    only when their block below is uncommented — an unused import is itself a
    lint error in the seeded file. */
-import { core, regexp, test, naming, constantsHome } from "dev-standards/eslint";
+import {
+  core,
+  regexp,
+  test,
+  naming,
+  constantsHome,
+  inlineLiterals,
+  typesHome,
+  propertyNaming,
+} from "dev-standards/eslint";
 
 export default tseslint.config(
   { ignores: ["**/dist", "vendor", "node_modules", ".artifacts"] },
@@ -48,6 +57,21 @@ export default tseslint.config(
   ...constantsHome({
     files: ["src/**/*.ts", "src/**/*.tsx"],
     ignores: ["**/src/constants/**", "**/constants.ts", "**/*.test.ts", "**/*.d.ts"],
+  }),
+  /* New consumers keep these gates at error. Existing consumers should append
+     temporary warn overrides during calibration, then remove them after cleanup. */
+  ...inlineLiterals({
+    files: ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"],
+    ignores: ["**/*.d.ts"],
+  }),
+  ...typesHome({
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: ["**/src/types/**", "**/types.ts", "**/*.d.ts"],
+    allowNamePattern: "Props$",
+  }),
+  ...propertyNaming({
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: ["**/src/contracts/wire/**", "**/generated/**", "**/*.d.ts"],
   }),
   /* JS config files sit outside tsconfig — typed rules crash on them. globals.node
      keeps no-undef quiet on `process` etc.; merge the languageOptions so this block

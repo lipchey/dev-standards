@@ -6,7 +6,20 @@ no per-project plugin install. Import what a stack needs; append your own layer.
 
 ```js
 // consumer eslint.config.js
-import { core, regexp, node, test, frontend, frontendVite, frontendNext, constantsHome, naming } from "dev-standards/eslint";
+import {
+  core,
+  regexp,
+  node,
+  test,
+  frontend,
+  frontendVite,
+  frontendNext,
+  constantsHome,
+  inlineLiterals,
+  typesHome,
+  propertyNaming,
+  naming,
+} from "dev-standards/eslint";
 
 export default tseslint.config(
   { ignores: [/* … */] },
@@ -22,6 +35,19 @@ export default tseslint.config(
   ...constantsHome({
     files: ["packages/*/src/**/*.ts", "apps/*/src/**/*.{ts,tsx}"],
     ignores: ["**/src/constants/**", "**/constants.ts", "**/*.d.ts"],
+  }),
+  ...inlineLiterals({
+    files: ["packages/**/*.ts", "apps/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+    ignores: ["**/*.d.ts"],
+  }),
+  ...typesHome({
+    files: ["packages/*/src/**/*.ts", "apps/*/src/**/*.{ts,tsx}"],
+    ignores: ["**/src/types/**", "**/types.ts", "**/*.d.ts"],
+    allowNamePattern: "Props$",
+  }),
+  ...propertyNaming({
+    files: ["packages/*/src/**/*.ts", "apps/*/src/**/*.{ts,tsx}"],
+    ignores: ["**/contracts/wire/**", "**/generated/**", "**/*.d.ts"],
   }),
   { /* repo-local overrides: no-restricted-imports boundaries, etc. */ },
 );
@@ -41,6 +67,12 @@ export default tseslint.config(
   knip; unused-disable to ESLint-native `reportUnusedDisableDirectives` (so
   `eslint-comments/no-unused-disable`, which upstream deprecated for that reason, is
   not used).
+- **One custom-plugin identity across presets.** `constantsHome`, `typesHome`, and
+  `propertyNaming` all register the exported `devStandardsPlugin` object. Overlapping
+  flat-config entries cannot redefine the same plugin name with different objects.
+- **The consumer's TypeScript ESLint base owns its plugin registration.**
+  `inlineLiterals` configures `@typescript-eslint/no-magic-numbers` without registering
+  another plugin object, so place it after a `typescript-eslint` base as shown above.
 
 ## Presets
 
@@ -53,13 +85,18 @@ export default tseslint.config(
 | `frontend({files})` | frontend-web | `jsx-a11y` recommended + `react-hooks` flat/recommended + `react-hooks/set-state-in-render`. **Owns the react-hooks rules** — drop any separate react-hooks block in the consumer or the two double-report |
 | `frontendVite({files})` | frontend-web (Vite) | `react-refresh/only-export-components` — Fast-Refresh integrity. Vite only; Next runs its own |
 | `frontendNext({files})` | frontend-web (Next) | `@next/eslint-plugin-next` core-web-vitals. Next site only |
-| `constantsHome({files, ignores})` | all | custom `dev-standards/constants-home` (error): a module-scope `const` bound to a bare primitive literal must move to a constants home. A custom rule in an inline plugin — **not** `no-restricted-syntax` — so it never clobbers a consumer's own naming gate (see below) |
+| `constantsHome({files, ignores})` | all | custom `dev-standards/constants-home` (error): a module-scope `const` bound to a bare primitive literal must move to a constants home. A custom rule in the shared plugin — **not** `no-restricted-syntax` — so it never clobbers a consumer's own naming gate (see below) |
+| `inlineLiterals({files, ignores, ignore})` | all | `@typescript-eslint/no-magic-numbers` (error), with `0`, `1`, `-1`, array indexes, enums, numeric literal types, readonly class properties, and type indexes ignored. Consumer `ignore` values extend the pinned numeric list |
+| `typesHome({files, ignores, allowNamePattern})` | all | custom `dev-standards/types-home` (error): exported top-level interfaces and type aliases belong in the consumer's types home. `allowNamePattern` defaults to `"Props$"` |
+| `propertyNaming({files, ignores})` | all | custom `dev-standards/property-naming` (error): non-computed identifier keys on TypeScript property signatures must be at least three characters; `_` remains the discard convention |
 | `naming({files, ignores, exemptNamedImports, extraRestrictedSyntax})` | all | the identifier floor: `no-restricted-syntax` min-3-chars over every name the repo's authors choose (vars, functions, classes, params, catch/destructured bindings, class members, ALL import locals incl. aliases) + `id-match` ASCII-only. `_` discard and object PROPERTY keys exempt. **Owns `no-restricted-syntax` in its scope** (see below) |
+| `devStandardsPlugin` | advanced composition | the single plugin object containing `constants-home`, `types-home`, and `property-naming`; preset factories already register it |
 
-The factory presets (`node`, `frontend*`, `constantsHome`, `naming`) take `{ files }`
-(and `{ ignores }`) because a monorepo must scope stack rules to the
-right subtree — React rules must not reach node packages, and the constants gate must
-not fire in the constants homes it points people toward.
+The factory presets (`node`, `frontend*`, `constantsHome`, `inlineLiterals`,
+`typesHome`, `propertyNaming`, `naming`) take `{ files }` (and, where relevant,
+`{ ignores }`) because a monorepo must scope stack rules to the right subtree — React
+rules must not reach node packages, and repository-layout gates must not fire in the
+homes or external-contract files they deliberately exempt.
 
 ## `naming` — the length/ASCII floor for identifiers
 
@@ -90,7 +127,7 @@ gate. It flags a **module-scope** `const` whose initializer is a bare primitive 
 a number/string/boolean literal, a unary `+`/`-` on a numeric literal, an expressionless
 template (`` `fixed` ``), or any of those inside a TS `as const` cast.
 
-It ships a custom rule inside an inline plugin, **not** a `no-restricted-syntax` config:
+It ships a custom rule inside the shared plugin, **not** a `no-restricted-syntax` config:
 flat config REPLACES (never merges) same-rule options, so a shared `no-restricted-syntax`
 entry would silently erase a consumer's own `no-restricted-syntax` naming gate (or the
 reverse). The distinct `dev-standards/constants-home` id cannot collide. The preset
@@ -112,6 +149,58 @@ hard-codes NO paths — pass your own globs:
 (`const MS = 45 * 60 * 1000;` — a `BinaryExpression`, not a literal) both stay
 review-owned. Object literals and option-defaults objects (`const defaults = { gap: 500 }`)
 are intentionally left in place.
+
+## `inlineLiterals` — named numeric values in logic and tests
+
+Wraps `@typescript-eslint/no-magic-numbers` with a low-noise numeric floor. It ignores
+`0`, `1`, and `-1`, plus array indexes, enums, numeric literal types, readonly class
+properties, and type indexes. Values passed through `ignore` extend rather than replace
+the pinned list:
+
+```js
+...inlineLiterals({
+  files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+  ignores: ["**/*.d.ts"],
+  ignore: [100],
+}),
+```
+
+The preset intentionally does not register `@typescript-eslint`: the consumer's
+`typescript-eslint` base must precede it and supplies the exact plugin object already in
+the flat config. Inline strings remain review-owned; this preset is numeric-only.
+
+## `typesHome` — exported declarations in the types home
+
+Flags top-level interfaces and type aliases exported directly or through a same-file
+`export { Name }`, `export type { Name }`, or `export default Name`. Non-exported local
+helpers, ambient declarations, and re-exports from another module are not flagged.
+Scope out declaration files and the actual types home with `ignores`:
+
+```js
+...typesHome({
+  files: ["src/**/*.{ts,tsx}"],
+  ignores: ["**/src/types/**", "**/types.ts", "**/*.d.ts"],
+  allowNamePattern: "Props$",
+}),
+```
+
+`allowNamePattern` is a string regular expression, defaults to `"Props$"`, and is
+validated when the factory builds the config. Invalid strings throw before lint starts.
+
+## `propertyNaming` — the TypeScript property-signature floor
+
+Flags non-computed identifier keys shorter than three characters on
+`TSPropertySignature` nodes in interfaces and type literals. `_` remains allowed.
+Class fields stay owned by `naming`, and object-literal keys are not checked. Exempt
+externally fixed wire keys by ignoring their modules rather than creating a global key
+allowlist:
+
+```js
+...propertyNaming({
+  files: ["src/**/*.{ts,tsx}"],
+  ignores: ["**/contracts/wire/**", "**/generated/**", "**/*.d.ts"],
+}),
+```
 
 ## Version pins that matter
 
