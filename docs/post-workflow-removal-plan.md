@@ -231,7 +231,32 @@ Stryker в `audit` — лише якщо diff-coverage покаже зелені
 лишає слід у звіті); 4.2 пише звіт у `reports/quality/` і гучно падає на
 нерозв'язній базі; доктрина в заповненому гайді пілота.
 
-## Фаза 5 — Deep-review fix-mode: hardening + shipping (L)
+## Фаза 5 — Deep-review fix-mode: hardening + shipping (L) — ВИКОНАНО (2026-07-15)
+
+> Статус: ВИКОНАНО 2026-07-15 (власна сесія Фази 5, тег v0.19.1). Reality-sync
+> проти дерева (стан задачі був застарілий — ядро вже на v0.19.0, пілот ai-prompter
+> уже бампнутий на v0.19.0 паралельною сесією):
+> - **§5.0–5.5 hardening** — відвантажено v0.15.0 (ADR-013/014); DR-01/03–13/17 +
+>   RUN-01/02 = `fixed` за кодом (диспозиція DEEP_REVIEW_FINDINGS.md).
+> - **§5.6 shipping ВИКОНАНО** — consumer shim (`templates/consumer/scripts/deep-review`),
+>   `build:deep-review`, заповнений `deep_review`-блок, skill verb-wiring, worktree
+>   copy/reuse/stale (ADR-013 copy-not-symlink + freshness-stamp). INT-04 → fixed.
+> - **§5.7 e2e ВИКОНАНО** — `tests/deep-review-e2e/` зелений, 29 кейсів (RED-rollback
+>   byte-identical §F6, no-touch self-protection §F4 на quality.json + project-facts,
+>   symlink-confinement §F11, consumer-worktree copy/reuse/stale, CAS contention,
+>   crash-after-commit reconcile, relocated verify_entry).
+> - **§5.8 пілот ВИКОНАНО** — fix-mode slices приземлені в ai-prompter через
+>   людсько-рев'юені PR #1/#7/#15/#18 (R417/R64/R16/R681). Людський gate: рішення **A**
+>   (2026-07-15) — прийняти наявний доказ; hardened-енджин safety exhaustively покрита
+>   29 e2e (вкл. consumer-worktree+submodule), diff-якість уже рев'юена в PR. Нюанс:
+>   ці slice передували адопції hardened-енджина в пілоті (v0.15.0 адоптовано 2026-07-15,
+>   після slice-гілок) — hardened fix-mode валідований e2e, не landed-пілотним slice.
+> - **Хвіст цієї сесії** — `tests/e2e-adoption-kit.sh` падав на чистому дереві
+>   (snapshot-коміт без `--allow-empty`); виправлено (65/65). Уся верифікація зелена:
+>   npm test 39/39, e2e 29/29, adoption 65/65, verify --fast/--full.
+>
+> _Нижче — reality-sync нота сесії Фази 6 (провенанс) + ОРИГІНАЛЬНИЙ спец §5.0–5.8;
+> фактичний статус — у ноті вище._
 
 > Reality-sync 2026-07-15 (сесія Фази 6): §5.0–5.5 engine-hardening (central
 > preflight, `test_ref` замість довільного `test_cmd`, run-descriptor identity,
@@ -418,7 +443,8 @@ bootstrap кейс); один slice реально приземлений у п�
 > - **fail-closed читання project-facts у fix-mode** — контракт УЖЕ в енджині
 >   (`deep-review/src/no-touch.ts`: missing/unreadable/unparsed facts у fix-mode →
 >   `NoTouchSourceError`, не silent baseline; це DR-17, disposition=fixed); пілотна
->   доставка лишається за Фазою 5 §5.8, як і було.
+>   доставка приземлена (project-facts + `vendor/dev-standards/**` no-touch) — Фаза 5
+>   §5.8 ВИКОНАНО 2026-07-15.
 
 > _Нижче — ОРИГІНАЛЬНИЙ спец Фази 7 (провенанс); фактичний статус у ноті вище.
 > «Чого нема — додати» вже додано (deviation-маркер, extend-only, no-fork)._

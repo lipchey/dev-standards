@@ -24,25 +24,30 @@ Severity:
 (а) весь `workflow/` підсистему видалено (Phase R, 2026-07-10) → усі WF-* та
 generator-findings obsolete; (б) hardening deep-review-енджина Фази 5 §5.0–5.5
 (E0–E7) вже **відвантажено** в systemic-gaps батчі ADR-013/014 → DR-01/03–13/17
-`fixed` у коді, не `phase-5`; лишаються §5.6 shipping (INT-04) і §5.8 пілот.
+`fixed` у коді, не `phase-5`. §5.6 shipping (INT-04) відвантажено (v0.15.0–v0.19.0:
+consumer shim, `build:deep-review`, `deep_review`-блок, skill-wiring, worktree
+copy/reuse/stale) і §5.8 пілот satisfied (fix-mode slices приземлені в ai-prompter
+через людсько-рев'юені PR #1/#7/#15/#18) → **Phase 5 закрита 2026-07-15**.
 
-**Підсумок:** 26 fixed · 29 obsolete-after-removal · 1 phase-5.6 (INT-04) ·
-2 BACKLOG (DR-14, DR-16). Жодного `rejected`. Уточнення:
-- З 26 fixed — **24 повністю**, а **INT-01 та INT-07 — fixed із tracked-residual
+**Підсумок:** 27 fixed · 29 obsolete-after-removal · 2 BACKLOG (DR-14, DR-16).
+Жодного `rejected`. Уточнення:
+- З 27 fixed — **25 повністю**, а **INT-01 та INT-07 — fixed із tracked-residual
   карв-аутом**: INT-01 (CI-частина виправлена; branch-protection = GitHub-ops-toggle
   поза кодом — не в підрахунку коду); INT-07 (lint+dead-code виправлено;
   coverage/format запарковано). Обидва карв-аути занесені у `BACKLOG.md`.
 - DEP-02 сам finding (SHA-pin) — fixed; авто-оновлення тих пінів через dependabot —
   окремий проактивний BACKLOG-пункт, не диспозиція DEP-02.
-- INT-04: механізм доставки вже є (consumer shim-шаблон, `build:deep-review`,
-  verb-wiring, e2e); лишається пілотна доставка §5.6/§5.8, тому phase-5.6, не fixed.
+- INT-04: fixed (v0.15.0–v0.19.0). Доставка відвантажена (consumer shim-шаблон,
+  `build:deep-review`, `deep_review`-блок, skill verb-wiring, worktree copy/reuse/stale)
+  і валідована 29 real-git e2e-кейсами (вкл. consumer-worktree + submodule); §5.8 пілот
+  satisfied людсько-рев'юеними slice-PR (#1/#7/#15/#18).
 
 | ID | Sev | Диспозиція | Доказ |
 |---|---|---|---|
 | INT-01 | P1 | fixed (CI) / ops (branch-protection) | `.github/workflows/quality.yml` реальний, placeholder прибрано; branch protection — GitHub settings, не файл (ops) |
 | INT-02 | P1 | fixed | CI ганяє `npm run bootstrap` ПЕРЕД `./verify` (quality.yml:31/33,49/51) |
 | INT-03 | P1 | fixed | `quality.json` full = typecheck+`npm test`+build+`test:e2e`; fast має typecheck |
-| INT-04 | P1 | phase-5.6 | consumer shipping (shim+dist+`deep_review`-блок+worktree bootstrap) = roadmap §5.6; skill-body verb-wiring уже готовий |
+| INT-04 | P1 | fixed | consumer shipping відвантажено (shim+dist+`deep_review`-блок+worktree copy/reuse/stale); 29 e2e-кейсів (вкл. consumer-worktree+submodule); skill verb-wiring готовий. Phase 5 закрита |
 | INT-05 | P2 | fixed | `workflow/` видалено + README переписано (нема "unimplemented" суперечності) |
 | INT-06 | P2 | fixed | 4 "відсутні" guides існують у `agents/review-guide-templates/`; `skill-catalog.json` заповнений (real url/ref/license, 0 placeholder) |
 | INT-07 | P3 | fixed (lint+dead-code) | eslint (fast+full) + knip (full), report-only. Parked (окремо): core-side coverage/format gate — coverage/companion-tests живуть у пілоті (Phase 3/4.2), не в core `quality.json`; BACKLOG-nit, не reopen |
@@ -132,6 +137,11 @@ platform/ops toggle, не код.
 Вплив: deterministic safety gates можуть бути dead code; clean clone/adopting repo бачить лише prose contract.
 
 Рекомендація: постачати versioned launcher/bundle і вписати точний CLI protocol у canonical skill.
+
+**Резолюція (Phase 5, v0.15.0–v0.19.0):** versioned bundle + consumer shim
+постачаються (`templates/consumer/scripts/deep-review`, `build:deep-review`); skill
+body вписує CLI-протокол (`select-worktree`/`classify`/`commit-slice`/`verify`/`handoff`);
+worktree bootstrap copy-not-symlink (ADR-013) + freshness-stamp; 29 real-git e2e. → fixed.
 
 ### INT-05 — P2 — Документація суперечить поточному коду
 
