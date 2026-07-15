@@ -27,11 +27,15 @@ generator-findings obsolete; (б) hardening deep-review-енджина Фази 
 `fixed` у коді, не `phase-5`; лишаються §5.6 shipping (INT-04) і §5.8 пілот.
 
 **Підсумок:** 26 fixed · 29 obsolete-after-removal · 1 phase-5.6 (INT-04) ·
-2 BACKLOG (DR-14, DR-16). Жодного `rejected`. (DEP-02 сам finding — SHA-pin —
-fixed; авто-оновлення тих пінів через dependabot — окремий проактивний
-BACKLOG-пункт, не диспозиція DEP-02. INT-04: механізм доставки вже є
-(consumer shim-шаблон, `build:deep-review`, verb-wiring, e2e); лишається пілотна
-доставка §5.6/§5.8, тому phase-5.6, не fixed.)
+2 BACKLOG (DR-14, DR-16). Жодного `rejected`. Уточнення:
+- З 26 fixed — **24 повністю**, а **INT-01 та INT-07 — fixed із tracked-residual
+  карв-аутом**: INT-01 (CI-частина виправлена; branch-protection = GitHub-ops-toggle
+  поза кодом — не в підрахунку коду); INT-07 (lint+dead-code виправлено;
+  coverage/format запарковано). Обидва карв-аути занесені у `BACKLOG.md`.
+- DEP-02 сам finding (SHA-pin) — fixed; авто-оновлення тих пінів через dependabot —
+  окремий проактивний BACKLOG-пункт, не диспозиція DEP-02.
+- INT-04: механізм доставки вже є (consumer shim-шаблон, `build:deep-review`,
+  verb-wiring, e2e); лишається пілотна доставка §5.6/§5.8, тому phase-5.6, не fixed.
 
 | ID | Sev | Диспозиція | Доказ |
 |---|---|---|---|

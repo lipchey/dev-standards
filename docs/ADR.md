@@ -69,7 +69,8 @@ The per-consumer skill wrappers (`.claude/skills/**/SKILL.md`) are **thin static
 pointers** at the canonical body (single source per ADR-003), never a generated or
 duplicated copy. The wrapper generator was retired in Phase 2 (2026-07-10); a static
 contract test (`tests/runner/skill-wrappers-static.test.ts`) guards wrapper↔body drift.
-Project specificity goes through guides + project-facts, never a forked skill body.
+Project specificity goes through the three legal tuning surfaces (`quality.json`, additive
+review-guide overlays, `project-facts.md` — see `docs/ADOPTION.md`), never a forked skill body.
 
 ---
 

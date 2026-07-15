@@ -128,12 +128,15 @@ Independent of the in-flight core-hardening batch (which already leaves
   gating"* in `docs/ADR.md`, deliberately not the bare "review-chain" name, ending
   the collision with the `codex-chain` Gate-C skill (Phase 6.2).
 - **Core `verify` shim build-freshness guard** — **DONE (2026-07-15, Phase 6.5).**
-  `scripts/build-fingerprint.sh` content-fingerprints the runner build inputs
-  (`runner/src/**/*.ts`); `package.json` `postbuild` stamps
-  `runner/dist/.build-fingerprint`; the core `./verify` shim recomputes and refuses
-  a stale bundle. Content-fingerprint (not the consumer's SHA `.built-from` stamp)
-  because active core dev moves HEAD every commit + leaves uncommitted source edits.
-  Test: `tests/runner/build-freshness.test.ts`.
+  `tools/build-fingerprint.mjs` (Node `crypto`) content-fingerprints the runner build
+  inputs (`runner/src/**/*.ts` + the `build:runner` recipe); it is wired directly into
+  the `build:runner` npm script (`… && node tools/build-fingerprint.mjs --write`), which
+  atomically stamps `runner/dist/.build-fingerprint`; the core `./verify` shim recomputes
+  (print mode) and refuses a stale/missing stamp. Node, not a shell/shasum script, so it
+  imposes no new dependency on consumer bootstrap (which builds this submodule).
+  Content-fingerprint (not the consumer's SHA `.built-from` stamp) because active core dev
+  moves HEAD every commit + leaves uncommitted source edits. Test:
+  `tests/runner/build-freshness.test.ts`.
 
 ## 2026-07-15 — Phase 6.3 disposition residuals (non-blocking)
 
