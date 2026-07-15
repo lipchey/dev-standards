@@ -460,5 +460,5 @@ follows an escape strengthens the RULE, never quotes the case.
 
 | Canary | Origin (retained offending state) | Owner profile | Offense / expected blinded catch |
 | --- | --- | --- | --- |
-| `avgIdf` | ai-prompter PR #25 head, `packages/engine` | `profile-naming-and-constants.md` | abbreviation identifier below the meaningful-name bar; a blinded run flags it as a non-meaningful name without being pointed at the file |
+| `avgIdf` | BURNED 2026-07-15: the owner fix round renamed it to `meanIdf` (ai-prompter dbaff2a) before any blinded replay ran — no retained offending state remains, the canary cannot be caught | `profile-naming-and-constants.md` | (was: abbreviation identifier below the meaningful-name bar) |
 | `pos` | ai-prompter PR #25 head, `packages/engine` | `profile-naming-and-constants.md` | shortened identifier (`pos` for position) surviving review; a blinded run flags it under naming meaningfulness |
