@@ -233,6 +233,16 @@ Stryker в `audit` — лише якщо diff-coverage покаже зелені
 
 ## Фаза 5 — Deep-review fix-mode: hardening + shipping (L)
 
+> Reality-sync 2026-07-15 (сесія Фази 6): §5.0–5.5 engine-hardening (central
+> preflight, `test_ref` замість довільного `test_cmd`, run-descriptor identity,
+> findings schema-v2 + CAS, secret-scan tri-state fail-closed, handoff readiness,
+> RED-rollback, real-git e2e) вже ВІДВАНТАЖЕНО в systemic-gaps батчі ADR-013/014
+> (v0.15.0). Тому диспозиція Фази 6.3 маркує DR-01/03–13/17 та RUN-01/02 як `fixed`
+> ЗА КОДОМ (`deep-review/src/*`), не `phase-5`. ЛИШАЄТЬСЯ для власної сесії Фази 5:
+> **§5.6 shipping** (INT-04 — consumer shim/dist delivery, filled `deep_review` блок,
+> worktree bootstrap) і **§5.8 пілот** (один slice реально приземлений). Решта тіла
+> нижче — вже в коді; звіряй проти дерева, не проти прози.
+
 Мета: fix-mode (`commit-slice`) безпечний, коректний і реально підключений.
 ПЕРЕДУМОВА: Фаза 7.2 (project-facts контракт) — виконати ДО 5.8, бо
 no-touch пілота живиться з project-facts, а fail-open там неприйнятний.
@@ -331,19 +341,26 @@ main → відмова; handoff із pending → відмова; e2e консю
 **Acceptance:** DR-01/03…12 закриті тестами; e2e зелений (вкл. worktree-
 bootstrap кейс); один slice реально приземлений у пілоті через гілку.
 
-## Фаза 6 — Хвости + зняття onboarding gate (M)
+## Фаза 6 — Хвости + зняття onboarding gate (M) — ВИКОНАНО (2026-07-15)
 
-> Reality-sync 2026-07-14 (сесія 4.3): 6.4 ВИКОНАНО достроково —
-> docs/ADOPTION.md існує і є канонічним онбордингом (delivery-таблиця,
-> порядок submodule update → build → seed, migration note); ратифікаційна
-> частина 6.5 зафіксована в ADOPTION.md §«Content contract (Phase 6)»;
-> freshness-guard у ЯДЕРНОМУ verify-шимі досі НЕ портований (лишається
-> активним хвостом 6.5). 6.1 (docs/ADR.md) — не існує, pending. 6.2 —
-> pending (продубльовано в BACKLOG). 6.3 — DEEP_REVIEW_FINDINGS.md
-> відсутній у робочому дереві, але ВІДНОВНИЙ:
-> `git show refs/stash:DEEP_REVIEW_FINDINGS.md` (595 рядків, 58 знахідок;
-> stash крихкий — відновити при першій нагоді). Пункт лишається pending —
-> сесія Фази 6 відновлює файл і робить повну диспозицію.
+> Статус: ВИКОНАНО 2026-07-15 (core `1ab2e37`; тег v0.16.0). Reality-sync цієї
+> сесії проти дерева (стан задачі був застарілий: ядро вже на v0.15.0, docs/ADR.md
+> вже існував із записами лише 013/014, пілот уже на v0.15.0):
+> - **6.1 ВИКОНАНО** — docs/ADR.md добилено: стислий запис для КОЖНОГО id, на який
+>   посилається код (ADR-003/007/008/010/011/012), + numbering-gap нота
+>   (002/004/005 не призначались; 006/009 — workflow-internal, retired з removal).
+> - **6.2 ВИКОНАНО** — ADR-011 записаний як «automatic review-chain gating» (retired),
+>   геть від назви «review-chain» (колізія зі скілом `codex-chain` знята).
+> - **6.3 ВИКОНАНО** — DEEP_REVIEW_FINDINGS.md відновлено з refs/stash і закомічено
+>   (595 рядків/58 знахідок); повна диспозиція всіх 58 (26 fixed · 29
+>   obsolete-after-removal · 1 phase-5.6 (INT-04) · 2 BACKLOG (DR-14/16)) у секції
+>   «Диспозиція (Фаза 6)». Це передумова зняття gate — виконана.
+> - **6.4** — ADOPTION.md (виконано достроково сесією 4.3).
+> - **6.5 ВИКОНАНО** — freshness-guard у ЯДЕРНОМУ verify-шимі: content-fingerprint
+>   інпутів білда через `tools/build-fingerprint.mjs` (Node crypto, wired у
+>   `build:runner`), шим відмовляє на застарілому бандлі. Gate C + ізольовані тести.
+> - **Onboarding gate знято** — dead-fallback у global CLAUDE.md прибрано (ADOPTION.md
+>   існує й повний).
 
 1. `docs/ADR.md` — канонічний ADR-лог (перші записи: ADR-008/012 retired у
    removal; далі — всі id, на які посилається код).
@@ -377,28 +394,26 @@ bootstrap кейс); один slice реально приземлений у п�
    розробка міняє HEAD щокоміта + лишає uncommitted-правки) — потрібен
    content-fingerprint інпутів білда, не revision-стамп.
 
-## Фаза 7 — Контракт per-project тюнінгу (M)
+## Фаза 7 — Контракт per-project тюнінгу (M) — ВИКОНАНО (2026-07-15)
 
 Мета: модифікація/файнтюн dev-standards під конкретний проект — явний,
-задокументований механізм. Сьогодні продумано частково.
+задокументований механізм.
 
-> Reality-sync 2026-07-14 (сесія 4.3): фаза ЗДЕБІЛЬШОГО ВИКОНАНА поза
-> власною сесією (adoption-цикл + пілотні сесії): «три легальні поверхні»
-> зафіксовані в docs/ADOPTION.md §«Per-project tuning — three legal
-> surfaces»; 7.1 additive-only модель БЕЗ override — там само («Overlays
-> never override or delete a canonical rule»); 7.2 —
-> `agents/project-facts-template.md` існує, канонічний шлях
-> `.claude/project-facts.md` узгоджений у тілі скіла, пілот має заповнений
-> `.claude/project-facts.md` із `vendor/dev-standards/**` у No-Touch; 7.3
-> no-fork політика — в ADOPTION.md («Skill bodies are not a tuning
-> surface»). ЛИШИЛОСЬ: deviation-маркер `> deviates-from-core:` описаний
-> лише в тексті 7.1 нижче, у жодному оперативному доці (хвіст 7.1 →
-> ADOPTION.md); extend-only кваліфікатор no-touch floor («додати можна,
-> звузити BASELINE не можна») є в тілі скіла, але відсутній у
-> ADOPTION.md §tuning п.3 (хвіст туди ж); no-fork рядок у CLAUDE.md
-> ядра відсутній (хвіст 7.3); fail-closed читання project-facts у
-> fix-mode — контракт лишається за 7.2, доставка разом із Фазою 5
-> (передумова 5.8), як і було. Усі хвости — S, закрити разом із Фазою 6.
+> Статус: ВИКОНАНО 2026-07-15 (хвости закриті разом із Фазою 6, core `1ab2e37`).
+> Тіло фази (три легальні поверхні, 7.1 additive-only, 7.2 project-facts,
+> 7.3 no-fork) виконано раніше поза власною сесією (adoption-цикл + пілотні сесії)
+> — див. docs/ADOPTION.md §«Per-project tuning». Хвости цієї сесії:
+> - **7.1 хвіст ВИКОНАНО** — deviation-маркер `> deviates-from-core:` описано в
+>   ADOPTION.md §tuning (поверхня 2) як документацію людського рішення, НЕ механізм
+>   override (additive-only тримається).
+> - **7.3-точка-3 хвіст ВИКОНАНО** — extend-only кваліфікатор no-touch floor
+>   («додати зони можна, звузити BASELINE не можна») додано в ADOPTION.md §tuning п.3.
+> - **7.3 хвіст ВИКОНАНО** — no-fork рядок додано в CLAUDE.md ядра (посилається на
+>   три легальні поверхні, ADR-003/010).
+> - **fail-closed читання project-facts у fix-mode** — контракт УЖЕ в енджині
+>   (`deep-review/src/no-touch.ts`: missing/unreadable/unparsed facts у fix-mode →
+>   `NoTouchSourceError`, не silent baseline; це DR-17, disposition=fixed); пілотна
+>   доставка лишається за Фазою 5 §5.8, як і було.
 
 ### Що вже є (зафіксувати в ADOPTION.md як три легальні поверхні тюнінгу)
 
