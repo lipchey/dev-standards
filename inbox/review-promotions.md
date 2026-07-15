@@ -47,6 +47,7 @@ deleted - the history is the second-use evidence.
 - [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - tests: `skill-wrappers-static.test.ts` lstat-checks only the final SKILL.md — the deleted generator rejected every symlinked path component; add ancestor-symlink mutation cases per testing guide (correction)
 - [ ] 2026-07-10 ai-prompter Phase-3 gate-C (Codex) - core comment sweep: the 70ade5a→add5420 range adds ~149 `//` TS comment lines incl. dividers/narration — convert to block form and prune per the comments guide (correction)
 - [ ] 2026-07-10 ai-prompter Phase-4 gate-C (Codex xhigh) - confined report writer: the realpath-check-then-temp+rename pattern (shared by `runner/src/report.ts` and `tools/diff-cover.mjs`'s `writeConfinedJson`) has an ancestor-symlink TOCTOU window; unify into one core helper using openat/no-follow (or a held dir handle) rather than duplicating the vulnerable pattern (correction)
+- [ ] 2026-07-15 dev-standards Phase-6 gate-P (Codex xhigh) - build/quality-gates: a build step added to a submodule-vendored repo runs in EVERY consumer's bootstrap (`ds-bootstrap.sh` runs the submodule's `npm run build`), so a shell/binary dependency there (shasum, a bash pipeline) silently becomes a consumer build requirement not listed in ADOPTION prerequisites — implement build-time tooling in the guaranteed runtime (Node's `crypto`) so it runs anywhere the submodule builds, Windows included (correction)
 
 ## Promoted
 

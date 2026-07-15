@@ -9,4 +9,19 @@ if [[ ! -f "${BUNDLE}" ]]; then
   exit 127
 fi
 
+# Reject a bundle built from stale sources: dist/ is gitignored and built on
+# demand, so editing a runner/src/*.ts without rebuilding leaves the old bundle
+# in place and the existence check above would happily run it. We fingerprint the
+# *content* of the build inputs, not a revision/SHA (the consumer shim's
+# approach): active core dev moves HEAD every commit and leaves uncommitted source
+# edits, so a SHA stamp would false-pass on exactly the uncommitted edits this
+# guard must catch. `./verify --full` now refuses a stale bundle before reaching
+# its own `npm run build` step — intended: build first, then verify.
+EXPECT="$(node "${REPO_ROOT}/tools/build-fingerprint.mjs")"
+HAVE="$(cat "${REPO_ROOT}/runner/dist/.build-fingerprint" 2>/dev/null || echo none)"
+if [[ "${EXPECT}" != "${HAVE}" ]]; then
+  echo "verify-runner bundle is stale (build inputs changed since last build). Run: npm run build" >&2
+  exit 127
+fi
+
 exec node "${BUNDLE}" --manifest "${REPO_ROOT}/quality.json" "$@"

@@ -13,7 +13,7 @@
     "bootstrap": "npm ci && npm run build",
     "prebuild": "rm -rf runner/dist deep-review/dist",
     "build": "npm run build:runner && npm run build:deep-review",
-    "build:runner": "esbuild runner/src/verify-runner.ts runner/src/validate-quality-manifest.ts runner/src/migrate-quality-manifest.ts --bundle --platform=node --target=node20 --format=esm --sourcemap=external --outdir=runner/dist --out-extension:.js=.mjs",
+    "build:runner": "esbuild runner/src/verify-runner.ts runner/src/validate-quality-manifest.ts runner/src/migrate-quality-manifest.ts --bundle --platform=node --target=node20 --format=esm --sourcemap=external --outdir=runner/dist --out-extension:.js=.mjs && node tools/build-fingerprint.mjs --write",
     "build:deep-review": "esbuild deep-review/src/deep-review-runner.ts --bundle --platform=node --target=node20 --format=esm --sourcemap=external --outdir=deep-review/dist --out-extension:.js=.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

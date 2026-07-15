@@ -4,11 +4,104 @@ The canonical ADR log. Referencing a new `ADR-0NN` id from code, a skill body, o
 a plan requires a matching entry here (CLAUDE.md ADR discipline).
 
 **ADR-001..012 predate this file** (the "create on first entry" debt from CLAUDE.md).
-They were never collected into a single log; they live as references in code and
-skill bodies — e.g. ADR-003 (`agents/review-guide-templates/core-code-guidelines.md`),
-ADR-007 (`deep-review/src/types.ts`), ADR-010 and ADR-012 (`deep-review/src/handoff.ts`,
-`agents/skill-sources/deep-review-refactor.md`). Backfilling them here is documented
-debt; new decisions land as full entries below.
+They were never collected into a single log; they lived only as references in code and
+skill bodies. Backfilled below (Phase 6, 2026-07-15) as concise records — the facts of
+the decisions, not the full Context/Consequences template used for ADR-013 onward — so
+the log **covers every id referenced by current code** (ADR-003/007/008/010/011/012).
+
+Numbering gaps: ADR-002/004/005 were never assigned; ADR-001 was never formalized as a
+standalone record. **ADR-006** (workflow state enum + frozen transition/seat table) and
+**ADR-009** (workflow locked transactions + auto-advance) were workflow-internal
+decisions retired with the `workflow/` removal (2026-07-10) and are not referenced by
+current code, so they get no standalone entry here.
+
+---
+
+## ADR-003 — One canonical source per guide/skill body, loaded by explicit brief
+
+- **Status:** Accepted (backfilled 2026-07-15)
+
+### Decision
+
+Review guides and skill bodies each have a **single canonical source in the package**
+(`agents/review-guide-templates/` for guides, `agents/skill-sources/` for skills),
+consumed by **explicit brief — never auto-discovered**. A consumer's same-named
+`.claude/review-guides/` overlay may only *additively* extend a guide, never override or
+delete a canonical rule. (Wrapper mechanics for skill bodies: ADR-010.)
+
+---
+
+## ADR-007 — `deep_review` is an optional, standalone top-level config block
+
+- **Status:** Accepted (backfilled 2026-07-15)
+
+### Decision
+
+The deep-review engine is configured by an optional top-level `deep_review` block in
+`quality.json`, with its own engine types (`deep-review/src/types.ts`). Present-but-
+disabled (`{ "enabled": false }`) or absent is valid; the hand-validator treats the
+block as optional (`runner/src/validate.ts`).
+
+---
+
+## ADR-008 — Autonomous, write-capable Codex "reviewer seat" — RETIRED
+
+- **Status:** Retired (2026-07-10, workflow removal)
+
+### Decision (retired)
+
+The workflow subsystem gave Codex an autonomous, write-capable "reviewer seat" — a
+second-model agent that reviewed, committed trailers, and drove the feature state
+machine on its own. **Retired with the entire `workflow/` subsystem:** it is the opposite
+trust model from how these standards are used — Codex is a read-only advisor; a
+human/Claude producer verifies and commits (the Cross-Check Gates). No current code
+references it.
+
+---
+
+## ADR-010 — Skill wrappers are static pointers, never a generated/duplicated body
+
+- **Status:** Accepted (backfilled 2026-07-15)
+
+### Decision
+
+The per-consumer skill wrappers (`.claude/skills/**/SKILL.md`) are **thin static
+pointers** at the canonical body (single source per ADR-003), never a generated or
+duplicated copy. The wrapper generator was retired in Phase 2 (2026-07-10); a static
+contract test (`tests/runner/skill-wrappers-static.test.ts`) guards wrapper↔body drift.
+Project specificity goes through guides + project-facts, never a forked skill body.
+
+---
+
+## ADR-011 — Automatic cross-model review-chain gating (workflow) — RETIRED
+
+- **Status:** Retired (2026-07-10, workflow removal)
+
+### Decision (retired)
+
+The removed workflow subsystem could run an **automatic cross-model review-chain** and
+skip it when the owner explicitly disabled it for a session. Retired with `workflow/`.
+Recorded here as *"automatic review-chain gating"* — deliberately **not** the bare name
+"review-chain" — to end the naming collision with the downstream `codex-chain` Gate-C
+skill (resolves the BACKLOG "Related core-backlog" item).
+
+---
+
+## ADR-012 — Landing happens via a standalone handoff; no local merge verb
+
+- **Status:** Accepted (backfilled 2026-07-15; workflow-era implementation retired)
+
+### Decision
+
+There is no local "merge" verb — completed work lands via a **standalone handoff
+instruction that a human owns**: deep-review "leaves nothing landed and mutates nothing …
+a human drives the PR review and landing" and MUST NEVER suggest an automated landing
+(`deep-review/src/handoff.ts`). The workflow-era schema block and its *autonomous* PR
+implementation were removed with the `workflow/` subsystem (2026-07-10, Phase R — not the
+Phase 2 wrapper-generator removal), but the decision survives and is now embodied by
+deep-review (`handoff.ts`, `cli.ts`, `verify.ts`, `worktree.ts`): the engine emits a
+landing instruction and never merges. (The roadmap's "ADR-012 retired" shorthand is
+imprecise — the workflow *implementation* was retired; the *decision* is active.)
 
 ---
 

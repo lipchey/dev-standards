@@ -118,21 +118,45 @@ contradicts (INT-05).
 Independent of the in-flight core-hardening batch (which already leaves
 `workflow/` untouched).
 
-## Related core-backlog (from ai-prompter pilot, non-blocking)
+## Related core-backlog (from ai-prompter pilot) — ALL DONE (2026-07-15, Phase 6)
 
-- Commit an ADR decision log — ADR ids/§ currently hang inline in code with no
-  canonical record.
-- Resolve ADR-011 "review-chain" naming collision with the downstream
-  `codex-chain` skill.
-- **Core `verify` shim lacks a build-freshness guard** (Gate P, Phase 1,
-  2026-07-10). The core `verify` shim checks only
-  bundle *existence*, not freshness; a stale gitignored `runner/dist/` runs
-  blindly — violates guide rule quality-gates.md "build-on-demand artifacts
-  need a build stamp + freshness check". CI is unaffected (bootstrap rebuilds
-  every run); the footgun is local core dev. NB: the consumer's SHA-based
-  `.built-from` stamp is **insufficient** for core — active core dev changes
-  HEAD on every commit and leaves uncommitted edits, so a content-fingerprint
-  of build inputs is needed, not a revision stamp. Owned by Phase 6 §5.
+- **Commit an ADR decision log** — **DONE (2026-07-15).** `docs/ADR.md` is the
+  canonical log; Phase 6.1 backfilled every code-referenced id (ADR-003/007/008/
+  010/011/012) alongside the full-template ADR-013/014 entries.
+- **Resolve ADR-011 "review-chain" naming collision** — **DONE (2026-07-15).**
+  ADR-011 (retired with the workflow) is recorded as *"automatic review-chain
+  gating"* in `docs/ADR.md`, deliberately not the bare "review-chain" name, ending
+  the collision with the `codex-chain` Gate-C skill (Phase 6.2).
+- **Core `verify` shim build-freshness guard** — **DONE (2026-07-15, Phase 6.5).**
+  `scripts/build-fingerprint.sh` content-fingerprints the runner build inputs
+  (`runner/src/**/*.ts`); `package.json` `postbuild` stamps
+  `runner/dist/.build-fingerprint`; the core `./verify` shim recomputes and refuses
+  a stale bundle. Content-fingerprint (not the consumer's SHA `.built-from` stamp)
+  because active core dev moves HEAD every commit + leaves uncommitted source edits.
+  Test: `tests/runner/build-freshness.test.ts`.
+
+## 2026-07-15 — Phase 6.3 disposition residuals (non-blocking)
+
+From the full disposition of `DEEP_REVIEW_FINDINGS.md` (58 findings; see its
+"Диспозиція (Фаза 6)" section). Everything else is `fixed` or
+`obsolete-after-removal`; these are the genuinely-open remainders:
+
+- **DR-14** — findings schema does not enforce 4 slice invariants (`line ≤ 0`,
+  empty/duplicate `slice_files`, a `file` not in `slice_files`). Belongs with the
+  Phase 5 §5.4 schema-v2 work; low risk (review-only until fix-mode ships).
+- **DR-16** — `check-path` CLI verb still lacks `assertSafeRepoPath` on its
+  repo-relative input (`deep-review/src/cli.ts`). Confinement nit; deep-review
+  writes already route through `writeConfined`.
+- **DEP-02 (auto-update half)** — core `.github/dependabot.yml` does not exist, so
+  the SHA-pinned GitHub Actions in `quality.yml` have no automated bump mechanism.
+  Add a `github-actions` ecosystem entry (S). The consumer template already seeds a
+  dependabot file; this is the *core repo's own* CI.
+- **Nits (optional):** a core-side coverage/format gate (INT-07 — core has
+  eslint+knip but coverage/companion-tests are pilot-side only); narrow
+  `RunnerReport.scope` from `string` to `TierName` (RUN-04 — the traversal exploit
+  is already dead via `writeConfined`).
+- **INT-01 branch protection** — a GitHub repo-settings/API toggle, not an in-repo
+  artifact; enable server-side (ops), not a code change.
 
 ## Deep-review hardening backlog (2026-07-14 systemic-gaps Gate C, non-blocking)
 

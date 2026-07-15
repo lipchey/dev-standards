@@ -89,9 +89,15 @@ platform-managed protections and signals that complement the repo-owned gates
 2. **`.claude/review-guides/`** — the seven canonical guides are read in place
    from the package; a same-named overlay may only **add/extend** a guide, and
    an extra `.md` adds a project-only guide. Overlays never override or delete a
-   canonical rule.
-3. **`.claude/project-facts.md`** — repo type / no-touch zones that make the
-   generic guides conditional.
+   canonical rule. When a project rule genuinely diverges from a core guide,
+   mark the project line `> deviates-from-core: <reason>`. This is
+   **documentation of a human reconciliation decision** — so a later
+   promotion session does not silently merge the deviation back into core — not
+   a rule-override mechanism: the additive-only model still holds, and a true
+   contradiction is reconciled by a human via `inbox/review-promotions.md`.
+3. **`.claude/project-facts.md`** — repo type + no-touch zones that make the
+   generic guides conditional. No-touch is an **extend-only union**: a project
+   may *add* zones, never *narrow* the shipped BASELINE.
 
 Skill bodies are **not** a tuning surface — never fork them; behavior a guide
 can't express goes upstream (fix-upstream loop below).

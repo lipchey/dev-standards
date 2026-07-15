@@ -16,6 +16,67 @@ Severity:
 - **P2** — конкретна correctness/reliability проблема або суттєва прогалина контракту.
 - **P3** — hardening, підтримуваність, документація чи низькоризиковий dependency issue.
 
+## Диспозиція (Фаза 6, 2026-07-15)
+
+Повна диспозиція всіх 58 знахідок — передумова зняття onboarding gate (roadmap
+Фаза 6.3). Кожна знахідка звірена з ПОТОЧНИМ деревом (HEAD `e77e78f`), не з
+початковим станом рев'ю 2026-07-09. Реальність зсунулась відносно roadmap-мапи:
+(а) весь `workflow/` підсистему видалено (Phase R, 2026-07-10) → усі WF-* та
+generator-findings obsolete; (б) hardening deep-review-енджина Фази 5 §5.0–5.5
+(E0–E7) вже **відвантажено** в systemic-gaps батчі ADR-013/014 → DR-01/03–13/17
+`fixed` у коді, не `phase-5`; лишаються §5.6 shipping (INT-04) і §5.8 пілот.
+
+**Підсумок:** 26 fixed · 29 obsolete-after-removal · 1 phase-5.6 (INT-04) ·
+2 BACKLOG (DR-14, DR-16). Жодного `rejected`. (DEP-02 сам finding — SHA-pin —
+fixed; авто-оновлення тих пінів через dependabot — окремий проактивний
+BACKLOG-пункт, не диспозиція DEP-02. INT-04: механізм доставки вже є
+(consumer shim-шаблон, `build:deep-review`, verb-wiring, e2e); лишається пілотна
+доставка §5.6/§5.8, тому phase-5.6, не fixed.)
+
+| ID | Sev | Диспозиція | Доказ |
+|---|---|---|---|
+| INT-01 | P1 | fixed (CI) / ops (branch-protection) | `.github/workflows/quality.yml` реальний, placeholder прибрано; branch protection — GitHub settings, не файл (ops) |
+| INT-02 | P1 | fixed | CI ганяє `npm run bootstrap` ПЕРЕД `./verify` (quality.yml:31/33,49/51) |
+| INT-03 | P1 | fixed | `quality.json` full = typecheck+`npm test`+build+`test:e2e`; fast має typecheck |
+| INT-04 | P1 | phase-5.6 | consumer shipping (shim+dist+`deep_review`-блок+worktree bootstrap) = roadmap §5.6; skill-body verb-wiring уже готовий |
+| INT-05 | P2 | fixed | `workflow/` видалено + README переписано (нема "unimplemented" суперечності) |
+| INT-06 | P2 | fixed | 4 "відсутні" guides існують у `agents/review-guide-templates/`; `skill-catalog.json` заповнений (real url/ref/license, 0 placeholder) |
+| INT-07 | P3 | fixed (lint+dead-code) | eslint (fast+full) + knip (full), report-only. Parked (окремо): core-side coverage/format gate — coverage/companion-tests живуть у пілоті (Phase 3/4.2), не в core `quality.json`; BACKLOG-nit, не reopen |
+| RUN-01 | P1 | fixed | `exec.ts` detached process-group + `process.kill(-pid,'SIGKILL')` reap — вбиває піддерево |
+| RUN-02 | P1 | fixed | `verify-runner.ts` монотонний `deadlineMs` спанить setup+git+checks; `assertBudget` fail-closed на порожньому тірі |
+| RUN-03 | P1 | obsolete-after-removal | `generate-skill-wrappers.ts` видалено (Phase 2) |
+| RUN-04 | P2 | fixed | `report.ts writeConfined` блокує escape-above-root (lexical+realpath+temp/rename); `scope` — внутрішнє ім'я тіра (staged/fast/full), не attacker-controlled, тож живого експлойту нема. Defense-in-depth nit: `RunnerReport.scope` досі `string`, не звужено до `TierName` (in-root traversal лишається можливим ЯКЩО scope колись стане untrusted) — BACKLOG-nit |
+| RUN-05 | P2 | obsolete-after-removal | generator видалено; static wrappers + contract-test |
+| RUN-06 | P2 | fixed | `validate.ts DIFF_FILTER_PATTERN=/^[ACDMRTUXB]+$/` — дрейф зі schema закрито |
+| RUN-07 | P2 | obsolete-after-removal | усі сайти в видаленому generator; принцип задоволений `report.ts`/`exec.ts`/`git.ts` |
+| RUN-08 | P2 | obsolete-after-removal | YAML-scalar рендер жив у generator (видалено); wrappers статичні |
+| WF-01..24 | P1/P2 | obsolete-after-removal | увесь `workflow/` видалено (0 tracked files); кожен цитований `workflow/src/*` шлях відсутній. Спадкоємці без регресу (deep-review descriptor-gated). Спец-ноти: WF-08 (data-loss TOCTOU — описував ПОТЕНЦІЙНУ гонку, не зафіксовану втрату; producing code видалено); WF-14 (synthetic token в review-time repro; history-scan знаходить лише synthetic redaction-test фікстуру, не реальний секрет; producing code видалено); WF-19 (fail-open scanner) — виправлено у спадкоємці `deep-review/src/secret-scan.ts` (tri-state fail-closed) |
+| DR-01 | P1 | fixed | run-descriptor identity-gate (`slice.ts`,`cli.ts`,`descriptor.ts`) |
+| DR-02 | P1 | fixed | preflight enforce enabled/modes/guides_dir + один deadline (`preflight.ts`,`config.ts`) |
+| DR-03 | P1 | fixed | `test_ref` enum; довільний `test_cmd` гучно відхиляється (`findings-io.ts`,`types.ts`) |
+| DR-04 | P1 | fixed | тест у throwaway worktree; живе дерево не чіпається (`slice.ts`) |
+| DR-05 | P2 | fixed | throwaway-worktree + `restoreIndexSafe` (`slice.ts`) |
+| DR-06 | P2 | fixed | `infra-blocked` ≠ `fix-failed` (`slice.ts`) |
+| DR-07 | P1 | fixed | `PROTECTED_STATUSES` guard — термінальні статуси не переписуються (`classify.ts`,`types.ts`) |
+| DR-08 | P1 | fixed | report рендерить Pending/Invalid секції + INCOMPLETE-маркер (`report.ts`) |
+| DR-09 | P1 | fixed | handoff completeness-gate + durable verify-stamp (`handoff.ts`,`verify.ts`) |
+| DR-10 | P1 | fixed | ancestry-bounded reconcile + CAS mutator (`slice.ts`,`findings-io.ts`) |
+| DR-11 | P1 | fixed | `writeConfined` закриває всі 3 суб-дефекти (`runner/src/report.ts`) |
+| DR-12 | P1 | fixed | tri-state fail-closed scanner; `report.ts` відмовляє на `unavailable` (`secret-scan.ts`,`report.ts`) |
+| DR-13 | P2 | fixed | unique-id валідація (`findings-io.ts`) |
+| DR-14 | P2 | BACKLOG | 4 slice-інваріанти не форсяться (line≤0, `[]`/dup slice_files, file∉slice_files) — genuinely open |
+| DR-15 | P2 | obsolete-after-removal | workflow-context marker зник; reuse тепер descriptor-gated |
+| DR-16 | P2 | BACKLOG | `check-path` досі без `assertSafeRepoPath` (`cli.ts`) — genuinely open |
+| DR-17 | P1/P2 | fixed | §7.2 fail-closed project-facts + confinement (`no-touch.ts`,`cli.ts`) |
+| DEP-01 | P3 | fixed | `esbuild ^0.25.0` (resolved 0.25.12 / nested 0.28.1) — вище фікса GHSA-g7r4-m6w7-qqqr |
+| DEP-02 | P3 | fixed | finding = SHA-pin: actions/checkout+setup-node пришпилені до повного SHA у обох workflow-файлах. (Авто-оновлення тих пінів — окремий проактивний BACKLOG-пункт: core `.github/dependabot.yml` відсутній, `github-actions` ecosystem) |
+
+**BACKLOG-елементи, породжені диспозицією:** DR-14 (slice-invariant enforcement),
+DR-16 (`check-path` `assertSafeRepoPath`), DEP-02 auto-update (`dependabot.yml`
+`github-actions` у core), + nits: INT-07 core coverage/format gate, RUN-04
+`scope:TierName` type-narrow. Занесені у `BACKLOG.md`. INT-01 branch-protection —
+platform/ops toggle, не код.
+
 ## 1. Інтеграція, CI та repository governance
 
 ### INT-01 — P1 — Quality CI фактично відсутній, `main` не захищений
