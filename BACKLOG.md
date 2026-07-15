@@ -201,10 +201,10 @@ From the full disposition of `DEEP_REVIEW_FINDINGS.md` (58 findings; see its
   select-worktree slug gate): an escaping/absolute/glob/magic-pathspec operand
   is EXIT_USAGE instead of a misleading `editable`. Regression + argv-first
   ordering tests in `tests/deep-review/cli.test.ts`.
-- **DEP-02 (auto-update half)** — core `.github/dependabot.yml` does not exist, so
-  the SHA-pinned GitHub Actions in `quality.yml` have no automated bump mechanism.
-  Add a `github-actions` ecosystem entry (S). The consumer template already seeds a
-  dependabot file; this is the *core repo's own* CI.
+- **DEP-02 (auto-update half)** — ✅ DONE (v0.20.2, 2026-07-15). Core
+  `.github/dependabot.yml` now bumps the SHA-pinned GitHub Actions weekly
+  (github-actions ecosystem, minor+patch grouped). Distinct from the npm
+  consumer seed — this is the *core repo's own* CI.
 - **Nits (optional):** a core-side coverage/format gate (INT-07 — core has
   eslint+knip but coverage/companion-tests are pilot-side only); narrow
   `RunnerReport.scope` from `string` to `TierName` (RUN-04 — the traversal exploit

@@ -1,0 +1,17 @@
+# Weekly bump PRs for the SHA-pinned GitHub Actions in .github/workflows/** — the core
+# repo's OWN CI (DEP-02), distinct from the npm-ecosystem consumer seed
+# (templates/consumer/github/dependabot.yml). Dependabot scans .github/workflows/ only,
+# so `directory: /` is the sole valid target even though the workflow source is mirrored
+# under ci/workflows/. minor+patch grouped into one PR to cut review noise; majors stay
+# individual.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch
