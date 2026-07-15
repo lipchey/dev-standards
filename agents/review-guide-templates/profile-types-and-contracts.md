@@ -22,8 +22,8 @@ prompts remain paraphrased from the MIT sources attributed in
 `affaan-m/everything-claude-code` hexagonal-architecture @ `4092795`.
 The language material comes from that source's per-language guides,
 `code-quality-universal.md`, `common-bugs-checklist.md`, and cross-cutting
-async/error notes. Shell, n8n, and Node lenses were written from universal
-material plus repo experience because upstream has no dedicated lens for them.
+async/error notes. The Node lens was written from universal material plus repo
+experience because upstream has no dedicated lens for it.
 
 ## Conditionality
 
@@ -31,9 +31,9 @@ material plus repo experience because upstream has no dedicated lens for them.
   modules, services, and framework boundaries. Weight them more lightly on
   one-off scripts while retaining correctness at their actual input/output
   edges.
-- SOLID and layered type-boundary prompts are strong for class-heavy TypeScript,
-  light for script-style pipelines, and none for Bash/n8n glue. Never invent an
-  interface for a single caller just to satisfy a principle.
+- SOLID and layered type-boundary prompts are strong for class-heavy TypeScript
+  and light for script-style pipelines. Never invent an interface for a single
+  caller just to satisfy a principle.
 - Value-object prompts are strong where domain invariants matter and light for
   scripts. A one-field wrapper with no invariant in one local scope is ceremony.
 - Type placement applies only where a types home is visible in the repo or
@@ -80,9 +80,6 @@ one matching section.
 | Script-style TS / one-off pipeline | §Script-style TS / one-off pipeline |
 | React / UI (`.tsx`, hooks, components) | §React / UI TS |
 | Node / backend TS | §Node / backend TS |
-| Bash / shell glue | §Bash / shell glue |
-| n8n / workflow JS glue | §n8n / workflow JS glue |
-| Python script | §Python scripts |
 
 ### TypeScript shared module / service
 
@@ -129,37 +126,9 @@ prompts; see
 Runtime startup/shutdown, streaming, and event handling are owned by
 → see `profile-correctness-and-lifecycle.md` §Node / backend TS.
 
-### Bash / shell glue
-
-No typing rule applies. Do not judge module depth, SOLID, or TypeScript type
-idioms on shell glue.
-
-### n8n / workflow JS glue
-
-Expression node availability belongs to
-→ see `profile-correctness-and-lifecycle.md` §n8n / workflow JS glue.
-- Does a Code/Function node return items in `[{ json: ... }]` shape rather than
-  relying on n8n's auto-wrapping of bare objects? Does its output cardinality
-  match its MODE and intent - "Run Once for Each Item" preserving one output
-  per input, "Run Once for All Items" aggregating/filtering deliberately with
-  item linking kept for downstream mapping? An UNINTENDED collapse or drop is
-  the bug, not a count change per se.
-
-This section owns the output-shape/mode contract; replay, branch, and failure
-lifecycle are owned by
-→ see `profile-correctness-and-lifecycle.md` §n8n / workflow JS glue.
-
-### Python scripts
-
-- Are public functions type-annotated, so the script's public contracts are
-  explicit?
-
-Pinned dependency/venv reproducibility is owned by
-→ see `profile-security.md` §Supply chain and dependencies.
-
 ## Layer-boundary data contracts
 
-Weighting: strong for layered domains; light for pipelines; none for glue.
+Weighting: strong for layered domains; light for pipelines.
 
 - **Domain types and transport DTOs live apart.** Reusing one type for the wire
   and the domain couples business rules to the API/DB schema, so a schema change

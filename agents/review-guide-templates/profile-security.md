@@ -28,9 +28,8 @@ repo's own battle-tested material. The stack-router additions remain
 paraphrased from `awesome-skills/code-review-skill` (MIT, pinned `f2fd4e57`)
 plus repo experience, as attributed in `language-review-sources.md`: its
 per-language guides, `code-quality-universal.md`, `common-bugs-checklist.md`,
-and cross-cutting async/error notes. Shell, n8n, and Node lenses were written
-from universal material plus repo experience because upstream has no dedicated
-lens for them.
+and cross-cutting async/error notes. The Node lens was written from universal
+material plus repo experience because upstream has no dedicated lens for it.
 This profile is repo-agnostic; adopting repos may add rows for their own
 security surfaces and stacks.
 
@@ -44,8 +43,6 @@ Security scope is broad but the *emphasis* shifts by surface:
   single-user CLI has no auth boundary, so access-control prompts are n/a.
 - Services / web: add request input, authn/authz, session, SSRF, and output
   encoding. Access control and IDOR become live P1 surfaces.
-- Bash/n8n glue: shell injection, unquoted expansions, and secret handling
-  dominate; module-depth prompts do not apply, these do.
 
 A rule that does not map to a real boundary in this repo is not a finding - but
 the absence of validation at a boundary that DOES exist always is. Name the
@@ -172,8 +169,8 @@ Live wherever code fetches a URL, webhook, or host it did not hardcode.
   ciphers, MACs, or padding.
 - Are passwords stored with Argon2/bcrypt/scrypt, never
   `md5`/`sha1`/raw `sha256`? Fast hashes are brute-forceable.
-- Is token/key/nonce randomness from a CSPRNG (`crypto.randomBytes`, `secrets`,
-  `crypto/rand`), never `Math.random()` or `random.random()`?
+- Is token/key/nonce randomness from a CSPRNG (`crypto.randomBytes` or Web
+  Crypto `getRandomValues`), never `Math.random()`?
 - Is ECB used, an IV/nonce static or reused, or a secret/MAC compared
   non-constant-time (`===` on a token)? Use authenticated mode and constant-time
   compare.
@@ -216,7 +213,7 @@ CLI has no A01/A07 boundary; a repo with no HTML has no XSS surface under A05.
 | A05 Injection | argv/shell/SQL/path/regex/format injection; XSS only where HTML is rendered | -> §Injection; XSS n/a with no web UI (say so) | P1 |
 | A06 Insecure Design | no rate limit on an abusable operation; flow trusts client-supplied state | does the design assume a boundary the code does not enforce? | P2 / P3 |
 | A07 Auth Failures | weak password rules, no lockout, low-entropy session token, no MFA on a sensitive operation | -> §Authentication; n/a for single-user CLI | P1 (service) |
-| A08 Integrity Failures | unsafe deserialization (`pickle`/YAML/`unserialize`/`ObjectInputStream`); unsigned artifact | is untrusted data deserialized into live objects or executed? | P1 |
+| A08 Integrity Failures | unsafe deserialization; unsigned artifact | is untrusted data deserialized into live objects or executed? | P1 |
 | A09 Logging and Alerting Failures | security event (auth failure, permission change, injection attempt) unlogged; or secret/PII leaked into logs | is the event auditable WITHOUT leaking a secret? -> §Secrets | P2 / P3 |
 | A10 Mishandling Exceptional Conditions | fail-open on error; stack trace to user; resource not released on error path | -> §Fail closed | P1 / P2 |
 
@@ -227,8 +224,6 @@ Signatures are grep anchors, not the whole story.
 | Stack | Sharpest quirks (unsafe → safe) | Check |
 | --- | --- | --- |
 | JS / TS | prototype pollution via recursive merge / set-by-path on untrusted keys (`__proto__`, `constructor`); `child_process.exec` / `shell:true`; `eval` / `new Function` / `vm` on input | does a merge/clone/set-by-path block `__proto__`/`prototype`/`constructor` keys, and is every subprocess an argv array with no shell? |
-| Bash | unquoted `$var` / `$(...)` word-splitting and injection; `eval` / backticks on input; `set -e` false safety | is every expansion quoted, is there no `eval` on external data, and are exit codes checked where `-e` will not fire? |
-| Python | `pickle.loads` / `yaml.load` (not `safe_load`) / `eval` / `exec` on untrusted data; `subprocess(..., shell=True)` / `os.system`; `%`-built SQL | is untrusted data ever deserialized/executed, and is every subprocess a list with `shell=False`? |
 
 ## Stack routing additions
 
@@ -243,42 +238,6 @@ the security-owned rules migrated from the old language router.
 
 Exit status and promise handling are owned by
 → see `profile-correctness-and-lifecycle.md` §Script-style TS / one-off pipeline.
-
-### Bash / shell glue
-
-- Is every variable and command substitution double-quoted (`"$var"`,
-  `"$(...)"`) unless splitting is deliberately wanted? Unquoted expansion
-  splits/globs; filenames with spaces or `*` break, and external data injects
-  arguments.
-- Are temp files created with `mktemp` and removed by
-  `trap 'rm -rf "$tmp"' EXIT` (`trap ... EXIT`)? Fixed `/tmp/name` is a
-  predictable-path/symlink race and leaks on early exit.
-- Is external input passed to `eval`, backticks, or unquoted command position?
-  Never `eval` untrusted data.
-- Does the script parse `ls` output? Parsing `ls` is a listed shell-surface bug;
-  do not treat its display format as a filename protocol.
-
-Shell error propagation and macOS portability are owned by
-→ see `profile-correctness-and-lifecycle.md` §Bash / shell glue.
-
-### n8n / workflow JS glue
-
-- Are credentials pulled from n8n's credential store, never a literal token in
-  a Code node or expression? Inline secrets are exported and committed with
-  workflow JSON.
-
-Item shape, replay, and failure behavior are owned by the types and correctness
-profiles.
-
-### Python scripts
-
-- Does subprocess use a list of args with `shell=False`, never `shell=True` on
-  interpolated input?
-- Are filesystem paths built with `pathlib`, not string concatenation, and for
-  EXTERNAL input resolved with `Path.resolve()` and boundary-checked before use?
-  `pathlib` alone is only construction: an absolute operand discards the base,
-  and `..` survives until resolve.
-- Are dependencies pinned in a lockfile/venv so the script is reproducible?
 
 ## Report discipline for security findings
 

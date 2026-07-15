@@ -26,9 +26,8 @@ Stack-routing structure is inherited from `language-review-sources.md`. Its
 lenses were distilled as paraphrased excerpts from
 `awesome-skills/code-review-skill` (MIT, pinned `f2fd4e57`) - the per-language
 guides, `code-quality-universal.md`, `common-bugs-checklist.md`, and
-cross-cutting async/error notes. Shell, n8n, and Node lenses were written from
-that universal material plus repo experience; upstream has no dedicated lens
-for them.
+cross-cutting async/error notes. The Node lens was written from that universal
+material plus repo experience; upstream has no dedicated lens for it.
 
 ## Conditionality
 
@@ -37,8 +36,7 @@ for them.
 - Relax test depth for one-off scripts and throwaway glue; correctness and
   safety still apply. Do not manufacture seams, value objects, or abstractions
   a single caller will ever use.
-- Boundary-test rules are strong where ports exist, light for pipelines, and
-  none for Bash/n8n glue.
+- Boundary-test rules are strong where ports exist and light for pipelines.
 - A refactor that is not worth its risk is itself a structural judgment, owned
   by → see `profile-structure-and-dependencies.md` §Tech-debt classification.
 
@@ -154,14 +152,10 @@ one matching section or weighting.
 | Script-style TS / one-off pipeline | lighter depth; still require a regression-catching test for changed behavior where the repo tests the surface |
 | React / UI TS | judge observable UI/effect behavior without pinning hook call sequences |
 | Node / backend TS | judge startup, shutdown, stream, and async behavior through observable boundaries |
-| Bash / shell glue | light; do not import port/module test ceremony |
-| n8n / workflow JS glue | light; judge workflow outputs/effects, not module internals |
-| Python scripts | weight by lifetime, callers, and the repo's existing test surface |
 
 The old language router contains no additional stack-specific test-quality
-prompts. Its runtime async, hook, shell, n8n, and Python checks are owned by the
-correctness, types, or security profiles; do not restate them here as invented
-test mandates.
+prompts. Its runtime async and hook checks are owned by the correctness, types,
+or security profiles; do not restate them here as invented test mandates.
 
 ## Output
 

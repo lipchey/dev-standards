@@ -31,9 +31,8 @@ This profile carries the relevant share of the repo-owned
   `awesome-skills/code-review-skill` (MIT, pinned `f2fd4e57`) plus repo
   experience, as attributed in `language-review-sources.md`: its per-language
   guides, `code-quality-universal.md`, `common-bugs-checklist.md`, and
-  cross-cutting async/error notes. Shell, n8n, and Node lenses were written from
-  universal material plus repo experience because upstream has no dedicated
-  lens for them.
+  cross-cutting async/error notes. The Node lens was written from universal
+  material plus repo experience because upstream has no dedicated lens for it.
 
 ## Baseline structural checks
 
@@ -66,15 +65,13 @@ diagram:
   all pay off here.
 - **light** - script-style TS pipelines: apply only parts that cut real coupling;
   never invent an interface a single caller will ever use.
-- **none** - Bash / n8n glue: no classes, ports, or domain layers to judge; skip
-  the clean-architecture sections entirely for that surface.
 
 If a rule below would force structure onto code that is fine as plain functions
 or a script, the rule does not apply - that is not a finding.
 
 ## The dependency rule and boundary shape
 
-Weighting: strong for layered code, light for pipelines, none for glue.
+Weighting: strong for layered code, light for pipelines.
 
 - **Imports point inward.** Inner layers (entities, domain, use-cases per
   `project-facts.md`) must never name an outer layer - that keeps them swap- and
@@ -99,7 +96,7 @@ Weighting: strong for layered code, light for pipelines, none for glue.
 ## Ports and adapters
 
 Weighting: strong for class-heavy TS; light for pipelines, subject to the
-one-adapter caution; none for glue.
+one-adapter caution.
 
 - **The core owns the port interface.** If the adapter's package defines the
   interface, the dependency still points outward. **Check:** locate each port
@@ -126,7 +123,7 @@ one-adapter caution; none for glue.
 
 ## Layer separation
 
-Weighting: strong for layered domains; light for pipelines; none for glue.
+Weighting: strong for layered domains; light for pipelines.
 
 - **Entities hold enterprise rules and do zero I/O.** **Check:** does an entity
   or value-object method perform I/O (DB, HTTP, fs, logging) or import infra?
@@ -227,7 +224,6 @@ and how many years a module must survive:
   interface, a library boundary, anything whose shallowness compounds over time.
 - **light** - one-off scripts and short pipelines: a task runner does not need a
   "deep module"; flag only egregious pass-throughs and leakage.
-- **none** - Bash / n8n glue: there is no real module surface to deepen; skip.
 
 When unsure, prefer the smallest structural change that removes the most future
 friction; never redesign a script slated for deletion next quarter. A prompt
@@ -251,7 +247,7 @@ is not a finding.
 
 ## Deep versus shallow modules
 
-Weighting: strong for shared modules; light for scripts; none for glue.
+Weighting: strong for shared modules; light for scripts.
 
 - **Measure the ratio, do not eyeball it.** **Check:** for a suspect module,
   weigh what a caller must read to use it correctly (the full interface -
@@ -299,7 +295,7 @@ better inline is noise, not a finding.
 
 ## Information hiding and leakage
 
-Weighting: strong for shared modules; light for scripts; none for glue.
+Weighting: strong for shared modules; light for scripts.
 
 - **A decision known to many modules is leaked.** Leakage means changing that
   decision edits every module that knows it. **Check:** does a single change
@@ -322,7 +318,7 @@ Weighting: strong for shared modules; light for scripts; none for glue.
 
 ## Locality of behavior
 
-Weighting: strong for shared modules; light for scripts; none for glue.
+Weighting: strong for shared modules; light for scripts.
 
 - **Behavior reads close together.** **Check:** to understand one feature, how
   many files must a reader open in sequence? High fan-out across distant files
@@ -376,8 +372,8 @@ Weighting: strong for shared modules; light for scripts.
 
 ## The three complexity symptoms
 
-Weighting: strong for shared modules; light for scripts; none for glue. These
-are symptoms; trace each to a cause in the preceding sections.
+Weighting: strong for shared modules; light for scripts. These are symptoms;
+trace each to a cause in the preceding sections.
 
 | Symptom | What it looks like | Check |
 | --- | --- | --- |
@@ -615,9 +611,6 @@ one matching section or weighting.
 | Script-style TS / one-off pipeline | correctness/readability dominate; structural and abstraction rules are light or out of scope per their banners |
 | React / UI TS | apply only real module/boundary rules; runtime hook/effect checks live in correctness |
 | Node / backend TS | apply service/module rules according to lifetime and declared boundaries |
-| Bash / shell glue | module-depth, structural, and DDD judgments are out of scope |
-| n8n / workflow JS glue | module design is out of scope; judge item mapping/idempotence elsewhere |
-| Python scripts | use light/script tiers unless the code is a long-lived shared module |
 
 ## Output
 

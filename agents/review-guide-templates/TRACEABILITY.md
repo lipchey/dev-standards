@@ -5,6 +5,9 @@ normative section, judgment prompt, shape rule, conditionality rule, and output
 obligation has one primary destination below. A listed cross-reference is
 secondary and never substitutes for the primary full rule.
 
+Scope narrowed 2026-07-15: the worker corpus now covers js/ts/node/react only;
+removed targets below point to git history.
+
 ## `core-code-guidelines.md`
 
 | Old section / rule | Primary new home |
@@ -103,7 +106,7 @@ secondary and never substitutes for the primary full rule.
 | Conditionality: declared DAG rather than textbook | `profile-structure-and-dependencies.md` §Clean-architecture conditionality banner |
 | Conditionality: strong class-heavy TS | same section, strong bullet; relevant weighting repeated in types/tests |
 | Conditionality: light script pipeline, no single-caller interface | same section, light bullet |
-| Conditionality: none Bash/n8n | same section, none bullet |
+| Conditionality: none Bash/n8n | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Conditionality: forcing structure means n/a, not finding | same section, closing paragraph |
 | Dependency rule: imports point inward and import inspection | `profile-structure-and-dependencies.md` §The dependency rule and boundary shape, bullet 1 |
 | Dependency rule: data crosses in inner shape | same section, bullet 2; type share cross-referenced |
@@ -156,7 +159,7 @@ secondary and never substitutes for the primary full rule.
 | Conditionality: depth scales with callers/lifetime | `profile-structure-and-dependencies.md` §Architecture-deepening conditionality banner |
 | Conditionality: strong shared/public/library boundary | same section, strong bullet |
 | Conditionality: light scripts/pipelines | same section, light bullet |
-| Conditionality: none Bash/n8n | same section, none bullet |
+| Conditionality: none Bash/n8n | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Conditionality: smallest high-friction removal; no soon-deleted-script redesign; n/a is not finding | same section, closing paragraph |
 | Vocabulary: module and full interface | `profile-structure-and-dependencies.md` §Depth vocabulary, bullet 1 |
 | Vocabulary: depth/deep/shallow | same section, bullet 2 |
@@ -282,7 +285,7 @@ secondary and never substitutes for the primary full rule.
 | Header provenance: OWASP/languages sources, report-discipline ideas, own battle-tested prompts | `profile-security.md` introduction, preserved in full |
 | Conditionality: CLI/runner boundary and no auth surface | `profile-security.md` §How to apply, bullet 1 |
 | Conditionality: service/web emphasis | same section, bullet 2 |
-| Conditionality: Bash/n8n emphasis | same section, bullet 3 |
+| Conditionality: Bash/n8n emphasis | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Conditionality: real boundary required; missing validation always finding | same section, closing paragraph |
 | Input validation: inventory every boundary and name it | `profile-security.md` §Input validation, bullet 1 |
 | Input validation: validate each crossing once at edge | same section, bullet 2 |
@@ -333,8 +336,8 @@ secondary and never substitutes for the primary full rule.
 | OWASP A09 | same section, row A09 |
 | OWASP A10 | same section, row A10 |
 | Language quirk: JS/TS prototype pollution, shell/eval and checks | `profile-security.md` §Language security quirks, JS/TS row |
-| Language quirk: Bash expansion/eval/set-e and checks | same section, Bash row |
-| Language quirk: Python deserialization/subprocess/SQL and checks | same section, Python row |
+| Language quirk: Bash expansion/eval/set-e and checks | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Language quirk: Python deserialization/subprocess/SQL and checks | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Report: vulnerability class + attack path + boundary | `profile-security.md` §Report discipline, bullet 1 |
 | Report: write-authority confidence analysis with all operator/attacker caveats | same section, bullet 2 |
 | Report: theoretical/framework-mitigated at most P3 | same section, bullet 3 |
@@ -346,7 +349,7 @@ secondary and never substitutes for the primary full rule.
 | Old section / rule | Primary new home |
 | --- | --- |
 | Header Template-Version 2 and review-only prompts | profile introductions; `review-contract.md` §Worker obligation |
-| Header provenance: `awesome-skills/code-review-skill` MIT `f2fd4e57`, repo-written Node/Bash/n8n, additive repo rows | introductions of correctness/types/structure/security profiles |
+| Header provenance: `awesome-skills/code-review-skill` MIT `f2fd4e57`, repo-written Node/Bash/n8n, additive repo rows | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Header: deep-review reads package body in place; same-named consumer overlay is additive | `review-contract.md` introduction and §Worker obligation |
 | Router purpose: dispatch table, one matching stack, cross-language false-positive warning | every profile §Stack routing; naming/tests explicitly record absence of extra old stack prompts |
 | Router purpose: cross-cutting runs with selected stack | correctness/types/structure profiles' cross-cutting sections and routing introductions |
@@ -354,9 +357,9 @@ secondary and never substitutes for the primary full rule.
 | Dispatch row: Script-style TS | correctness/security profiles §Script-style TS; structure routing row |
 | Dispatch row: React/UI TS | correctness profile §React/UI TS; types and structure routing rows |
 | Dispatch row: Node/backend TS | correctness/types profiles §Node/backend TS; structure routing row |
-| Dispatch row: Bash/shell glue | correctness/security profiles §Bash; structure routing row |
-| Dispatch row: n8n/workflow glue | types/correctness/security profiles §n8n; structure routing row |
-| Dispatch row: Python scripts | correctness/types/security profiles §Python; structure routing row |
+| Dispatch row: Bash/shell glue | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Dispatch row: n8n/workflow glue | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Dispatch row: Python scripts | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Router: adopter rows point to exactly one section | all profile routing-table structure; no new adopter row invented |
 | Router: does not decide area-guide applicability | `profile-structure-and-dependencies.md` §Stack routing introduction; each inherited banner owns applicability |
 | How-to 1: identify actual surface per file/slice, not extension | types/correctness profile routing introductions |
@@ -405,28 +408,28 @@ secondary and never substitutes for the primary full rule.
 | Node: graceful shutdown | `profile-correctness-and-lifecycle.md` §Node/backend TS, bullet 3 |
 | Node: stream/EventEmitter error handler | same section, bullet 4 |
 | Node: typed cause and no bare catch | correctness Node bullet 5 plus types TS shared bullet 5 |
-| Bash context/idioms/common-bug catalog | correctness/security Bash introductions; structure routing exclusion |
-| Bash: set-euo and all `-e` exception contexts, local substitution caveat | `profile-correctness-and-lifecycle.md` §Bash, bullet 1 |
-| Bash: quoted expansions | `profile-security.md` §Bash, bullet 1 |
-| Bash: pipefail/PIPESTATUS | `profile-correctness-and-lifecycle.md` §Bash, bullet 2 |
-| Bash: mktemp and EXIT trap | `profile-security.md` §Bash, bullet 2 |
-| Bash: Bash 4 versus macOS 3.2 | `profile-correctness-and-lifecycle.md` §Bash, bullet 3 |
-| Bash: no eval/backticks/unquoted command position | `profile-security.md` §Bash, bullet 3 |
-| Bash: parsing `ls` common-bug signal | `profile-security.md` §Bash, bullet 4 |
-| n8n context/idioms/common-bug catalog | types/correctness/security n8n introductions; structure routing exclusion |
-| n8n: output mode/cardinality/shape/item-linking | `profile-types-and-contracts.md` §n8n / workflow JS glue |
-| n8n: skipped-branch node reference | `profile-correctness-and-lifecycle.md` §n8n, bullet 1 |
-| n8n: idempotent/keyed side effects under retry | same section, bullet 2 |
-| n8n: credential store, no literal token | `profile-security.md` §n8n |
-| n8n: error output/handled continueOnFail | `profile-correctness-and-lifecycle.md` §n8n, bullet 3 |
-| n8n: item/idempotence/secrets only; no module-depth | `profile-structure-and-dependencies.md` §Stack routing, n8n row; named owner sections |
-| Python context/idioms/common-bug catalog | correctness/security/types Python sections |
-| Python: mutable default/class attribute | `profile-correctness-and-lifecycle.md` §Python, bullet 1 |
-| Python: specific except and `from` chain | same section, bullet 2 |
-| Python: subprocess list/shell false | `profile-security.md` §Python, bullet 1 |
-| Python: pathlib plus resolve/boundary caveats | `profile-security.md` §Python, bullet 2 |
-| Python: identity only for None/singletons | `profile-correctness-and-lifecycle.md` §Python, bullet 3 |
-| Python: public annotations and pinned deps/venv | annotations: `profile-types-and-contracts.md` §Python; dependencies: `profile-security.md` §Python |
+| Bash context/idioms/common-bug catalog | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history); rerun-idempotence relocated → `profile-correctness-and-lifecycle.md` §Script-style TS / one-off pipeline |
+| Bash: set-euo and all `-e` exception contexts, local substitution caveat | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Bash: quoted expansions | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Bash: pipefail/PIPESTATUS | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Bash: mktemp and EXIT trap | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Bash: Bash 4 versus macOS 3.2 | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Bash: no eval/backticks/unquoted command position | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Bash: parsing `ls` common-bug signal | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| n8n context/idioms/common-bug catalog | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| n8n: output mode/cardinality/shape/item-linking | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| n8n: skipped-branch node reference | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| n8n: idempotent/keyed side effects under retry | relocated 2026-07-15 (stack-neutral wording) → `profile-correctness-and-lifecycle.md` §Node / backend TS |
+| n8n: credential store, no literal token | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| n8n: error output/handled continueOnFail | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| n8n: item/idempotence/secrets only; no module-depth | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Python context/idioms/common-bug catalog | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Python: mutable default/class attribute | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Python: specific except and `from` chain | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Python: subprocess list/shell false | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Python: pathlib plus resolve/boundary caveats | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Python: identity only for None/singletons | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
+| Python: public annotations and pinned deps/venv | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Output expectations: standard finding, lens recorded, explicit clean | `review-contract.md` finding/evidence/no-findings/coverage sections; every profile §Output and §Stack routing |
 
 ## New contract-only requirements

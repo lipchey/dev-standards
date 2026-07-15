@@ -280,8 +280,8 @@ Produce findings; change nothing. The runtime is six steps, in order:
      the overlay dir - also judgment sources, never waivers.
    Apply them only to judgment areas: boundaries, dependency direction, naming,
    cohesion, duplication, test design, behavior preservation, and needless
-   complexity. Rules are conditional: SOLID strong for class-heavy TS, light for
-   script-style TS pipelines, not for Bash or n8n glue.
+   complexity. Rules are conditional: SOLID is strong for class-heavy TS and
+   light for script-style TS pipelines.
 5. Output per `review-contract.md`: prioritized findings - P1 breaks
    adoption, safety, or behavior; P2 is concrete correctness or maintainability;
    P3 is improvement or clarity - each with file/line, impact, risk level, and a

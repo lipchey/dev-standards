@@ -23,9 +23,8 @@ Stack-routing structure is inherited from `language-review-sources.md`. Its
 lenses were distilled as paraphrased excerpts from
 `awesome-skills/code-review-skill` (MIT, pinned `f2fd4e57`) - the per-language
 guides, `code-quality-universal.md`, `common-bugs-checklist.md`, and
-cross-cutting async/error notes. Shell, n8n, and Node lenses were written from
-that universal material plus repo experience; upstream has no dedicated lens
-for them.
+cross-cutting async/error notes. The Node lens was written from that universal
+material plus repo experience; upstream has no dedicated lens for it.
 
 ## Conditionality
 
@@ -96,9 +95,8 @@ Judgment prompts:
 - Do comments use block form `/* */` (`/** */` for doc comments) in languages
   that support it? Line form is acceptable only where a tool or the language
   itself mandates it - directives (`// eslint-disable-next-line`,
-  `/// <reference>`, `//go:build`), shebangs, and languages whose comment or doc
-  syntax is line-based by spec (Python/shell/YAML `#`, Rust `///`, Go doc
-  comments).
+  `/// <reference>`, `//go:build`), shebangs, and formats whose comment or doc
+  syntax is line-based by spec (`#`, Rust `///`, Go doc comments).
 
 The structural smell where a comment deodorizes confusing code is owned by
 → see `profile-structure-and-dependencies.md` §Code-smells taxonomy,
@@ -134,9 +132,6 @@ one matching section or weighting.
 | Script-style TS / one-off pipeline | lighter naming polish; correctness and safety remain elsewhere |
 | React / UI TS | full strength for component, prop, hook, and state names |
 | Node / backend TS | full strength for long-lived runtime code; lighter for one-off CLI glue |
-| Bash / shell glue | lighter; do not manufacture abstractions or naming ceremony |
-| n8n / workflow JS glue | lighter; judge expression/node intent without importing module-design rules |
-| Python scripts | weight by lifetime and callers, as for other scripts |
 
 The old language router contains no additional stack-specific
 naming/constants/comment prompts. Do not import rules from another stack or

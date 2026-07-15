@@ -22,8 +22,8 @@ contract remains distilled as short paraphrased excerpts from
 is the repo's own material over industry-standard Fowler vocabulary.
 The language material comes from that source's per-language guides,
 `code-quality-universal.md`, `common-bugs-checklist.md`, and cross-cutting
-async/error notes. Shell, n8n, and Node lenses were written from universal
-material plus repo experience because upstream has no dedicated lens for them.
+async/error notes. The Node lens was written from universal material plus repo
+experience because upstream has no dedicated lens for it.
 
 ## Conditionality
 
@@ -126,9 +126,6 @@ one matching section.
 | Script-style TS / one-off pipeline | §Script-style TS / one-off pipeline |
 | React / UI (`.tsx`, hooks, components) | §React / UI TS |
 | Node / backend TS | §Node / backend TS |
-| Bash / shell glue | §Bash / shell glue |
-| n8n / workflow JS glue | §n8n / workflow JS glue |
-| Python script | §Python scripts |
 
 ### TypeScript shared module / service
 
@@ -165,6 +162,10 @@ explicit exit codes, and top-level `await` in an ESM module.
   actionable rather than a bare `UnhandledPromiseRejection`?
 - Apply the shared-module floating-promise/missing-`await` rule; it still bites
   in scripts.
+- Is the script safe to rerun after a partial failure? A step that appends
+  without a guard, fails with "already exists" on a rerun, or resumes from
+  leftover temporary/partial state makes the rerun itself the bug. Make each
+  step idempotent or guard it explicitly.
 
 Validation of `process.argv`/`process.env` at the trust boundary belongs to
 → see `profile-security.md` §Script-style TS / one-off pipeline.
@@ -218,69 +219,13 @@ correctness.
   `'error'` event crashes the process.
 - Are errors handled with context, never by a bare `catch {}` that hides a
   fault?
+- Is retryable job or service work idempotent or keyed, so a retry cannot
+  duplicate an insert, POST, notification, or other side effect?
 
 Typed startup config and typed error shapes are owned by
 → see `profile-types-and-contracts.md` §Node / backend TS and §TypeScript shared
 module / service. Hostile resource-exhaustion paths are also reviewed through
 → see `profile-security.md` §ReDoS and resource exhaustion.
-
-### Bash / shell glue
-
-Judge shell error propagation, idempotence, and portability. Module-depth,
-structural, and DDD judgments do not apply.
-
-- Does the script start with `set -euo pipefail`, and does any logic rely on
-  `-e` where it does not fire: a command in an `if`/`while`/`until` condition, a
-  `!`-negated command, any command in an `&&`/`||` list EXCEPT the one after the
-  final operator, or a failure masked by the enclosing statement's status
-  (`local x=$(cmd)` succeeds even when `cmd` fails - declare and assign
-  separately)? Check the exit code explicitly in those contexts.
-- With a pipeline, is `pipefail` set (or the producer's status checked through
-  `PIPESTATUS`) so `cmd | tee` cannot hide `cmd` failing? Without it a pipe
-  reports only the last stage's status.
-- Is the script safe to RERUN after a partial failure (idempotence)? A step
-  that appends without a guard, `-e`-fails with "already exists" on a re-run,
-  or resumes on leftover temp/partial state from the previous run makes the
-  rerun itself the bug - make steps idempotent or guard them explicitly.
-- Does the script use bash-4-only features (`${x,,}`, `declare -A`, `mapfile`)
-  while targeting macOS, whose default `/bin/bash` is 3.2? Pin the interpreter
-  or stay portable.
-
-Quoting, temp-path safety, and `eval`/external command positions are owned by
-→ see `profile-security.md` §Bash / shell glue.
-
-### n8n / workflow JS glue
-
-Judge item-mapping correctness, idempotence, and failure lifecycle; not module
-design. Expressions may reference `$json` / `$node` only for nodes that ran on
-the current path.
-
-- Does an expression assume a node ran on this execution path? A reference to a
-  skipped branch's node yields `undefined` - guard it.
-- Is every side-effecting node (HTTP POST, DB insert, email) idempotent or keyed,
-  so an automatic retry does not double-apply it? Workflow retries replay the
-  node.
-- Do failure-prone nodes have an error output or handled `continueOnFail`, rather
-  than aborting the run with no trace?
-
-Output shape/cardinality is owned by
-→ see `profile-types-and-contracts.md` §n8n / workflow JS glue. Credential hygiene
-is owned by → see `profile-security.md` §n8n / workflow JS glue.
-
-### Python scripts
-
-- Does any function use a mutable default argument (`def f(x=[])`, `={}`) or
-  mutable class attribute? It is shared across calls or instances and
-  accumulates state.
-- Is every `except` specific - never a bare `except:` (which swallows
-  `KeyboardInterrupt`/`SystemExit`) or `except Exception: pass` (which hides
-  faults)? Catch what can be handled and re-raise with `from`.
-- Is `is`/`is not` used only for `None` and singletons, and `==` for values?
-  `x is 1000` is a small-int-cache-dependent bug.
-
-Subprocess and external-path safety are owned by
-→ see `profile-security.md` §Python scripts. Public annotations are owned by
-→ see `profile-types-and-contracts.md` §Python scripts.
 
 ## Behavior preservation during refactors
 
