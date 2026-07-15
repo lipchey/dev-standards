@@ -67,3 +67,50 @@ loop's health indicator).
 ## Session log
 
 <!-- append dated summaries below; never edit past entries -->
+
+### 2026-07-15 — first calibration session
+
+**Inputs.** `quality-stats` over `~/.local/share/dev-standards/events.jsonl`
+(925 events, 0 malformed, 2026-07-10→07-15 ≈ 6d, flip-window 7d). No consumer
+`.claude/gate-misses.md` reachable from a core session (pilot lives in a
+separate repo — routed as an open question below). Inbox: 1 pending (DR-16
+ordering-contract test guidance).
+
+**Dispositions (core report-only checks; flip bar = ≥1 real catch AND 0
+operational noise byp/to/err in the window).**
+
+| check | runs | catch | byp | to | err | disposition |
+|-------|------|-------|-----|----|----|-------------|
+| eslint (fast+full) | 44 | 4 | 0 | 0 | 0 | **FLIP → blocking** |
+| knip (full) | 20 | 1 | 0 | 0 | 0 | HOLD — bar met but thin (1 catch) + noisy-tool profile; watch next window |
+| check-new-deps (fast) | 3 | 0 | 0 | 0 | 0 | HOLD — 0 catches (skip_if_empty), parked on the PR-CI index bridge |
+
+The 4 eslint catches are all fail→pass on the same branch (a lint violation
+surfaced, then fixed): `main` a899502→7999a6c (full+fast), `full` 0acf43d
+(same-commit), `chore/comment-gate` b9d5867. Core was green at decision time
+(`npm run lint` exit 0, `npm run knip` exit 0), so the flip does not turn
+`verify` red.
+
+**Decision.** Flipped core `eslint` (fast + full) report-only → blocking in
+`quality.json` (kept `operational_exit_codes:[2]` so a config-error exit 2 stays
+an unbypassable operational error, distinct from a lint finding). Everything
+else held. Core-internal dogfood flip — the consumer seed is untouched, so no
+seed-parity trigger.
+
+**Not flipped (consumer-side, out of a core session's authority).** Pilot
+`eslint`(fast 8 / full 6 catch, 0 noise) and `format-check`(11+7 catch, 0 noise)
+are seed-flip *candidates*, but a seed flip changes a consumer-facing default
+and needs the owner's friction appetite + the pilot's gate-misses ledger (the
+pilot shows heavy mid-refactor lint churn — 30 fast-eslint fails — so blocking
+adds real active-dev friction). Pilot `diff-coverage` (6 timeouts, 0 catch) and
+`companion-tests` (15 bypasses — all legit "browser-only / refactor-only, no
+unit surface") both fail the 0-noise bar; companion-tests is a fileset-tune
+candidate (exclude browser-only paths), not a flip.
+
+**Open questions / next session.**
+- knip: revisit with ≥1 more window of catches before flipping (or demote-back
+  path if it flaps).
+- Seed/pilot eslint+format-check flip: an explicit owner decision (friction
+  appetite) + read the pilot `.claude/gate-misses.md` — deferred.
+- check-new-deps & diff-coverage flips stay coupled to their parked CI-bridge
+  items (`BACKLOG.md` 2026-07-14) — decide together with, not before, blocking.

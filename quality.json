@@ -67,7 +67,6 @@
       {
         "name": "eslint",
         "argv": ["npm", "run", "lint"],
-        "mode": "report-only",
         "operational_exit_codes": [2],
         "timeout_seconds": 45
       }
@@ -96,7 +95,6 @@
       {
         "name": "eslint",
         "argv": ["npm", "run", "lint"],
-        "mode": "report-only",
         "operational_exit_codes": [2],
         "timeout_seconds": 45
       },
