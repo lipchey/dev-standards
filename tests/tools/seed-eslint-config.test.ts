@@ -54,3 +54,64 @@ test('a pre-pinned eslint version is preserved (add-if-absent contract)', () => 
     assert.equal(pkg.devDependencies.eslint, '8.0.0');
   });
 });
+
+test('the lint script is seeded when absent and preserved when present', () => {
+  withConsumer({}, (root) => {
+    const result = seed(root);
+    assert.equal(result.status, 0, result.stderr);
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    assert.equal(pkg.scripts.lint, 'eslint .');
+  });
+  withConsumer({ scripts: { lint: 'eslint src --max-warnings 0' } }, (root) => {
+    const result = seed(root);
+    assert.equal(result.status, 0, result.stderr);
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    assert.equal(pkg.scripts.lint, 'eslint src --max-warnings 0');
+  });
+});
+
+/* Severity `error` in the seeded config is only a gate when verify runs ESLint:
+   the seeder must wire a BLOCKING (no `mode` key) check into fast+full, and must
+   never touch a consumer that already carries an eslint check in ANY tier (the
+   documented report-only ramp). */
+test('a blocking eslint check is wired into fast and full quality tiers', () => {
+  withConsumer({}, (root) => {
+    fs.writeFileSync(
+      path.join(root, 'quality.json'),
+      JSON.stringify({ tiers: { staged: [], fast: [], full: [] } }) + '\n',
+    );
+    const result = seed(root);
+    assert.equal(result.status, 0, result.stderr);
+    const quality = JSON.parse(fs.readFileSync(path.join(root, 'quality.json'), 'utf8'));
+    for (const tierName of ['fast', 'full'] as const) {
+      const checks = quality.tiers[tierName].filter((check: { name: string }) => check.name === 'eslint');
+      assert.equal(checks.length, 1, `${tierName} must gain exactly one eslint check`);
+      assert.deepEqual(checks[0].argv, ['npm', 'run', 'lint']);
+      assert.equal('mode' in checks[0], false, `${tierName} eslint check must be blocking (no mode key)`);
+    }
+    assert.equal(quality.tiers.staged.length, 0);
+  });
+});
+
+test('an existing eslint check in any tier is left untouched (ramp contract)', () => {
+  withConsumer({}, (root) => {
+    const rampCheck = { name: 'eslint', argv: ['npm', 'run', 'lint'], mode: 'report-only' };
+    fs.writeFileSync(
+      path.join(root, 'quality.json'),
+      JSON.stringify({ tiers: { fast: [rampCheck], full: [] } }) + '\n',
+    );
+    const result = seed(root);
+    assert.equal(result.status, 0, result.stderr);
+    const quality = JSON.parse(fs.readFileSync(path.join(root, 'quality.json'), 'utf8'));
+    assert.deepEqual(quality.tiers.fast, [rampCheck]);
+    assert.deepEqual(quality.tiers.full, []);
+  });
+});
+
+test('a consumer without quality.json seeds cleanly with an operator note', () => {
+  withConsumer({}, (root) => {
+    const result = seed(root);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /quality\.json: absent/);
+  });
+});

@@ -226,8 +226,8 @@ module / service. Hostile resource-exhaustion paths are also reviewed through
 
 ### Bash / shell glue
 
-Judge shell error propagation and portability. Module-depth, structural, and
-DDD judgments do not apply.
+Judge shell error propagation, idempotence, and portability. Module-depth,
+structural, and DDD judgments do not apply.
 
 - Does the script start with `set -euo pipefail`, and does any logic rely on
   `-e` where it does not fire: a command in an `if`/`while`/`until` condition, a
@@ -238,6 +238,10 @@ DDD judgments do not apply.
 - With a pipeline, is `pipefail` set (or the producer's status checked through
   `PIPESTATUS`) so `cmd | tee` cannot hide `cmd` failing? Without it a pipe
   reports only the last stage's status.
+- Is the script safe to RERUN after a partial failure (idempotence)? A step
+  that appends without a guard, `-e`-fails with "already exists" on a re-run,
+  or resumes on leftover temp/partial state from the previous run makes the
+  rerun itself the bug - make steps idempotent or guard them explicitly.
 - Does the script use bash-4-only features (`${x,,}`, `declare -A`, `mapfile`)
   while targeting macOS, whose default `/bin/bash` is 3.2? Pin the interpreter
   or stay portable.

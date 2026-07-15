@@ -31,8 +31,20 @@ test("does not flag the discard property", () => {
   assert.equal(ruleMessages("export type TupleLike = { _: unknown };").length, 0);
 });
 
-test("does not flag computed property signatures", () => {
-  assert.equal(ruleMessages('export interface Packet { ["id"]: string }').length, 0);
+test("flags a quoted string-literal property signature", () => {
+  assert.equal(ruleMessages('export type Packet = { "id": string };').length, 1);
+});
+
+test("flags a computed property signature with a static string-literal key", () => {
+  assert.equal(ruleMessages('export interface Packet { ["id"]: string }').length, 1);
+});
+
+test("does not flag a genuinely dynamic computed property signature", () => {
+  assert.equal(ruleMessages("export interface Bag { [Symbol.iterator]: () => void }").length, 0);
+});
+
+test("does not flag the quoted discard property", () => {
+  assert.equal(ruleMessages('export type TupleLike = { "_": unknown };').length, 0);
 });
 
 test("does not flag class fields", () => {

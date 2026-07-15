@@ -59,11 +59,14 @@ Judgment prompts:
 Where a constants home exists:
 
 - Is a non-obvious scalar written inline in logic where a named constant would
-  carry its meaning? The `constantsHome` preset already owns one narrow case in
-  the files it lints - a module-scope `const` bound to a bare primitive literal -
-  so leave that to the gate and judge what it cannot see: literals in call
-  arguments and expressions (`setTimeout(fn, 500)`), function-local literals,
-  and literal-only arithmetic (`45 * 60 * 1000`).
+  carry its meaning? Two presets already gate the numeric forms in the files
+  they lint: `constantsHome` (a module-scope `const` bound to a bare primitive
+  literal) and `inlineLiterals` (numeric literals in call arguments,
+  expressions, comparisons, and arithmetic like `45 * 60 * 1000`). Leave those
+  to the gates - do not re-report them - and judge what no gate sees: inline
+  STRING literals, a function-local `const` bound to a bare literal (named,
+  so allowed by the gates - judge whether its home/reuse is right), values on
+  the deliberate ignore list, and files outside the presets' globs.
 - Whether a literal is obvious enough to inline is a judgment, and a repo may
   document its own format-owned exceptions.
 - A new constant goes in that home; an existing one is reused, not re-declared.

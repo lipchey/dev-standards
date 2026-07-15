@@ -205,6 +205,15 @@ test('requiredReadSet requires each existing overlay file and each configured re
   assert.equal(tails.includes('.claude/CHECKLIST.md'), true);
 });
 
+test('requiredReadSet never requires a reserved-name overlay (TRACEABILITY.md)', () => {
+  const tails = requiredReadSet('/repo', config(), {
+    listOverlay: () => ['TRACEABILITY.md', 'repo-extra.md'],
+    exists: () => true,
+  });
+  assert.equal(tails.includes('.claude/review-guides/repo-extra.md'), true);
+  assert.equal(tails.includes('.claude/review-guides/TRACEABILITY.md'), false);
+});
+
 test('requiredReadSet fails closed when a configured required_read does not exist', () => {
   assert.throws(
     () => requiredReadSet('/repo', config({ requiredReads: ['.claude/GONE.md'] }), { listOverlay: () => undefined, exists: () => false }),

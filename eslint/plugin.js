@@ -155,6 +155,16 @@ const typesHomeRule = {
 const PROPERTY_NAMING_MESSAGE =
   "dev-standards/property-naming: property '{{ name }}' is too short (min 3 chars); rename it descriptively, or ignore the wire-contract file when the external key is fixed.";
 
+/* The statically-known author-chosen key name: identifiers, string-literal keys
+   (`"id": string`), and computed keys whose expression is a string literal
+   (`["id"]: string`) — a quoted spelling must not bypass the floor. Genuinely
+   dynamic computed keys carry no author-chosen name here and are exempt. */
+function staticPropertyKeyName(node) {
+  if (node.key.type === "Identifier" && !node.computed) return node.key.name;
+  if (node.key.type === "Literal" && typeof node.key.value === "string") return node.key.value;
+  return undefined;
+}
+
 const propertyNamingRule = {
   meta: {
     type: "suggestion",
@@ -165,9 +175,9 @@ const propertyNamingRule = {
   create(context) {
     return {
       TSPropertySignature(node) {
-        if (node.computed || node.key.type !== "Identifier") return;
-        if (node.key.name === "_" || node.key.name.length >= 3) return;
-        context.report({ node: node.key, messageId: "tooShort", data: { name: node.key.name } });
+        const keyName = staticPropertyKeyName(node);
+        if (keyName === undefined || keyName === "_" || keyName.length >= 3) return;
+        context.report({ node: node.key, messageId: "tooShort", data: { name: keyName } });
       },
     };
   },

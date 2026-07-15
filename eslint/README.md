@@ -144,11 +144,14 @@ hard-codes NO paths — pass your own globs:
 }),
 ```
 
-**Ceilings — review-owned, deliberately NOT caught:** a function-local literal
+**Ceilings — what this rule deliberately does NOT catch:** a function-local literal
 (`const t = 500;` inside a function or block) and a literal-only arithmetic initializer
-(`const MS = 45 * 60 * 1000;` — a `BinaryExpression`, not a literal) both stay
-review-owned. Object literals and option-defaults objects (`const defaults = { gap: 500 }`)
-are intentionally left in place.
+(`const MS = 45 * 60 * 1000;` — a `BinaryExpression`, not a literal). The arithmetic
+case is NOT review-owned anymore — `inlineLiterals` flags each numeric operand, in any
+scope. A function-local `const` bound to a bare literal is the one numeric form no gate
+catches (the value is named; whether its home is right stays review-owned), alongside
+inline strings and out-of-glob files. Object literals and option-defaults objects
+(`const defaults = { gap: 500 }`) are intentionally left in place.
 
 ## `inlineLiterals` — named numeric values in logic and tests
 
@@ -186,6 +189,12 @@ Scope out declaration files and the actual types home with `ignores`:
 
 `allowNamePattern` is a string regular expression, defaults to `"Props$"`, and is
 validated when the factory builds the config. Invalid strings throw before lint starts.
+
+**Ceiling:** the exemption is name-based, so a non-component `StorageProps` in a plain
+`.ts` file also escapes the gate — judging that misuse is the review profile's job. A
+consumer wanting a mechanical split can compose two entries (the shared plugin object
+makes that safe): `typesHome({files: ["**/*.tsx"], allowNamePattern: "Props$"})` plus
+`typesHome({files: ["**/*.ts"], allowNamePattern: "^(?!)"})` (a never-matching regex).
 
 ## `propertyNaming` — the TypeScript property-signature floor
 

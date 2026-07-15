@@ -62,7 +62,12 @@ object. A composition test enables all presets on one representative file.
    verifies the rule fires on the 16 real pilot sites; any residual class
    (e.g. a site the upstream rule's variable-assignment allowance skips) is
    closed by extending the existing `constants-home` custom rule, not by a
-   new rule. Noisiest of the three — see Rollout below.
+   new rule. *(Verified at C1, Gate C 2026-07-15: every evidence-set class -
+   comparisons, call args, arithmetic operands, test expected values - fires
+   under the preset; the one residual numeric form is a function-local `const`
+   bound to a bare literal, which is a NAMED value and deliberately stays
+   profile-owned placement judgment, not a gate extension.)* Noisiest of the
+   three — see Rollout below.
 2. **`dev-standards/property-naming` (new rule, shared plugin).** The min-3
    floor for TS `interface`/type-literal property SIGNATURES only — class
    fields are ALREADY covered by the naming preset's `PropertyDefinition`
@@ -131,7 +136,11 @@ the dir name):
     quality. Canaries: `avgIdf`, `pos` (PR #25).
   - `profile-tests-quality.md` — oracle strength (would a mutant survive?),
     boundary coverage on inclusive/exclusive comparisons, fixture
-    duplication, over-mocking, vacuous async.
+    duplication, over-mocking, vacuous async. *(C2 outcome note, 2026-07-15:
+    "vacuous async" here, "deep immutability" under types, and
+    "stale-callback inertness" under correctness had NO normative source in
+    the old corpus - the rewrite did not invent them mid-migration; all three
+    are pending new-rule candidates in `inbox/review-promotions.md`.)*
   - `profile-types-and-contracts.md` — strict-typing depth, type
     reuse-before-add, deep immutability at boundaries (`Readonly` is
     shallow), exhaustiveness.
@@ -240,8 +249,9 @@ code" pre-reads is adoption work (follow-up task, out of scope here).
    NOT told the expected locations and still reports them.
 2. **`docs/CALIBRATION.md`:** the session gains a judgment-escape step —
    triage escapes per profile, and on any profile-file edit spot-check its
-   canaries still get caught (cheap: include canaries in the next run's brief
-   acceptance). The profiles README traceability table joins the session's
+   canaries still get caught (cheap: the orchestrator checks the registered
+   canaries against the next BLINDED run's findings as its own acceptance
+   criterion - canary identifiers and locations never enter a worker brief). The profiles README traceability table joins the session's
    listed inputs so a guide edit that orphans a section is caught there.
 3. **Seeding:** the 20 PR-#25 comments become the first ledger entries on the
    consumer side (`ai-prompter/.claude/gate-misses.md`) during adoption — 18

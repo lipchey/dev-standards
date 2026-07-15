@@ -14,6 +14,15 @@ import { EXIT_PREFLIGHT } from '../../deep-review/src/types.ts';
 
 const EXPECTED_TEMPLATE_GUIDE_COUNT = 7;
 const OVERLAY_BODY = 'OVERLAY CHECKLIST BODY\n';
+const CORPUS_NAMES = [
+  'profile-correctness-and-lifecycle.md',
+  'profile-naming-and-constants.md',
+  'profile-security.md',
+  'profile-structure-and-dependencies.md',
+  'profile-tests-quality.md',
+  'profile-types-and-contracts.md',
+  'review-contract.md',
+];
 
 function config(overrides: Partial<DeepReviewConfig> = {}): DeepReviewConfig {
   return {
@@ -173,15 +182,7 @@ test('an unavailable package template directory fails closed', () => {
 });
 
 test('guide load fails when a canonical template is missing or has a blank body', () => {
-  const names = [
-    'profile-correctness-and-lifecycle.md',
-    'profile-naming-and-constants.md',
-    'profile-security.md',
-    'profile-structure-and-dependencies.md',
-    'profile-tests-quality.md',
-    'profile-types-and-contracts.md',
-    'review-contract.md',
-  ];
+  const names = CORPUS_NAMES;
   const withoutOne = loadReviewGuides('/no-overlay', {
     templatesDir: '/templates',
     listMarkdownFiles: () => names.slice(1),
@@ -219,4 +220,49 @@ test('guide load fails when a canonical template is missing or has a blank body'
     withRegistry.guides.some((guide) => guide.name === 'TRACEABILITY.md'),
     false,
   );
+});
+
+test('a consumer overlay named TRACEABILITY.md is reserved and never merges', () => {
+  withRoot((root) => {
+    const overlayDirectory = path.join(root, '.claude', 'review-guides');
+    fs.mkdirSync(overlayDirectory, { recursive: true });
+    fs.writeFileSync(path.join(overlayDirectory, 'TRACEABILITY.md'), OVERLAY_BODY);
+    fs.writeFileSync(path.join(overlayDirectory, 'repo-extra.md'), OVERLAY_BODY);
+
+    const outcome = runPreflight(config(), 'verify', overlayDirectory);
+    assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.machineError.message);
+    if (!outcome.ok) return;
+    assert.equal(
+      outcome.guides.some((guide) => guide.name === 'TRACEABILITY.md'),
+      false,
+      'the reserved registry name must never become a worker-facing guide',
+    );
+    assert.equal(outcome.guides.length, EXPECTED_TEMPLATE_GUIDE_COUNT + 1);
+  });
+});
+
+test('an overlay enumeration error other than ENOENT fails the guide load closed', () => {
+  const enotdir = loadReviewGuides('/overlay-is-a-file', {
+    templatesDir: '/templates',
+    listMarkdownFiles: (directory) => {
+      if (directory === '/templates') return [...CORPUS_NAMES];
+      const error = new Error('ENOTDIR: not a directory') as NodeJS.ErrnoException;
+      error.code = 'ENOTDIR';
+      throw error;
+    },
+    readFile: () => 'body',
+  });
+  assert.equal(enotdir.ok, false);
+
+  const enoent = loadReviewGuides('/no-overlay', {
+    templatesDir: '/templates',
+    listMarkdownFiles: (directory) => {
+      if (directory === '/templates') return [...CORPUS_NAMES];
+      const error = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
+    },
+    readFile: () => 'body',
+  });
+  assert.equal(enoent.ok, true);
 });

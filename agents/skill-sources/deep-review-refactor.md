@@ -29,9 +29,11 @@ Under the two-stage doctrine (ADR-018) this pass IS the standard quality stage
 for feature work, not an optional extra: Stage 1 writes functional code under
 the machine gates alone; the standards corpus is applied HERE, where per-lens
 attention is engineered. Consent still gates every run - it decides WHEN the
-stage happens, not WHETHER it is part of the work; a declined offer leaves the
-feature carrying recorded `stage-2 pending` debt (the consumer's tracking
-convention), not a waived stage. Two modes only:
+stage happens, not WHETHER it is part of the work. On a declined or postponed
+offer, the offering session RECORDS `stage-2 pending` for that feature in the
+repo's status doc (e.g. `.claude/memory/status.md`) in the same turn - this
+recording is the skill's own step, a convention with no machine gate behind it
+(v1 limit, ADR-018 §Enforcement); a decline is never a silently waived stage. Two modes only:
 
 - `review-only` (default) - prioritized findings, change nothing.
 - `review-and-refactor` (explicit ask, e.g. `/deep-review --fix`, or upfront

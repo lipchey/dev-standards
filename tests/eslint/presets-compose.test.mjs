@@ -33,12 +33,30 @@ test("all Tier 1 presets compose on one TypeScript file", () => {
     export function assess(ab: number) { return ab > 3; }
   `;
   const messages = new Linter({ configType: "flat" }).verify(code, config, { filename: "src/logic.ts" });
-  const ruleIds = new Set(messages.map((message) => message.ruleId));
 
   assert.ok(!messages.some((message) => message.fatal), messages.map((message) => message.message).join("\n"));
-  assert.ok(ruleIds.has("dev-standards/constants-home"));
-  assert.ok(ruleIds.has("dev-standards/types-home"));
-  assert.ok(ruleIds.has("dev-standards/property-naming"));
-  assert.ok(ruleIds.has("@typescript-eslint/no-magic-numbers"));
-  assert.ok(ruleIds.has("no-restricted-syntax"));
+
+  const countByRule = new Map();
+  for (const message of messages) {
+    /* Every Tier 1 preset ships blocking severity — a silent downgrade to warn
+       (severity 1) would pass a rule-id-only assertion. */
+    assert.equal(message.severity, 2, `${message.ruleId} must report at error severity`);
+    countByRule.set(message.ruleId, (countByRule.get(message.ruleId) ?? 0) + 1);
+  }
+  assert.equal(countByRule.get("dev-standards/constants-home"), 1);
+  assert.equal(countByRule.get("dev-standards/types-home"), 1);
+  assert.equal(countByRule.get("dev-standards/property-naming"), 1);
+  /* Exactly one numeric hit: `3` in the comparison. `LIMIT = 2` is a const
+     declaration, which no-magic-numbers deliberately allows (a NAMED value) —
+     that is constants-home's hit instead. */
+  assert.equal(countByRule.get("@typescript-eslint/no-magic-numbers"), 1);
+  assert.equal(countByRule.get("no-restricted-syntax"), 1);
+
+  /* Ownership split stays disjoint: the property key `t` (fixture line 2) is
+     property-naming's alone — naming's no-restricted-syntax selectors must not
+     re-cover TSPropertySignature keys (its hits here are the short `ab` param). */
+  const restrictedSyntaxLines = messages
+    .filter((message) => message.ruleId === "no-restricted-syntax")
+    .map((message) => message.line);
+  assert.ok(restrictedSyntaxLines.every((line) => line !== 2), "naming must not fire on the property signature");
 });

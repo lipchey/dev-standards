@@ -64,6 +64,9 @@ export default tseslint.config(
     files: ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"],
     ignores: ["**/*.d.ts"],
   }),
+  /* Props$ is a name-based exemption: a non-component FooProps in a .ts file also
+     escapes — review-owned. For a mechanical split, use two entries (tsx with
+     Props$, ts with the never-matching "^(?!)"). */
   ...typesHome({
     files: ["src/**/*.ts", "src/**/*.tsx"],
     ignores: ["**/src/types/**", "**/types.ts", "**/*.d.ts"],

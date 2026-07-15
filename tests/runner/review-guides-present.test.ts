@@ -55,8 +55,19 @@ test('template dir and catalog provenance agree exactly (set equality)', () => {
   );
 });
 
-test('every step-4 role name resolves to a real package template', () => {
-  const names = new Set(templateNames());
-  const missing = STEP4_ROLES.filter((role) => !names.has(role));
-  assert.deepEqual(missing, [], `missing step-4 role templates: ${missing.join(', ')}`);
+test('the step-4 corpus list equals the template dir exactly (no orphan in either direction)', () => {
+  assert.deepEqual(
+    [...STEP4_ROLES].sort(),
+    templateNames(),
+    'STEP4_ROLES must equal the corpus set — a renamed/added corpus file must update the skill contract',
+  );
+});
+
+test('the skill body enumerates every corpus file by name', () => {
+  const skillBodyPath = fileURLToPath(
+    new URL('../../agents/skill-sources/deep-review-refactor.md', import.meta.url),
+  );
+  const skillBody = readFileSync(skillBodyPath, 'utf8');
+  const missing = templateNames().filter((name) => !skillBody.includes(name));
+  assert.deepEqual(missing, [], `corpus files the skill body never names: ${missing.join(', ')}`);
 });

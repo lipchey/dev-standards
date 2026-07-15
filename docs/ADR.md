@@ -441,10 +441,18 @@ The checklist template frames its sections as Stage-1 (blocks commit — gates)
 vs Stage-2 (review-owned — profiles). Consumer pre-read guidance is updated at
 adoption, not retroactively by this ADR.
 
+**Enforcement (v1, honest).** The `stage-2 pending` record is a skill-driven
+CONVENTION, not a machine gate: the deep-review offer step writes the debt
+entry on decline; no receipt schema, merge check, or hook enforces it (a
+machine-readable Stage-2 receipt is deferred — same deferral register as the
+worker-scoped read set, ADR-017). The calibration session reviews pending
+entries, which is where an unrecorded decline surfaces.
+
 ### Consequences
 
 - Writing sessions carry less rule prose; standards enforcement concentrates in
   the two layers that demonstrably hold: deterministic gates and the
   high-recall Stage-2 review.
-- A declined Stage 2 can no longer silently lower the bar — the debt is visible
-  and survives session boundaries.
+- A declined Stage 2 lowers the bar VISIBLY when the convention is followed —
+  the debt entry survives session boundaries; making that impossible to skip
+  (receipt + gate) is the deferred hardening above.
