@@ -50,7 +50,9 @@ git -C "$E2E/core-work" tag v0.8.0 \
 rsync -a --exclude .git --exclude node_modules --exclude .codegraph \
       --exclude .handoff "$CORE/" "$E2E/core-work/"
 git -C "$E2E/core-work" add -A
-git -C "$E2E/core-work" -c user.email=t@t -c user.name=t commit -qm "test: adoption kit snapshot"
+# --allow-empty: the kit is committed on a clean tree, so the rsync snapshot has
+# nothing new to stage; the tree at v0.9.0-test still carries the kit either way.
+git -C "$E2E/core-work" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "test: adoption kit snapshot"
 git -C "$E2E/core-work" tag v0.9.0-test
 git -C "$E2E/core-work" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "test: bump"
 git -C "$E2E/core-work" tag v0.9.1-test
