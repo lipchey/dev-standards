@@ -59,7 +59,7 @@ experience because upstream has no dedicated lens for it.
 - **Reuse before writing.** Does a new type duplicate one already in the repo
   (adjacent files, `shared/`, `utils/`)? Reinvented local definitions drift out
   of sync. Helper/util duplication is owned by
-  → see `profile-structure-and-dependencies.md` §Cross-cutting structural
+  → see `profile-module-depth.md` §Cross-cutting structural
   checks; constant reuse is owned by
   → see `profile-naming-and-constants.md` §Constants placement and reuse.
 - Constants placement is not a typing concern; see
@@ -140,7 +140,7 @@ Weighting: strong for layered domains; light for pipelines.
   Mapping leaking inward is a finding.
 
 The dependency-direction and layer ownership around these shapes are owned by
-→ see `profile-structure-and-dependencies.md` §Layer separation.
+→ see `profile-architecture-and-boundaries.md` §Layer separation.
 
 ## Substitutability and interface width
 
@@ -170,7 +170,7 @@ surface.
   client depends on the slice it uses.
 
 The surrounding SRP, OCP, and DIP structure rules are owned by
-→ see `profile-structure-and-dependencies.md` §SOLID.
+→ see `profile-architecture-and-boundaries.md` §SOLID.
 
 ## Value objects and domain primitives
 
@@ -195,7 +195,7 @@ Weighting: strong where domain invariants matter; light for scripts.
 
 The generic `Primitive obsession`, `Data clumps`, and `Refused bequest` smell
 rows remain owned by
-→ see `profile-structure-and-dependencies.md` §Code-smells taxonomy. Use this
+→ see `profile-refactoring-and-smells.md` §Code-smells taxonomy. Use this
 section as the full rule when the issue is a contract or domain invariant; the
 other profile carries only the structural smell classification.
 

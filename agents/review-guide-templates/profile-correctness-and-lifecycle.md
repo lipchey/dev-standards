@@ -59,7 +59,7 @@ Judgment prompts:
 - Public types, nullability, and documented pre/postconditions are owned by
   → see `profile-types-and-contracts.md` §Public contracts and optional values.
 - Module-boundary leakage is owned by
-  → see `profile-structure-and-dependencies.md` §The dependency rule and
+  → see `profile-architecture-and-boundaries.md` §The dependency rule and
   boundary shape.
 
 ## Error handling
@@ -110,7 +110,7 @@ Apply these with whichever stack section is loaded:
 Optional-value flow belongs to
 → see `profile-types-and-contracts.md` §Public contracts and optional values.
 Reuse-before-writing and over-broad reads belong to
-→ see `profile-structure-and-dependencies.md` §Cross-cutting structural checks.
+→ see `profile-module-depth.md` §Cross-cutting structural checks.
 
 ## Stack routing
 
@@ -250,7 +250,7 @@ A refactor changes structure, never observable behavior.
 Characterization-test sufficiency is owned by
 → see `profile-tests-quality.md` §Test-cover before a refactor. Atomic slicing and
 execution order are owned by
-→ see `profile-structure-and-dependencies.md` §Small atomic refactor steps.
+→ see `profile-refactoring-and-smells.md` §Small atomic refactor steps.
 
 ## Output
 

@@ -38,7 +38,7 @@ material plus repo experience; upstream has no dedicated lens for it.
   a single caller will ever use.
 - Boundary-test rules are strong where ports exist and light for pipelines.
 - A refactor that is not worth its risk is itself a structural judgment, owned
-  by → see `profile-structure-and-dependencies.md` §Tech-debt classification.
+  by → see `profile-refactoring-and-smells.md` §Tech-debt classification.
 
 ## Behavioral value and oracle strength
 
@@ -90,7 +90,7 @@ Inclusive/exclusive boundary behavior is defined by
 → see `profile-correctness-and-lifecycle.md` §Cross-cutting correctness checks.
 This profile owns whether tests exercise those boundaries.
 
-Fixture/helper duplication → see `profile-structure-and-dependencies.md`
+Fixture/helper duplication → see `profile-refactoring-and-smells.md`
 §Duplication, dead code, and speculative flexibility.
 
 ## Behavior-first tests at boundaries
@@ -110,7 +110,7 @@ Weighting: strong where ports exist; light for pipelines; none for glue.
   wiring change? Finding - pull the assertion down to the port boundary.
 
 The definition, ownership, and construction of ports remain in
-→ see `profile-structure-and-dependencies.md` §Ports and adapters.
+→ see `profile-architecture-and-boundaries.md` §Ports and adapters.
 
 ## Test-cover before a refactor
 
@@ -135,7 +135,7 @@ The definition, ownership, and construction of ports remain in
 Observable behavior preservation, ride-along changes, atomic slices, and the
 refactor sequence are owned by
 → see `profile-correctness-and-lifecycle.md` §Behavior preservation during
-refactors and `profile-structure-and-dependencies.md` §Small atomic refactor
+refactors and `profile-refactoring-and-smells.md` §Small atomic refactor
 steps.
 
 ## Stack routing

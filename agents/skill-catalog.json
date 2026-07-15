@@ -12,7 +12,9 @@
       "feeds_guides": [
         "profile-correctness-and-lifecycle.md",
         "profile-naming-and-constants.md",
-        "profile-structure-and-dependencies.md",
+        "profile-architecture-and-boundaries.md",
+        "profile-module-depth.md",
+        "profile-refactoring-and-smells.md",
         "profile-tests-quality.md",
         "profile-types-and-contracts.md"
       ],
@@ -30,7 +32,7 @@
         "docs/engineering/domain-modeling.md"
       ],
       "feeds_guides": [
-        "profile-structure-and-dependencies.md"
+        "profile-module-depth.md"
       ],
       "applicability": "strong:ts-services-and-shared-modules; light:one-off-scripts",
       "decision": "ideas-only in practice (clone carries overview pages, not full skill bodies); deep-module vocabulary traces to Ousterhout - lineage named in the guide header"
@@ -58,7 +60,9 @@
         "profile-correctness-and-lifecycle.md",
         "profile-naming-and-constants.md",
         "profile-security.md",
-        "profile-structure-and-dependencies.md",
+        "profile-architecture-and-boundaries.md",
+        "profile-module-depth.md",
+        "profile-refactoring-and-smells.md",
         "profile-tests-quality.md",
         "profile-types-and-contracts.md"
       ],
@@ -76,7 +80,7 @@
       ],
       "feeds_guides": [
         "profile-naming-and-constants.md",
-        "profile-structure-and-dependencies.md",
+        "profile-architecture-and-boundaries.md",
         "profile-tests-quality.md",
         "profile-types-and-contracts.md"
       ],
@@ -93,7 +97,7 @@
       ],
       "feeds_guides": [
         "profile-naming-and-constants.md",
-        "profile-structure-and-dependencies.md",
+        "profile-architecture-and-boundaries.md",
         "profile-tests-quality.md",
         "profile-types-and-contracts.md"
       ],

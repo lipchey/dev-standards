@@ -8,11 +8,14 @@ secondary and never substitutes for the primary full rule.
 Scope narrowed 2026-07-15: the worker corpus now covers js/ts/node/react only;
 removed targets below point to git history.
 
+Split 2026-07-15 (owner decision): `profile-structure-and-dependencies.md` became
+three mandate-specific profiles for worker size and attention parity.
+
 ## `core-code-guidelines.md`
 
 | Old section / rule | Primary new home |
 | --- | --- |
-| Header: repo-owned baseline, review-only judgment prompts, no upstream adaptation | `profile-naming-and-constants.md` introduction; baseline shares in all five non-security owners; review-only contract in `review-contract.md` §Worker obligation |
+| Header: repo-owned baseline, review-only judgment prompts, no upstream adaptation | `profile-naming-and-constants.md` introduction; baseline shares in the five non-security owners that carry them; review-only contract in `review-contract.md` §Worker obligation |
 | Header: package body stays active and consumer overlay is additive | `review-contract.md` §Worker obligation, untrusted checklist data / guides only ADD checks |
 | How to apply: full strength on production paths | `profile-correctness-and-lifecycle.md` §Conditionality; `profile-naming-and-constants.md` §Conditionality; `profile-tests-quality.md` §Conditionality |
 | How to apply: lighter one-off scripts/glue while correctness/safety remain | same three conditionality sections; type/structure surface weighting in their conditionality sections |
@@ -23,14 +26,14 @@ removed targets below point to git history.
 | Correctness: async ordering/race/missing await/stale check | `profile-correctness-and-lifecycle.md` §Correctness, bullet 4 |
 | Boundaries: external input validation; deep validation delegated to security | `profile-security.md` §Input validation at trust boundaries; correctness cross-reference in §Boundary ownership |
 | Boundaries: public types/nullability/pre/postconditions | `profile-types-and-contracts.md` §Public contracts and optional values |
-| Boundaries: module boundary leaks internals | `profile-structure-and-dependencies.md` §Baseline structural checks |
+| Boundaries: module boundary leaks internals | `profile-architecture-and-boundaries.md` §Baseline structural checks |
 | Error handling: fallible operation, swallowed/logged/broad catch | `profile-correctness-and-lifecycle.md` §Error handling, bullet 1 |
 | Error handling: fail safe, partial state, resource leak, fail closed | `profile-correctness-and-lifecycle.md` §Error handling, bullet 2; security-specific form cross-referenced |
 | Error handling: actionable errors without secret/PII/path leak | `profile-correctness-and-lifecycle.md` §Error handling, bullet 3; attack impact in `profile-security.md` §Secrets |
 | Error handling: only ENOENT means absent | `profile-correctness-and-lifecycle.md` §Error handling, bullet 4; confinement form in `profile-security.md` §Path confinement |
 | Naming: ubiquitous-language name and misleading examples | `profile-naming-and-constants.md` §Naming and readability, bullet 1 |
 | Naming: intent obvious or non-trivial why-comment | `profile-naming-and-constants.md` §Naming and readability, bullet 2 |
-| Naming: duplication versus needless indirection | `profile-structure-and-dependencies.md` §Baseline structural checks, bullet 2; naming cross-reference |
+| Naming: duplication versus needless indirection | `profile-architecture-and-boundaries.md` §Baseline structural checks, bullet 2; naming cross-reference |
 | Constants placement: conditional constants home, gate-owned narrow case, uncovered literal sites, judgment/exceptions, new home/reuse | `profile-naming-and-constants.md` §Constants placement and reuse (all bullets) |
 | Types placement: conditional types home and React props exception; strict typing delegated | `profile-types-and-contracts.md` §Type placement and reuse |
 | Comments: non-derivable why/constraint/gotcha/trade-off; forbidden boilerplate | `profile-naming-and-constants.md` §Comments, bullet 1 |
@@ -99,50 +102,50 @@ removed targets below point to git history.
 
 | Old section / rule | Primary new home |
 | --- | --- |
-| Header provenance: all three MIT sources and paraphrase note | `profile-structure-and-dependencies.md` introduction; carried also to tests/types/naming recipients |
+| Header provenance: all three MIT sources and paraphrase note | `profile-architecture-and-boundaries.md` introduction; carried also to tests/types/naming recipients |
 | Header Template-Version 2 | all four recipient profile headers |
 | Header: deep-review reads package body in place; same-named consumer overlay is additive | `review-contract.md` introduction and §Worker obligation |
 | Header: review-only prompts, architecture long tail above baseline | profile introductions and explicit cross-references |
-| Conditionality: declared DAG rather than textbook | `profile-structure-and-dependencies.md` §Clean-architecture conditionality banner |
+| Conditionality: declared DAG rather than textbook | `profile-architecture-and-boundaries.md` §Clean-architecture conditionality banner |
 | Conditionality: strong class-heavy TS | same section, strong bullet; relevant weighting repeated in types/tests |
 | Conditionality: light script pipeline, no single-caller interface | same section, light bullet |
 | Conditionality: none Bash/n8n | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Conditionality: forcing structure means n/a, not finding | same section, closing paragraph |
-| Dependency rule: imports point inward and import inspection | `profile-structure-and-dependencies.md` §The dependency rule and boundary shape, bullet 1 |
+| Dependency rule: imports point inward and import inspection | `profile-architecture-and-boundaries.md` §The dependency rule and boundary shape, bullet 1 |
 | Dependency rule: data crosses in inner shape | same section, bullet 2; type share cross-referenced |
 | Dependency rule: no cycles, name edge to invert, defer to gate | same section, bullet 3 |
 | Dependency rule: actual graph versus project-facts DAG | same section, bullet 4 |
-| Ports: core owns interface | `profile-structure-and-dependencies.md` §Ports and adapters, bullet 1 |
+| Ports: core owns interface | `profile-architecture-and-boundaries.md` §Ports and adapters, bullet 1 |
 | Ports: swappable real/in-memory boundary | same section, bullet 2 |
 | Ports: composition root only | same section, bullet 3 |
 | Ports: one-adapter-forever caution and real seam threshold | same section, bullet 4 |
 | Ports: adapters do not call adapters; legal flows | same section, bullet 5 |
-| Layers: entities hold rules and do zero I/O | `profile-structure-and-dependencies.md` §Layer separation, bullet 1 |
+| Layers: entities hold rules and do zero I/O | `profile-architecture-and-boundaries.md` §Layer separation, bullet 1 |
 | Layers: use cases orchestrate without transport/persistence | same section, bullet 2 |
 | Layers: adapters translate, no business decisions | same section, bullet 3 |
 | Layers: domain and transport types separate | `profile-types-and-contracts.md` §Layer-boundary data contracts, bullet 1 |
 | Layers: mapping at boundary once | same section, bullet 2 |
-| SOLID conditionality and real-pain filter | `profile-structure-and-dependencies.md` §SOLID introduction; types profile §Substitutability introduction |
-| SRP smell/check/when-not/remedy | `profile-structure-and-dependencies.md` §SRP, all bullets |
+| SOLID conditionality and real-pain filter | `profile-architecture-and-boundaries.md` §SOLID introduction; types profile §Substitutability introduction |
+| SRP smell/check/when-not/remedy | `profile-architecture-and-boundaries.md` §SRP, all bullets |
 | OCP smell/check/when-not/remedy | same file §OCP, all bullets |
 | LSP smell/check/when-not/remedy | `profile-types-and-contracts.md` §LSP, all bullets |
 | ISP smell/check/when-not/remedy | `profile-types-and-contracts.md` §ISP, all bullets |
-| DIP smell/check/when-not/remedy | `profile-structure-and-dependencies.md` §DIP, all bullets |
+| DIP smell/check/when-not/remedy | `profile-architecture-and-boundaries.md` §DIP, all bullets |
 | Value object: wrap constrained primitives | `profile-types-and-contracts.md` §Value objects and domain primitives, bullet 1 |
 | Value object: immutable and value equality | same section, bullet 2 |
 | Value object: no ceremony without invariant | same section, bullet 3 |
 | Entity identity equality | same section, bullet 4 |
-| DDD: no context internal reach-in | `profile-structure-and-dependencies.md` §DDD boundaries, bullet 1 |
+| DDD: no context internal reach-in | `profile-architecture-and-boundaries.md` §DDD boundaries, bullet 1 |
 | DDD: ubiquitous language versus project-facts | `profile-naming-and-constants.md` §Ubiquitous language across boundaries |
-| DDD: explicit cross-boundary contract, no shared mutable state | `profile-structure-and-dependencies.md` §DDD boundaries, bullet 3 |
-| Framework: types/annotations stay at edge | `profile-structure-and-dependencies.md` §Framework isolation, bullet 1 |
+| DDD: explicit cross-boundary contract, no shared mutable state | `profile-architecture-and-boundaries.md` §DDD boundaries, bullet 3 |
+| Framework: types/annotations stay at edge | `profile-architecture-and-boundaries.md` §Framework isolation, bullet 1 |
 | Framework: framework calls inward | same section, bullet 2 |
 | Boundary tests conditionality and generic-test cross-reference | `profile-tests-quality.md` §Behavior-first tests at boundaries introduction |
 | Boundary tests: use cases through port with fakes | same section, bullet 1 |
 | Boundary tests: shared contract suite every adapter | same section, bullet 2 |
 | Boundary tests: critical behavior at port, not only E2E | same section, bullet 3 |
-| Output: location/area | `review-contract.md` §The finding format; structure profile §Output |
-| Output: triggering prompt | `profile-structure-and-dependencies.md` §Output |
+| Output: location/area | `review-contract.md` §The finding format; architecture profile §Output |
+| Output: triggering prompt | `profile-architecture-and-boundaries.md` §Output |
 | Output: conditionality tier and reason | same section |
 | Output: risk defaults P2/P1/P3 | same section plus `review-contract.md` §Priority ladder |
 | Output: smallest behavior-preserving slice | same section |
@@ -152,72 +155,72 @@ removed targets below point to git history.
 
 | Old section / rule | Primary new home |
 | --- | --- |
-| Header provenance: `mattpocock/skills`, Ousterhout ideas, `ramziddin/solid-skills`, paraphrase status | `profile-structure-and-dependencies.md` introduction |
-| Header Template-Version 2 | `profile-structure-and-dependencies.md` header |
+| Header provenance: `mattpocock/skills`, Ousterhout ideas, `ramziddin/solid-skills`, paraphrase status | `profile-module-depth.md` introduction |
+| Header Template-Version 2 | `profile-module-depth.md` header |
 | Header: deep-review reads package body in place; same-named consumer overlay is additive | `review-contract.md` introduction and §Worker obligation |
-| Header: review-only module-depth long tail and cross-reference ownership | structure profile introduction and owner cross-references |
-| Conditionality: depth scales with callers/lifetime | `profile-structure-and-dependencies.md` §Architecture-deepening conditionality banner |
+| Header: review-only module-depth long tail and cross-reference ownership | module-depth profile introduction and owner cross-references |
+| Conditionality: depth scales with callers/lifetime | `profile-module-depth.md` §Architecture-deepening conditionality banner |
 | Conditionality: strong shared/public/library boundary | same section, strong bullet |
 | Conditionality: light scripts/pipelines | same section, light bullet |
 | Conditionality: none Bash/n8n | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Conditionality: smallest high-friction removal; no soon-deleted-script redesign; n/a is not finding | same section, closing paragraph |
-| Vocabulary: module and full interface | `profile-structure-and-dependencies.md` §Depth vocabulary, bullet 1 |
+| Vocabulary: module and full interface | `profile-module-depth.md` §Depth vocabulary, bullet 1 |
 | Vocabulary: depth/deep/shallow | same section, bullet 2 |
 | Vocabulary: leverage | same section, bullet 3 |
 | Vocabulary: seam and one-versus-two | same section, bullet 4 |
 | Vocabulary: locality | same section, bullet 5 |
-| Deep modules: measure caller-knowledge versus hidden behavior | `profile-structure-and-dependencies.md` §Deep versus shallow modules, bullet 1 |
+| Deep modules: measure caller-knowledge versus hidden behavior | `profile-module-depth.md` §Deep versus shallow modules, bullet 1 |
 | Deep modules: interface-to-implementation ratio | same section, bullet 2 |
 | Deep modules: pass-through method/wrapper/param | same section, bullet 3 |
 | Deep modules: thin manager/anemic wrapper | same section, bullet 4 |
 | Deep modules: merge candidates and PLAN | same section, bullet 5 |
 | Deep modules: classitis | same section, bullet 6 |
 | Deep modules: adjacent layers expose same abstraction | same section, bullet 7 |
-| Deletion: delete-and-inline thought experiment | `profile-structure-and-dependencies.md` §The deletion test, bullet 1 |
+| Deletion: delete-and-inline thought experiment | `profile-module-depth.md` §The deletion test, bullet 1 |
 | Deletion: one versus two adapters | same section, bullet 2 |
 | Deletion: whole pass-through layer and PLAN | same section, bullet 3 |
-| Hiding: decision known to many modules and change fan-out | `profile-structure-and-dependencies.md` §Information hiding and leakage, bullet 1 |
+| Hiding: decision known to many modules and change fan-out | `profile-module-depth.md` §Information hiding and leakage, bullet 1 |
 | Hiding: temporal decomposition | same section, bullet 2 |
 | Hiding: config sprawl | same section, bullet 3 |
 | Hiding: public implementation detail | same section, bullet 4 |
 | Hiding: hidden global input | same section, bullet 5 |
-| Locality: behavior reads close | `profile-structure-and-dependencies.md` §Locality of behavior, bullet 1 |
+| Locality: behavior reads close | `profile-module-depth.md` §Locality of behavior, bullet 1 |
 | Locality: wiring/config near behavior | same section, bullet 2 |
 | Locality: no partial dogma splitting | same section, bullet 3 |
 | Locality: conjoined methods | same section, bullet 4 |
-| Pull down: absorb repeated caller complexity | `profile-structure-and-dependencies.md` §Pull complexity downward and define errors out of existence, bullet 1 |
+| Pull down: absorb repeated caller complexity | `profile-module-depth.md` §Pull complexity downward and define errors out of existence, bullet 1 |
 | Pull down: define unactionable/impossible errors away | same section, bullet 2 |
 | Pull down: special cases duplicated at callers | same section, bullet 3 |
 | Pull down: configuration overload/defaults | same section, bullet 4 |
-| Generality: somewhat-general, not hypothetical; over-special converse | `profile-structure-and-dependencies.md` §Generality and premature abstraction, bullet 1 |
+| Generality: somewhat-general, not hypothetical; over-special converse | `profile-module-depth.md` §Generality and premature abstraction, bullet 1 |
 | Generality: Rule of Three | same section, bullet 2 |
-| Complexity symptom: change amplification | `profile-structure-and-dependencies.md` §The three complexity symptoms, row 1 |
+| Complexity symptom: change amplification | `profile-module-depth.md` §The three complexity symptoms, row 1 |
 | Complexity symptom: cognitive load | same section, row 2 |
 | Complexity symptom: unknown-unknowns | same section, row 3 |
-| Leverage: rank by callers/work unblocked | `profile-structure-and-dependencies.md` §Leverage ranking, bullet 1 |
+| Leverage: rank by callers/work unblocked | `profile-module-depth.md` §Leverage ranking, bullet 1 |
 | Leverage: smallest slice and PLAN | same section, bullet 2 |
 | Leverage: essential versus accidental complexity | same section, bullet 3 |
-| Candidate strength: concentrate-versus-move filter | `profile-structure-and-dependencies.md` §Candidate strength, bullet 1 |
+| Candidate strength: concentrate-versus-move filter | `profile-module-depth.md` §Candidate strength, bullet 1 |
 | Candidate grade: Strong | same section, table row 1 |
 | Candidate grade: Worth exploring | same section, table row 2 |
 | Candidate grade: Speculative is not finding | same section, table row 3 |
-| Output: location/area and triggering prompt | `review-contract.md` §The finding format; structure profile §Output |
-| Output: conditionality tier | structure profile §Output |
-| Output: candidate strength and speculative exclusion | structure profile §Output and §Candidate strength |
-| Output: leverage/risk and normal priority range | structure profile §Output; `review-contract.md` §Priority ladder |
-| Output: smallest behavior-preserving slice | structure profile §Output |
-| Output: leverage ordering, PLAN for many sites, explicit clean | structure profile §Output |
+| Output: location/area and triggering prompt | `review-contract.md` §The finding format; module-depth profile §Output |
+| Output: conditionality tier | module-depth profile §Output |
+| Output: candidate strength and speculative exclusion | module-depth profile §Output and §Candidate strength |
+| Output: leverage/risk and normal priority range | module-depth profile §Output; `review-contract.md` §Priority ladder |
+| Output: smallest behavior-preserving slice | module-depth profile §Output |
+| Output: leverage ordering, PLAN for many sites, explicit clean | module-depth profile §Output |
 
 ## `refactoring-checklist.md`
 
 | Old section / rule | Primary new home |
 | --- | --- |
-| Header provenance: `ramziddin/solid-skills` MIT `b113ce68`; own tech-debt/execution-order material | `profile-structure-and-dependencies.md` introduction; provenance carried to tests/correctness recipients |
+| Header provenance: `ramziddin/solid-skills` MIT `b113ce68`; own tech-debt/execution-order material | `profile-refactoring-and-smells.md` introduction; provenance carried to tests/correctness recipients |
 | Header Template-Version 2 | all three recipient profile headers |
 | Header: deep-review reads package body in place; same-named consumer overlay is additive | `review-contract.md` introduction and §Worker obligation |
 | Header: review-only prompts and fix-mode discipline | `review-contract.md` §Worker obligation; relevant profile sections |
-| Header: structural long tail and cross-guide ownership | structure profile introduction and owner cross-references |
-| Conditionality: strongest real callers/tests | `profile-structure-and-dependencies.md` §Refactoring conditionality banner, bullet 1; tests profile §Conditionality |
+| Header: structural long tail and cross-guide ownership | refactoring profile introduction and owner cross-references |
+| Conditionality: strongest real callers/tests | `profile-refactoring-and-smells.md` §Refactoring conditionality banner, bullet 1; tests profile §Conditionality |
 | Conditionality: lighter script glue/no manufactured seams | same section, bullet 2 |
 | Conditionality: risky refactor is "leave it" with reason | same section, bullet 3 |
 | Behavior: behavior/contract tests unchanged, structural-test exception with evidence | `profile-correctness-and-lifecycle.md` §Behavior preservation during refactors, bullet 1 |
@@ -226,15 +229,15 @@ removed targets below point to git history.
 | Test-cover: behavior test before move | `profile-tests-quality.md` §Test-cover before a refactor, bullet 1 |
 | Test-cover: quirky legacy behavior pinned exactly | same section, bullet 2 |
 | Test-cover: coverage-free move is P2 risk | same section, bullet 3 |
-| Atomic: independently verifiable green slices | `profile-structure-and-dependencies.md` §Small atomic refactor steps, bullet 1 |
+| Atomic: independently verifiable green slices | `profile-refactoring-and-smells.md` §Small atomic refactor steps, bullet 1 |
 | Atomic: each slice independently revertible | same section, bullet 2 |
 | Atomic: every slice backed by finding | same section, bullet 3 |
 | Atomic: pinning test tooth demonstrated by temporary mutation | `profile-tests-quality.md` §Test-cover before a refactor, bullet 4 |
-| Complexity: essential versus accidental before flagging | `profile-structure-and-dependencies.md` §Accidental versus essential complexity, bullet 1 |
+| Complexity: essential versus accidental before flagging | `profile-refactoring-and-smells.md` §Accidental versus essential complexity, bullet 1 |
 | Complexity: change amplification signal and missing home | same section, bullet 2 |
 | Complexity: cognitive-load signal, not naming nit | same section, bullet 3 |
 | Complexity: do not replace duplication with wrong abstraction | same section, bullet 4 |
-| Smell taxonomy: indicator not bug, exceptions/remedy/priority, thresholds not findings, P1 only live defect | `profile-structure-and-dependencies.md` §Code-smells taxonomy introduction |
+| Smell taxonomy: indicator not bug, exceptions/remedy/priority, thresholds not findings, P1 only live defect | `profile-refactoring-and-smells.md` §Code-smells taxonomy introduction |
 | Bloater: Long function | same section §Bloaters, row 1 |
 | Bloater: Large class | same section §Bloaters, row 2 |
 | Bloater: Long parameter list | same section §Bloaters, row 3 |
@@ -254,27 +257,27 @@ removed targets below point to git history.
 | Coupler: Inappropriate intimacy | same section, row 2 |
 | Coupler: Message chains | same section, row 3 |
 | Coupler: Middle man | same section, row 4 |
-| Seam: hard-wired external dependency blocks unit testing | `profile-structure-and-dependencies.md` §Seams and dependency injection, bullet 1 |
+| Seam: hard-wired external dependency blocks unit testing | `profile-refactoring-and-smells.md` §Seams and dependency injection, bullet 1 |
 | Seam: reject indirection-only seam via deletion test | same section, bullet 2 |
 | Seam: default-wire existing behavior | same section, bullet 3 |
-| Dead/duplication: prefer deletion, defer to deterministic gate | `profile-structure-and-dependencies.md` §Duplication, dead code, and speculative flexibility, bullet 1 |
+| Dead/duplication: prefer deletion, defer to deterministic gate | `profile-refactoring-and-smells.md` §Duplication, dead code, and speculative flexibility, bullet 1 |
 | Dead/duplication: Rule of Three with first/second/third behavior | same section, bullet 2 |
 | Dead/duplication: unused flexibility P3 deletion candidate | same section, bullet 3 |
-| Debt: defect versus debt classification and evidence | `profile-structure-and-dependencies.md` §Tech-debt classification introduction |
+| Debt: defect versus debt classification and evidence | `profile-refactoring-and-smells.md` §Tech-debt classification introduction |
 | Debt quadrant: prudent deliberate | same section §Quadrant, row 1 prudent cell |
 | Debt quadrant: reckless deliberate | same section §Quadrant, row 1 reckless cell |
 | Debt quadrant: prudent inadvertent | same section §Quadrant, row 2 prudent cell |
 | Debt quadrant: reckless inadvertent | same section §Quadrant, row 2 reckless cell |
 | Debt: interest/principal definitions and priority formula | same section §Interest versus principal |
 | Debt: do not pay deletion-bound/stable debt; Boy-Scout condition | same section §Debt worth not paying |
-| Execution order: pin first | `profile-structure-and-dependencies.md` §Refactor execution order, step 1 |
+| Execution order: pin first | `profile-refactoring-and-smells.md` §Refactor execution order, step 1 |
 | Execution order: introduce additively | same section, step 2 |
 | Execution order: migrate callers one at a time | same section, step 3 |
 | Execution order: delete old last | same section, step 4 |
 | Execution order: low-risk/high-value first and no behavior fold-in | same section, step 5 |
 | Execution order: each step committable/revertible/green; re-slice or PLAN | same section, closing paragraph |
-| Output: standard fields, smell evidence, regression cost/likelihood, atomic slice and preserving test | `review-contract.md` §The finding format; structure profile §Output |
-| Output: redesign/many sites is PLAN; explicit clean, no P3 noise | structure profile §Output; `review-contract.md` §The no-findings case |
+| Output: standard fields, smell evidence, regression cost/likelihood, atomic slice and preserving test | `review-contract.md` §The finding format; refactoring profile §Output |
+| Output: redesign/many sites is PLAN; explicit clean, no P3 noise | refactoring profile §Output; `review-contract.md` §The no-findings case |
 
 ## `security-review.md`
 
@@ -352,16 +355,16 @@ removed targets below point to git history.
 | Header provenance: `awesome-skills/code-review-skill` MIT `f2fd4e57`, repo-written Node/Bash/n8n, additive repo rows | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Header: deep-review reads package body in place; same-named consumer overlay is additive | `review-contract.md` introduction and §Worker obligation |
 | Router purpose: dispatch table, one matching stack, cross-language false-positive warning | every profile §Stack routing; naming/tests explicitly record absence of extra old stack prompts |
-| Router purpose: cross-cutting runs with selected stack | correctness/types/structure profiles' cross-cutting sections and routing introductions |
-| Dispatch row: TypeScript shared module/service | types/correctness profiles §TypeScript shared module/service; structure routing row |
-| Dispatch row: Script-style TS | correctness/security profiles §Script-style TS; structure routing row |
-| Dispatch row: React/UI TS | correctness profile §React/UI TS; types and structure routing rows |
-| Dispatch row: Node/backend TS | correctness/types profiles §Node/backend TS; structure routing row |
+| Router purpose: cross-cutting runs with selected stack | correctness/types/module-depth profiles' cross-cutting sections and all profile routing introductions |
+| Dispatch row: TypeScript shared module/service | types/correctness profiles §TypeScript shared module/service; architecture/module-depth/refactoring routing rows |
+| Dispatch row: Script-style TS | correctness/security profiles §Script-style TS; architecture/module-depth/refactoring routing rows |
+| Dispatch row: React/UI TS | correctness profile §React/UI TS; types and architecture/module-depth/refactoring routing rows |
+| Dispatch row: Node/backend TS | correctness/types profiles §Node/backend TS; architecture/module-depth/refactoring routing rows |
 | Dispatch row: Bash/shell glue | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Dispatch row: n8n/workflow glue | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Dispatch row: Python scripts | removed 2026-07-15 — corpus scoped to js/ts/node/react (git history) |
 | Router: adopter rows point to exactly one section | all profile routing-table structure; no new adopter row invented |
-| Router: does not decide area-guide applicability | `profile-structure-and-dependencies.md` §Stack routing introduction; each inherited banner owns applicability |
+| Router: does not decide area-guide applicability | `profile-architecture-and-boundaries.md`, `profile-module-depth.md`, and `profile-refactoring-and-smells.md` §Stack routing introductions; each inherited banner owns applicability |
 | How-to 1: identify actual surface per file/slice, not extension | types/correctness profile routing introductions |
 | How-to 2: pick one matching row/section | same sections |
 | How-to 3: mixed stack routed per part | same sections |
@@ -371,9 +374,9 @@ removed targets below point to git history.
 | Cross-cutting: null/undefined/index/map flow | `profile-types-and-contracts.md` §Public contracts and optional values, bullet 2 |
 | Cross-cutting: resource leaks all paths | `profile-correctness-and-lifecycle.md` §Cross-cutting correctness checks, bullet 2 |
 | Cross-cutting: TOCTOU act/catch | same section, bullet 3; hostile-path extension cross-referenced to security |
-| Cross-cutting: reuse helper/util/type | `profile-structure-and-dependencies.md` §Cross-cutting structural checks, bullet 1; type/constant owners cross-referenced |
+| Cross-cutting: reuse helper/util/type | `profile-module-depth.md` §Cross-cutting structural checks, bullet 1; type/constant owners cross-referenced |
 | Cross-cutting: no-op update/redundant state | `profile-correctness-and-lifecycle.md` §Cross-cutting correctness checks, bullet 4 |
-| Cross-cutting: over-broad reads | `profile-structure-and-dependencies.md` §Cross-cutting structural checks, bullet 2 |
+| Cross-cutting: over-broad reads | `profile-module-depth.md` §Cross-cutting structural checks, bullet 2 |
 | Cross-cutting: historical regression uses pre-change blame/pickaxe | `profile-correctness-and-lifecycle.md` §Cross-cutting correctness checks, bullet 5 |
 | TS shared context/idioms/common-bug catalog | types/correctness profiles §TypeScript shared module/service introductions and owner split |
 | TS shared: exported `any` | `profile-types-and-contracts.md` §TypeScript shared module/service, bullet 1 |
@@ -385,12 +388,12 @@ removed targets below point to git history.
 | TS shared: readonly shared/returned objects | `profile-types-and-contracts.md` §TypeScript shared module/service, bullet 4 |
 | TS shared: typed errors and cause | same section, bullet 5 |
 | TS shared: strict equality | `profile-correctness-and-lifecycle.md` §TypeScript shared module/service, bullet 4 |
-| Script TS context/idioms/common-bug catalog | correctness/security profile script introductions; structure routing scope |
+| Script TS context/idioms/common-bug catalog | correctness/security profile script introductions; architecture/module-depth/refactoring routing scope |
 | Script TS: argv/env validation at top | `profile-security.md` §Script-style TS / one-off pipeline |
 | Script TS: non-zero failure exit | `profile-correctness-and-lifecycle.md` §Script-style TS, bullet 1 |
 | Script TS: handled top-level await rejection | same section, bullet 2 |
 | Script TS: floating promises/missing await | same section, bullet 3 cross-applies shared rule |
-| Script TS: correctness/readability only; structural rules out | `profile-structure-and-dependencies.md` §Stack routing, script row |
+| Script TS: correctness/readability only; structural rules out | `profile-architecture-and-boundaries.md`, `profile-module-depth.md`, and `profile-refactoring-and-smells.md` §Stack routing, script rows |
 | React context/idioms/common-bug catalog | `profile-correctness-and-lifecycle.md` §React / UI TS introduction |
 | React: unconditional top-level hooks | same section, bullet 1 |
 | React: exhaustive reactive deps and cleanup, local hook return exceptions | same section, bullet 2 |

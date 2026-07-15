@@ -12,13 +12,15 @@ import type { DeepReviewConfig } from '../../deep-review/src/config.ts';
 import { REVIEW_GUIDE_TEMPLATES_DIR } from '../../deep-review/src/guides.ts';
 import { EXIT_PREFLIGHT } from '../../deep-review/src/types.ts';
 
-const EXPECTED_TEMPLATE_GUIDE_COUNT = 7;
+const EXPECTED_TEMPLATE_GUIDE_COUNT = 9;
 const OVERLAY_BODY = 'OVERLAY CHECKLIST BODY\n';
 const CORPUS_NAMES = [
+  'profile-architecture-and-boundaries.md',
   'profile-correctness-and-lifecycle.md',
+  'profile-module-depth.md',
   'profile-naming-and-constants.md',
+  'profile-refactoring-and-smells.md',
   'profile-security.md',
-  'profile-structure-and-dependencies.md',
   'profile-tests-quality.md',
   'profile-types-and-contracts.md',
   'review-contract.md',
@@ -62,7 +64,7 @@ test('non-gated verbs pass without loading guides', () => {
   }
 });
 
-test('all gated verbs load the seven real package templates without a consumer guides directory', () => {
+test('all gated verbs load the nine real package templates without a consumer guides directory', () => {
   withRoot((root) => {
     const missingOverlay = path.join(root, '.claude', 'review-guides');
     assert.equal(fs.existsSync(missingOverlay), false);

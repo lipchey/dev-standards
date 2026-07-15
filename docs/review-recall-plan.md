@@ -147,8 +147,13 @@ the dir name):
   - `profile-correctness-and-lifecycle.md` — error causes, resource-pair
     symmetry on every path, stale-callback inertness, boundary conditions,
     async races.
-  - `profile-structure-and-dependencies.md` — boundaries, dependency
-    direction, cohesion, cross-module duplication, dead code.
+  - `profile-architecture-and-boundaries.md` — boundaries, dependency
+    direction, ports/adapters, layer separation, SOLID, DDD, framework
+    isolation.
+  - `profile-module-depth.md` — cohesion, information hiding, locality,
+    change amplification, caller leverage.
+  - `profile-refactoring-and-smells.md` — safe structural refactoring,
+    duplication, dead code, smells, and technical debt.
   - `profile-security.md` — the old `security-review.md` lens, keeping its
     own conditionality banner.
 
@@ -163,7 +168,7 @@ contradictions, rule loopholes/over-reach) as a MANDATORY pass, not optional;
 
 **Mechanics that must move with the corpus:**
 
-- `deep-review/src/guides.ts` hardcodes the seven filenames — the const list
+- `deep-review/src/guides.ts` hardcodes the nine filenames — the const list
   changes to the new set, with its tests; the consumer inherits the new gate
   via the pin bump. **Full blast radius (Gate P F4, verified):** the corpus
   is cross-referenced by `agents/skill-catalog.json` (provenance ledger;

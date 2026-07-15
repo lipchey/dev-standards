@@ -308,8 +308,8 @@ test('computeMissing DROPS a read whose realpath fails — non-proof, not a raw 
 });
 
 test('computeMissing realpaths reads AND roots so a /tmp symlink prefix still matches', () => {
-  const tail = `${TEMPLATE_ANCHOR}/profile-structure-and-dependencies.md`;
-  const read = { path: guideRead('/tmp/root', 'profile-structure-and-dependencies.md'), ok: true };
+  const tail = `${TEMPLATE_ANCHOR}/profile-module-depth.md`;
+  const read = { path: guideRead('/tmp/root', 'profile-module-depth.md'), ok: true };
   const realpath = (value: string): string => value.replace('/tmp/', '/private/tmp/');
   assert.deepEqual(computeMissing({ requiredTails: [tail], reads: [read], approvedRoots: ['/tmp/root'], realpath }), []);
 });

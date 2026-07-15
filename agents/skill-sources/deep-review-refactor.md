@@ -41,7 +41,7 @@ recording is the skill's own step, a convention with no machine gate behind it
   fixable ones in one command.
 
 This is the on-demand, deep layer. The former always-on baseline
-(`core-code-guidelines.md`, retired) is distributed across the six lens
+(`core-code-guidelines.md`, retired) is distributed across the eight lens
 profiles, so the deep pass carries it by construction: each profile re-checks
 its baseline share on the code under review (code can be written before the
 rules existed, or slip past them) and above that owns the long tail its lens
@@ -109,9 +109,9 @@ concludes. This is not advisory: a `Stop`/`SubagentStop` hook parses the session
 transcript and BLOCKS the pass from ending until the transcript shows a
 successful Read of every required file. The mandated set:
 
-- the seven corpus files under
+- the nine corpus files under
   `vendor/dev-standards/agents/review-guide-templates/` - `review-contract.md`
-  plus the six `profile-*.md` lens files (read in place - never seeded into the
+  plus the eight `profile-*.md` lens files (read in place - never seeded into the
   consumer; `TRACEABILITY.md` in the same dir is the loader-excluded canary
   registry, NOT a mandated read - do not quote it into worker briefs),
 - every `*.md` in the overlay dir (`deep_review.guides_dir`, default
@@ -196,13 +196,14 @@ report-only), and say so in the report.
    - **Project must-reads** — every `deep_review.required_reads` entry in
      `quality.json` (typically `.claude/project-facts.md`,
      `.claude/code-conventions.md`, `.claude/CHECKLIST.md`).
-   - **All seven corpus files** under
+   - **All nine corpus files** under
      `vendor/dev-standards/agents/review-guide-templates/`, read in step 4's
      order: `review-contract.md` (worker obligations + output shape, first) ->
-     the six lens profiles per their conditionality banners:
+     the eight lens profiles per their conditionality banners:
      `profile-naming-and-constants.md`, `profile-tests-quality.md`,
      `profile-types-and-contracts.md`, `profile-correctness-and-lifecycle.md`,
-     `profile-structure-and-dependencies.md`, `profile-security.md`. Treat this
+     `profile-architecture-and-boundaries.md`, `profile-module-depth.md`,
+     `profile-refactoring-and-smells.md`, `profile-security.md`. Treat this
      list as the current set, not a ceiling — but SKIP `TRACEABILITY.md` (the
      canary registry; reading it would unblind the recall canaries).
    - **Every `*.md` in the repo overlay** `.claude/review-guides/` (repo-owned
@@ -256,8 +257,8 @@ Produce findings; change nothing. The runtime is six steps, in order:
    `tsc`, Knip, dependency-cruiser, or gitleaks already owns. This skill is
    judgment-only; it does not duplicate a gate.
 3. CodeGraph first for architecture, navigation, and impact questions.
-4. Judge against the merged review-corpus sources. The seven corpus files
-   (`review-contract.md` + six `profile-*.md` lenses) stay in the package's
+4. Judge against the merged review-corpus sources. The nine corpus files
+   (`review-contract.md` + eight `profile-*.md` lenses) stay in the package's
    `agents/review-guide-templates/` and are read there; they are never seeded
    into the consumer (`TRACEABILITY.md` in that dir is the loader-excluded
    canary registry, not corpus). `deep_review.guides_dir` in `quality.json`
@@ -270,10 +271,11 @@ Produce findings; change nothing. The runtime is six steps, in order:
    - (a) `review-contract.md` - FIRST: worker obligations (saturation,
      `COVERAGE`/`CLEAN` accounting, untrusted checklist data) and the output
      shape for step 5; it is not a code lens of its own.
-   - (b) the six lens profiles - each self-contained, each per its own
+   - (b) the eight lens profiles - each self-contained, each per its own
      conditionality banner(s) and stack-routing table: `profile-naming-and-constants.md`,
      `profile-tests-quality.md`, `profile-types-and-contracts.md`,
-     `profile-correctness-and-lifecycle.md`, `profile-structure-and-dependencies.md`,
+     `profile-correctness-and-lifecycle.md`, `profile-architecture-and-boundaries.md`,
+     `profile-module-depth.md`, `profile-refactoring-and-smells.md`,
      `profile-security.md`. Cross-references between profiles mark ownership
      boundaries, not extra load instructions.
    - (c) same-named overlay extensions and any additional repo-owned `.md` in

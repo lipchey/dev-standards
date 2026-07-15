@@ -50,7 +50,7 @@ Judgment prompts:
   where a one-line why-comment would save the next reader? More comments is not
   better; the missing *why* on a surprising line is the finding.
 - Needless duplication and needless indirection are owned by
-  → see `profile-structure-and-dependencies.md` §Duplication, dead code, and
+  → see `profile-refactoring-and-smells.md` §Duplication, dead code, and
   speculative flexibility.
 
 ## Constants placement and reuse
@@ -99,7 +99,7 @@ Judgment prompts:
   syntax is line-based by spec (`#`, Rust `///`, Go doc comments).
 
 The structural smell where a comment deodorizes confusing code is owned by
-→ see `profile-structure-and-dependencies.md` §Code-smells taxonomy,
+→ see `profile-refactoring-and-smells.md` §Code-smells taxonomy,
 "Comments-as-deodorant". Apply this section first: a non-derivable why, gotcha,
 or trade-off is a KEEP, not deodorant.
 
@@ -115,7 +115,7 @@ single-purpose repo.
   profile owns intra-module naming and this cross-boundary naming angle.
 
 The remaining bounded-context and shared-state rules are owned by
-→ see `profile-structure-and-dependencies.md` §DDD boundaries.
+→ see `profile-architecture-and-boundaries.md` §DDD boundaries.
 
 ## Stack routing
 
@@ -140,10 +140,10 @@ invent a stack-specific naming checklist.
 ## Shared-edge cross-references
 
 - A new helper, util, or type that duplicates an existing repo definition is
-  owned by → see `profile-structure-and-dependencies.md` §Cross-cutting
+  owned by → see `profile-module-depth.md` §Cross-cutting
   structural checks. Constant redeclaration remains owned here.
 - Cognitive load caused by unclear names is evaluated through the structural
-  symptom rule in → see `profile-structure-and-dependencies.md` §The three
+  symptom rule in → see `profile-module-depth.md` §The three
   complexity symptoms.
 
 ## Output

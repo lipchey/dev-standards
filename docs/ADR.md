@@ -394,6 +394,10 @@ which files; verification filters false positives while nothing measures recall.
    pilot state is recorded at consumer adoption; durable offense-shaped fixtures
    live in the rule tests.
 
+Amendment 2026-07-15 (owner decision): `profile-structure-and-dependencies.md`
+was split three ways so each worker owns one mandate with size and attention
+parity.
+
 ### Consequences
 
 - The 20-comment miss class becomes 18 deterministic lint errors + 2 named
