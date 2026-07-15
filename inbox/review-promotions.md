@@ -39,7 +39,7 @@ deleted - the history is the second-use evidence.
 
 ## Pending
 
-_None — the 2026-07-15 inbox batch processed every entry (see `## Promoted`)._
+- [ ] 2026-07-15 dev-standards DR-16 gate-C - tests: an ordering-contract regression test (guard-before-config, validate-before-mutate) must use a fixture where the step the guard must PRECEDE would produce a DIFFERENT observable outcome (e.g. a missing/throwing config → a distinct exit code), so reordering the guard past it turns the test red — a happy-fixture test pins the guard's existence, not its ordering, and silently survives the reorder (addition).
 
 ## Promoted
 

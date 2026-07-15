@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runCli } from '../../deep-review/src/cli.ts';
 import type { CliDeps } from '../../deep-review/src/cli.ts';
-import { EXIT_FAILURE, EXIT_USAGE, EXIT_PREFLIGHT, EXIT_DESCRIPTOR_MISMATCH } from '../../deep-review/src/types.ts';
+import { EXIT_OK, EXIT_FAILURE, EXIT_USAGE, EXIT_PREFLIGHT, EXIT_DESCRIPTOR_MISMATCH } from '../../deep-review/src/types.ts';
 import type { MachineError } from '../../deep-review/src/types.ts';
 import type { DescriptorVerdict, RunDescriptor } from '../../deep-review/src/descriptor.ts';
 
@@ -103,6 +103,42 @@ test('check-path with no resolvable quality.json -> EXIT_FAILURE + a machine-err
   const code = runCli(['check-path', 'src/app.ts'], cap.deps);
   assert.equal(code, EXIT_FAILURE);
   assert.match(lastError(cap.errLines()).command, /deep-review check-path/);
+});
+
+/* DR-16: an operand that escapes the repo must be REFUSED (EXIT_USAGE), not answered with a
+   verdict. A resolvable quality.json is present so, WITHOUT the guard, the matcher would run and
+   print a misleading `editable` — the empty stdout is the regression assertion. */
+test('check-path with an escaping operand (../…) -> EXIT_USAGE, no verdict printed', () => {
+  const dir = dirWithFixMode();
+  const out: string[] = [];
+  const err: string[] = [];
+  const deps: CliDeps = { stdout: (t) => out.push(t), stderr: (t) => err.push(t), cwd: () => dir, warn: () => {} };
+  const code = runCli(['check-path', '../tools/run-gitleaks'], deps);
+  assert.equal(code, EXIT_USAGE);
+  assert.equal(out.join(''), '');
+  assert.match(err.join(''), /invalid <path> operand/);
+});
+
+/* Pins the ARGV-FIRST ordering the DR-16 fix claims: an escaping operand is EXIT_USAGE even with
+   NO resolvable quality.json, where reaching loadConfig would instead throw EXIT_FAILURE. Moving
+   the guard below config load turns this red (the valid-config test above cannot see that drift). */
+test('check-path escaping operand -> EXIT_USAGE even with no resolvable quality.json (argv-first)', () => {
+  const dir = tmpDir();
+  const out: string[] = [];
+  const deps: CliDeps = { stdout: (t) => out.push(t), stderr: () => {}, cwd: () => dir, warn: () => {} };
+  const code = runCli(['check-path', '../evil'], deps);
+  assert.equal(code, EXIT_USAGE);
+  assert.equal(out.join(''), '');
+});
+
+/* The guard must not over-reject: a plain in-repo path still reaches the matcher and returns a verdict. */
+test('check-path with a safe in-repo operand still returns a verdict (EXIT_OK)', () => {
+  const dir = dirWithFixMode();
+  const out: string[] = [];
+  const deps: CliDeps = { stdout: (t) => out.push(t), stderr: () => {}, cwd: () => dir, warn: () => {} };
+  const code = runCli(['check-path', 'src/app.ts'], deps);
+  assert.equal(code, EXIT_OK);
+  assert.match(out.join(''), /^(no-touch|editable)\n$/);
 });
 
 // ── §5.0 preflight gate (runs BEFORE the identity gate) ────────────────────────

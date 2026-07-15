@@ -196,9 +196,11 @@ From the full disposition of `DEEP_REVIEW_FINDINGS.md` (58 findings; see its
 - **DR-14** — findings schema does not enforce 4 slice invariants (`line ≤ 0`,
   empty/duplicate `slice_files`, a `file` not in `slice_files`). Belongs with the
   Phase 5 §5.4 schema-v2 work; low risk (review-only until fix-mode ships).
-- **DR-16** — `check-path` CLI verb still lacks `assertSafeRepoPath` on its
-  repo-relative input (`deep-review/src/cli.ts`). Confinement nit; deep-review
-  writes already route through `writeConfined`.
+- **DR-16** — ✅ DONE (v0.20.2, 2026-07-15). `check-path` now runs
+  `assertSafeRepoPath` argv-first (before config load, mirroring the
+  select-worktree slug gate): an escaping/absolute/glob/magic-pathspec operand
+  is EXIT_USAGE instead of a misleading `editable`. Regression + argv-first
+  ordering tests in `tests/deep-review/cli.test.ts`.
 - **DEP-02 (auto-update half)** — core `.github/dependabot.yml` does not exist, so
   the SHA-pinned GitHub Actions in `quality.yml` have no automated bump mechanism.
   Add a `github-actions` ecosystem entry (S). The consumer template already seeds a
