@@ -38,6 +38,34 @@ above that re-check owns the long tail: the edge cases the baseline deliberately
 defers so it can stay short and noise-free. The baseline handles routine work;
 this pass re-applies it and adds breadth, on request only.
 
+## Orchestration - the main session delegates the direct work, keeps the judgment
+
+The main session runs this pass as an ORCHESTRATOR and strategic decision-maker,
+not as the worker that does the reading and editing itself. Context is the scarce
+resource: a pass explores the code, weighs many guides, and (in fix mode)
+implements slices - carrying all of that inline bloats the session until it can no
+longer steer. So the main session offloads the heavy DIRECT work to
+subagents/workers (per the session's delegation protocol where one exists - the
+built-in Codex cross-run below is already one such delegation) and keeps only the
+decisions for itself.
+
+- **Delegated, to keep context lean:** per-finding code exploration and
+  evidence-gathering (the CodeGraph/read fan-out), the Codex cross-run, and - in
+  fix mode - the mechanical slice implementation (the worker produces the diff).
+- **Never delegated, owned by the main session:** the Run-setup asks; every
+  adversarial VALID/INVALID/PARTIAL verdict, the provenance-labeled merge, and the
+  final report; the `classify` and `verify` gate calls, the fix-mode self-reviews
+  (slice diff and whole fix-diff), and the `handoff` emit (landing itself stays a
+  human's job, ADR-012).
+- **The one hard carve-out:** the mandated guide READS stay in the main session
+  even when review work is fanned out - the ADR-016 gate is fail-closed on the
+  MAIN session's transcript (§Mandatory guide reads), so delegating them away
+  blocks the Stop hook. Brief each delegated worker to read the same guides too,
+  but that briefing never substitutes for the main session's own in-session reads.
+
+A worker's output is INPUT to the main session's judgment, never the verdict: the
+merge, the verdicts, and the `handoff` are always the main session's own.
+
 ## Mandatory guide reads - enforced by a hard gate (ADR-016)
 
 Every pass MUST actually open (with the Read tool) each mandated guide before it
