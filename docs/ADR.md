@@ -210,3 +210,45 @@ Both new-standard presets (`naming`, `constantsHome`) ship ACTIVE in
 run deadline — per the CLAUDE.md seed-parity rule: a consumer-facing standard
 lands in the seeds in the same batch, the pilot is an adopter, not the source
 of truth.
+
+---
+
+## ADR-015 — Constant/type placement become always-on review judgments
+
+- **Status:** Accepted
+- **Date:** 2026-07-15
+
+### Context
+
+ADR-014 gated one narrow constant case — a module-scope `const` bound to a bare
+primitive literal, in the files the `constantsHome` preset lints — and left
+everything else (literals in expressions and call arguments, function-local
+literals, literal-only arithmetic, and constant reuse) to review, but no guide
+wrote that down. Type/interface PLACEMENT had no baseline prompt either. Type
+reuse-before-add already existed as a cross-cutting check in the router
+(`language-review-sources.md`); specific home paths lived only in the per-repo
+`code-conventions.md` template.
+
+### Decision
+
+The always-on baseline (`core-code-guidelines.md`) gains two placement prompts,
+each conditional on the repo actually keeping the home it names (a repo without
+that home is out of scope for the bullet): a non-obvious inline scalar belongs in
+the constants home and an existing constant is reused; a type/interface belongs
+in the types home, with a React component's own props interface the standing
+exception. These are review JUDGMENTS layered on ADR-014's gate, not a second
+gate — ADR-014 stays authoritative for gate scope, and exact home paths plus
+format-owned literal exceptions stay consumer-owned in
+`.claude/code-conventions.md`. Strict-typing depth and type reuse stay the
+TypeScript lens's job in `language-review-sources.md`; the baseline does not
+repeat them. The seeded `code-conventions-template.md` names the types home and
+the props exception so a new consumer inherits both.
+
+### Consequences
+
+- What the `constantsHome` gate cannot see is a written review prompt instead of
+  tribal knowledge, and does not re-report the gated case.
+- Type placement gets a review lens with no new gate; the props carve-out keeps
+  it from firing on component-local props.
+- No guide seed sync (the seven guides are read in place from the package); the
+  `code-conventions-template.md` change is the seed parity, same batch.

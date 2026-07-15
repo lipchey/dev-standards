@@ -83,6 +83,28 @@ Judgment prompts:
   indirection that adds a name but no behavior? Weigh both directions - do not
   manufacture an abstraction a single caller will ever use.
 
+## Constants and types placement
+
+Judgment prompts - each applies only where the repo actually keeps the home it
+names (visible in the layout, or declared in `.claude/code-conventions.md`); a
+repo without that home is out of scope for the bullet:
+
+- Where a constants home exists: is a non-obvious scalar written inline in logic
+  where a named constant would carry its meaning? The `constantsHome` preset
+  already owns one narrow case in the files it lints - a module-scope `const`
+  bound to a bare primitive literal - so leave that to the gate and judge what it
+  cannot see: literals in call arguments and expressions (`setTimeout(fn, 500)`),
+  function-local literals, and literal-only arithmetic (`45 * 60 * 1000`).
+  Whether a literal is obvious enough to inline is a judgment, and a repo may
+  document its own format-owned exceptions. A new constant goes in that home; an
+  existing one is reused, not re-declared.
+- Where a types home exists: do type and interface declarations live there rather
+  than inline in a logic file - the one exception being a React component's own
+  props interface, which stays beside the component? Strict-typing depth (`any`
+  at boundaries, exhaustive unions, bare `as` casts) and type reuse are the
+  TypeScript lens's job in `language-review-sources.md`; this prompt owns only
+  placement.
+
 ## Comments
 
 Judgment prompts:

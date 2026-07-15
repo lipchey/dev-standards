@@ -33,7 +33,10 @@ one is introduced, including where shared definitions belong.
 ## Constants and types placement
 
 Name the canonical homes for constants and types. Require named constants for
-non-obvious values and document any format-owned literal exceptions.
+non-obvious values and document any format-owned literal exceptions. Declare
+where type and interface definitions live (the types home) and record the
+standing exception: a React component's own props interface stays beside the
+component, not in the shared home.
 
 ## Naming and language
 
