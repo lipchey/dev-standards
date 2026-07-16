@@ -41,6 +41,7 @@ scripts/ds-install.sh /path/to/consumer [--ref vX.Y.Z] [--eslint]
 | `.github/dependabot.yml` | Weekly grouped npm version-update PRs (platform-side; deliberate replacement for an npm-audit tier check). Consumer-owned: non-npm consumers swap the ecosystem entry for their stack (e.g. `github-actions`). |
 | `quality.json` | Your gate manifest (starts minimal — see below). |
 | `.claude/{CHECKLIST,code-conventions,gate-misses,project-facts}.md` | Instance docs (copy-if-absent; fill them in). |
+| `.claude/two-stage-dev.marker` | ADR-019 two-stage marker (copy-if-absent; needs no filling): write-time guide injectors (editor pre-tool hooks, delegate-launcher preambles) stay silent in repos carrying it — guides bind at Stage-2 review. Standard instance doc: `--check` requires it and bootstrap re-seeds it; two-stage is the package default (ADR-019). NOTE for pre-marker consumers: the first pin bump seeds it via bootstrap — commit it together with that pin (a gitlink-only pin commit leaves it untracked). |
 | `.claude/review-guides/` | Optional additive overlays (empty by default). |
 | `.claude/skills/deep-review-refactor/SKILL.md` | Static pointer to the canonical skill body. |
 | `.claude/settings.json` | Guides-read gate wiring (ADR-016): the `Stop` + `SubagentStop` hooks. Structurally MERGED, not copy-if-absent — a consumer's existing settings survive. |
@@ -66,8 +67,17 @@ project-specific gates start empty, so `./scripts/verify` passes immediately.
    findings to it. `./scripts/verify --doctor` explains the
    manifest; the validator runs on every `verify`.
 2. Fill the four `.claude/` instance docs (layer DAG, no-touch zones,
-   conventions, checklist, gate-miss ledger).
+   conventions, checklist, gate-miss ledger). The seeded `two-stage-dev.marker`
+   needs no filling.
 3. Extend, don't override, via `.claude/review-guides/` — see tuning below.
+4. Wire the two-stage process (ADR-019) into the consumer's `CLAUDE.md`: a
+   compact Stage-1 core (placement map, no-touch zones, secrets, security
+   boundaries, lazy-read triggers) instead of mandated pre-code reads; the
+   Stage-2 offer after a feature is a READY PROMPT for a fresh session
+   (`deep-review-refactor` + scope = diff vs base + branch/worktree) — never a
+   review run inside the build session, whose context is already spent; a
+   declined/postponed Stage 2 leaves a `stage-2 pending: <feature>` debt entry
+   in the repo's status doc.
 
 ## GitHub platform settings
 

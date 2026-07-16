@@ -597,6 +597,20 @@ machine-readable Stage-2 receipt is deferred — same deferral register as the
 worker-scoped read set, ADR-018). The calibration session reviews pending
 entries, which is where an unrecorded decline surfaces.
 
+**Addendum (2026-07-16, pilot adoption).** The seeder now drops
+`.claude/two-stage-dev.marker` (copy-if-absent, verified by `--check` with the
+other instance docs): machine-local write-time guide injectors (editor
+pre-tool hooks, delegate-launcher preambles) key off its presence and stay
+silent in two-stage repos — Stage 1 loses the injection tax without touching
+non-adopting repos. Consumer-wired convention (ADOPTION §4 — NOT yet emitted
+by the canonical skill): the Stage-2 offer is composed as a ready prompt for
+a FRESH session (scope = diff vs base + new files, branch/base SHA, worktree
+path) — the build session's context is already spent, so the review never
+runs inside it. Known seam: `ds-update-pins.sh` commits pathspec-confined to
+the gitlink, so the first bump of a pre-marker consumer leaves the freshly
+seeded marker untracked — commit it with that bump (transactional inclusion
+tracked in BACKLOG).
+
 ### Consequences
 
 - Writing sessions carry less rule prose; standards enforcement concentrates in

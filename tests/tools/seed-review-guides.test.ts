@@ -21,6 +21,7 @@ const INSTANCE_DOC_TEMPLATES = [
   ['code-conventions.md', 'code-conventions-template.md'],
   ['gate-misses.md', 'gate-misses-template.md'],
   ['project-facts.md', 'project-facts-template.md'],
+  ['two-stage-dev.marker', 'two-stage-dev-marker-template.md'],
 ] as const;
 const INSTANCE_DOC_NAMES = INSTANCE_DOC_TEMPLATES.map(([destinationName]) => destinationName);
 const INSTANCE_DOC_COUNT = INSTANCE_DOC_TEMPLATES.length;
@@ -76,7 +77,7 @@ function assertInstanceDocsMatchTemplates(root: string): void {
   assertInstanceDocContentsMatchTemplates(root);
 }
 
-test('a fresh consumer receives exactly the four instance docs and check passes', () => {
+test('a fresh consumer receives exactly the configured instance docs and check passes', () => {
   withRoot((root) => {
     const result = run([root]);
     assert.equal(result.status, EXIT_SUCCESS, result.stderr);
@@ -95,7 +96,7 @@ test('a fresh consumer receives exactly the four instance docs and check passes'
   });
 });
 
-test('--check requires all four docs, reports absence, and writes nothing', () => {
+test('--check requires all configured docs, reports absence, and writes nothing', () => {
   withRoot((root) => {
     const emptyResult = run([root, '--check']);
     assert.equal(emptyResult.status, EXIT_INCOMPLETE);
@@ -162,7 +163,7 @@ test('repo-owned extras and existing symlinks are untouched and excluded from co
     assert.equal(result.status, EXIT_SUCCESS, result.stderr);
     assert.equal(fs.readFileSync(path.join(directory, FIRST_INSTANCE_DOC_NAME), 'utf8'), 'linked consumer content\n');
     assert.equal(fs.readFileSync(path.join(directory, 'extra.md'), 'utf8'), 'repo-specific\n');
-    assert.match(result.stdout, /seeded instance docs: 3/);
+    assert.match(result.stdout, new RegExp(`seeded instance docs: ${INSTANCE_DOC_COUNT - 1}`));
     assert.match(result.stdout, /kept instance docs: 1/);
     assert.equal(run([root, '--check']).status, EXIT_SUCCESS);
   });

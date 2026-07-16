@@ -76,8 +76,12 @@ rollback() {
   # created by this run and is safe to drop (tracked ones are restored below).
   for p in \
     .claude/CHECKLIST.md .claude/code-conventions.md .claude/gate-misses.md .claude/project-facts.md \
+    .claude/two-stage-dev.marker \
     package-lock.json eslint.config.js quality.json; do
     [ -e "$target_abs/$p" ] || continue
+    # A symlinked .claude would route the rm outside the repo (the seeder
+    # refuses to seed through it, so nothing of ours is behind it anyway).
+    case "$p" in .claude/*) [ -L "$target_abs/.claude" ] && continue ;; esac
     git -C "$target_abs" ls-files --error-unmatch -- "$p" >/dev/null 2>&1 || rm -f "$target_abs/$p"
   done
 

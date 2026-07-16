@@ -26,7 +26,7 @@ DS_SHA="$(git -C vendor/dev-standards rev-parse HEAD)"
 echo "${DS_SHA}" > vendor/dev-standards/runner/dist/.built-from
 echo "${DS_SHA}" > vendor/dev-standards/deep-review/dist/.built-from
 
-# Seed the four instance docs into .claude/ (copy-if-absent — filled docs are
+# Seed the instance docs into .claude/ (copy-if-absent — filled docs are
 # repo-owned and never overwritten). Generic review guides are NOT copied:
 # deep-review reads them in place from the submodule package. Completeness of
 # the instance docs is gated by the fast-tier --check.

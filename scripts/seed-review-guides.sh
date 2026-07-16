@@ -85,12 +85,14 @@ instance_template_files=(
   "$agents_templates_dir/code-conventions-template.md"
   "$agents_templates_dir/gate-misses-template.md"
   "$agents_templates_dir/project-facts-template.md"
+  "$agents_templates_dir/two-stage-dev-marker-template.md"
 )
 instance_destination_names=(
   'CHECKLIST.md'
   'code-conventions.md'
   'gate-misses.md'
   'project-facts.md'
+  'two-stage-dev.marker'
 )
 instance_doc_count=${#instance_template_files[@]}
 

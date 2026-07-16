@@ -270,3 +270,21 @@ From the full disposition of `DEEP_REVIEW_FINDINGS.md` (58 findings; see its
 - **node_modules/.tools symlinks are a shared-mutation window.** Root `npm ci`
   in a concurrent bootstrap rebuilds them under a running worktree. Accepted
   trade-off (documented at `SYMLINK_TARGETS`); per-worktree install if it bites.
+- **Pin-bump transaction excludes freshly seeded instance docs.**
+  `ds-update-pins.sh` commits pathspec-confined to the gitlink; bootstrap
+  inside the transaction seeds any missing instance doc (e.g. the ADR-019
+  marker on a pre-marker consumer), which is then left untracked — and a
+  rollback does not remove it. Fix: detect docs seeded during the transaction
+  and include them in the pin commit (and in rollback cleanup); add a
+  pre-marker→new-pin regression case. (Gate C 2026-07-16)
+- **Rollback path confinement is lexical, not realpath.** `ds-install.sh
+  --rollback` now skips fixed `.claude/*` byproducts behind a symlinked
+  `.claude` (guard added 2026-07-16), but journal-driven deletions still trust
+  recorded paths without realpath re-confinement at delete time. Fix:
+  realpath-confine every rollback deletion; symlink-boundary regression test.
+  (Gate C 2026-07-16)
+- **Marker seeding lacks journal/rollback e2e coverage.** No test asserts the
+  `created:` journal line for `two-stage-dev.marker` on fresh install (none on
+  rerun), and installer failure cases abort before instance-doc seeding, so a
+  marker left by a late bootstrap failure is untested. Extend
+  `e2e-adoption-kit.sh` with a post-seed failure injection. (Gate C 2026-07-16)

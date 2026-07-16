@@ -252,7 +252,7 @@ fi
 
 # Record which instance docs are absent so the ones ds-bootstrap creates (via
 # seed-review-guides.sh) can be reported for the rollback journal too.
-instance_doc_names=(CHECKLIST.md code-conventions.md gate-misses.md project-facts.md)
+instance_doc_names=(CHECKLIST.md code-conventions.md gate-misses.md project-facts.md two-stage-dev.marker)
 instance_doc_absent=()
 i=0
 while [ "$i" -lt "${#instance_doc_names[@]}" ]; do
