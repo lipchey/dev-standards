@@ -6,7 +6,7 @@ supply chain, and hostile resource use. Do not turn general correctness, typing,
 tests, naming, or architecture concerns into findings unless they form a
 concrete vulnerability path.
 
-Template-Version: 3 (review-recall 2026-07-15)
+Template-Version: 4 (typed-deserialize-not-validation 2026-07-16)
 
 Guide filenames in the provenance notes below refer to the RETIRED pre-profile
 corpus (deleted in the profile rewrite, alive in git history); `TRACEABILITY.md`
@@ -23,8 +23,8 @@ OWASP Top 10:2025 mapping and `languages.md` - and from
 `f2fd4e57`). Report-discipline and confidence structure are ideas only (CC
 BY-SA upstream: `getsentry/skills` security-review, pinned `5a64b36c`, derived
 from the OWASP Cheat Sheet Series), reworded with zero text reuse. The
-argv/pathspec, path-confinement, fail-closed, and secret-scan prompts are this
-repo's own battle-tested material. The stack-router additions remain
+argv/pathspec, path-confinement, fail-closed, typed-deserialize, and secret-scan
+prompts are this repo's own battle-tested material. The stack-router additions remain
 paraphrased from `awesome-skills/code-review-skill` (MIT, pinned `f2fd4e57`)
 plus repo experience, as attributed in `language-review-sources.md`: its
 per-language guides, `code-quality-universal.md`, `common-bugs-checklist.md`,
@@ -63,6 +63,14 @@ boundary before the finding.
   (block known-bad)? Deny-lists miss the next encoding.
 - Are length, type, range, and charset bounded before use, so hostile input
   cannot drive resource exhaustion or reach an unexpected code path?
+- Does a *typed* deserialize stand in for validation? `request.json<T>()`,
+  `JSON.parse(x) as T`, or an `as`-cast on a parsed body asserts a shape the
+  runtime never checked, so a well-formed-but-wrong payload (missing, blank, or
+  mistyped field) flows in wearing a trusted type. The type parameter is a
+  claim, not a check - require a runtime narrowing (guard or schema) at the
+  boundary before first use. This holds at INTERNAL boundaries too (IPC, a
+  Durable Object, a queue message), where a trusted-looking cast most easily
+  hides an unchecked edge.
 
 This section also carries the old baseline rule: raw external input must not
 flow into logic that assumes it is well-formed. Public type/nullability
