@@ -1,7 +1,8 @@
 # Source-swap detection on EXISTING deps — design (Gate P)
 
-Status: **design, pre-Gate-P** · Owner: core · Target: `check-new-deps.mjs` +
-seed/quality registration · ADR-017 (new)
+Status: **EXECUTED** (Gate P + Gate C passed; ADR-017 Accepted 2026-07-15) · Owner:
+core · Implemented in `check-new-deps.mjs` (`isSourceSpec` classifier + lockfile
+`resolved`-swap detection) · This doc is retained as the design record.
 
 ## Problem
 

@@ -106,6 +106,29 @@ Apply these with whichever stack section is loaded:
   Re-breaking or reverting that intent is a regression the current-state view,
   CodeGraph included, cannot see. Blaming post-change lines shows only this
   diff, not the intent it overwrites.
+- **Attestation integrity.** When a record's verdict is DERIVED FROM the live
+  working tree / checkout (a verify run, a self-review of uncommitted work) yet
+  KEYED to `HEAD` and later read as attesting the landed tree, does it also
+  constrain the tree state at capture - require a clean (non-tooling) worktree, or
+  bind to a content hash of what was examined? A verdict computed on a dirty
+  worktree, recorded against `HEAD`, then discarded leaves downstream believing
+  `clean == HEAD`. A signature or CI result that attests the COMMITTED tree of a
+  SHA is fine - the SHA already identifies that tree; this is only about
+  worktree-derived verdicts. **Check:** does the verdict come from mutable
+  worktree content while the record is interpreted as attesting the
+  committed/landed tree? (2026-07-16, dev-standards deep-review self-review Gate C)
+- **Callback inertness past owner lifecycle.** When a callback whose reads/effects
+  become INVALID after its owner is torn down (it touches freed or replaced state)
+  can still fire late - a timer, listener, subscription, or a resolved promise's
+  `.then` - is it made inert? Unregistering suffices ONLY where the API guarantees
+  no already-queued delivery; otherwise (and always for a promise `.then`, which
+  cannot be unregistered) it needs an in-callback cancelled/disposed guard. A
+  stateless callback with no owner-dependent effect may safely outlive its owner -
+  this is not about every late callback. This is the framework-agnostic form of
+  the React cleanup / stale-request rules (§React / UI TS) and the
+  resource-release rules (§Resource leaks). **Check:** for each lifecycle-bound
+  callback that reads owner state, can it fire after teardown, and if so is the
+  late firing made inert? (2026-07-15, dev-standards review-recall C2)
 
 Optional-value flow belongs to
 → see `profile-types-and-contracts.md` §Public contracts and optional values.

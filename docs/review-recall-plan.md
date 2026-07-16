@@ -1,6 +1,6 @@
 # Review-recall plan — three tiers against review-owned entropy
 
-- **Status:** Draft — pending owner approval (Gate P critique pending)
+- **Status:** EXECUTED (merged via PR #6; ADR-018 + ADR-019 Accepted). Retained as the design/decision record.
 - **Date:** 2026-07-15
 - **Owner ADRs:** ADR-018 (recall system; amends ADR-014, supersedes the
   ownership half of ADR-015) + ADR-019 (two-stage development doctrine)
