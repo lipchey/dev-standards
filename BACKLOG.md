@@ -2,6 +2,37 @@
 
 Non-blocking, dated. Newest first.
 
+## 2026-07-16 — clean-worktree gate: narrow the blanket submodule exemption (Gate C r2 P1, PARTIAL)
+
+`nonToolingDirtyPaths` (`deep-review/src/worktree.ts`, shared by handoff §5.5 and
+the new self-review capture gate) exempts the whole `vendor/dev-standards`
+submodule path, because superproject `git status --porcelain` collapses a dirty
+vendored submodule into ONE `?m vendor/dev-standards` line and the exemption is
+kept defensively (the submodule's own `submodule update --init` checkout / strays;
+the copied dist dirs are gitignored inside dev-standards). Residual (Gate C round 2,
+2026-07-16): a consumer's TRACKED source edit inside the submodule is exempted too,
+so self-review/handoff can green over it. Pre-existing in handoff; the self-review
+lift propagates it consistently. The primary GC-1 hole (the consumer's OWN code
+dirt) is closed. Fix is a separate hardening for BOTH call sites: run a nested
+`git -C vendor/dev-standards status --porcelain` and treat non-dist dirt there as
+real, or narrow the exemption to the exact generated-artifact sub-paths. Touches
+handoff + its e2e; its own change + Gate P/C. Effort M, correctness.
+
+## 2026-07-16 — dist snapshot: stable partial build slips past the content hash (Gate C P1, PARTIAL)
+
+`snapshotDist` (`deep-review/src/worktree.ts`) now content-hashes the copied dist
+three ways (srcBefore/copied/srcAfter) on top of the `.built-from` stamp, closing
+the same-pin window for a *changing* tree. Residual (Gate C, 2026-07-16): a STABLE
+partial build still slips through — a direct `npm run build:runner` /
+`build:deep-review` (no `prebuild` rm, so `.built-from` stays == pin) paused
+mid-write leaves a torn-but-static tree all three sequential traversals agree on.
+Sequential live-tree traversal is not linearizable, so a reader-side check cannot
+close it. Fix is writer-side and out of this batch's scope: either a build lock
+shared by `ds-bootstrap` + every direct `build:*`, OR have each `build:*` invalidate
+`.built-from` before esbuild and atomically publish an output-content digest the
+snapshot verifies. Touches `package.json` build scripts + `ds-bootstrap.sh` (consumer
+build surface) → its own change + Gate P/C. Effort M, correctness/supply-chain.
+
 ## 2026-07-15 — Supply-chain: detect a source SWAP on an EXISTING dep — DONE (v0.21.0, ADR-017)
 
 Shipped: `isSourceSpec` vendored classifier (no npm-package-arg dep; 0 false-neg

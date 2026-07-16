@@ -124,6 +124,7 @@ function validFile(findings: FindingRecord[], over: Partial<FindingsFileV2> = {}
     base_sha: 'base-1',
     revision: 0,
     verification: null,
+    self_review: null,
     findings,
     ...over,
   };

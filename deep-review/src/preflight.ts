@@ -7,7 +7,7 @@ import { EXIT_PREFLIGHT } from './types.ts';
 import type { MachineError } from './types.ts';
 import type { DeepReviewConfig } from './config.ts';
 
-const GATED_VERBS = new Set(['select-worktree', 'commit-slice', 'verify', 'handoff']);
+const GATED_VERBS = new Set(['select-worktree', 'commit-slice', 'self-review', 'verify', 'handoff']);
 
 export type PreflightOutcome =
   | { ok: true; guides: LoadedReviewGuide[] }

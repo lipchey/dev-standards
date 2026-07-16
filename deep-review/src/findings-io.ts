@@ -20,6 +20,7 @@ import type {
   FindingRecord,
   FindingsFileV2,
   FindingStatus,
+  SelfReviewRecord,
   TestRef,
   VerificationRecord,
 } from './types.ts';
@@ -175,6 +176,7 @@ const TOP_REQUIRED = [
   'verification',
   'findings',
 ] as const;
+const TOP_ALLOWED = [...TOP_REQUIRED, 'self_review'] as const;
 const MODES = ['review-only', 'review-and-refactor'] as const;
 
 const FINDING_REQUIRED = [
@@ -193,6 +195,8 @@ const FINDING_REQUIRED = [
 const FINDING_ALLOWED = [...FINDING_REQUIRED, 'slice_files', 'infra_error'] as const;
 
 const VERIFICATION_KEYS = ['sha', 'scope', 'completed_at'] as const;
+const SELF_REVIEW_REQUIRED = ['sha', 'verdict', 'noted_at'] as const;
+const SELF_REVIEW_ALLOWED = [...SELF_REVIEW_REQUIRED, 'note'] as const;
 
 const SEVERITIES = ['P1', 'P2', 'P3'] as const;
 const CLASSIFICATIONS = ['fixable-now', 'no-touch', 'needs-plan', ''] as const;
@@ -206,6 +210,7 @@ const STATUSES = [
   'infra-blocked',
 ] as const;
 const TEST_REFS = ['verify:fast', 'verify:full'] as const;
+const SELF_REVIEW_VERDICTS = ['clean', 'violation'] as const;
 
 // §F5: statuses that only ever originate inside a bound run (a slice attempt's
 // outcome). An unbound draft carrying one is corrupt.
@@ -503,6 +508,20 @@ function validateVerification(value: unknown): VerificationRecord | null {
   return { sha, scope, completed_at };
 }
 
+function validateSelfReview(value: unknown): SelfReviewRecord | null {
+  if (value === null) return null;
+  const record = requireRecord(value, 'self_review');
+  requireKeys(record, 'self_review', SELF_REVIEW_REQUIRED);
+  rejectUnknownKeys(record, 'self_review', SELF_REVIEW_ALLOWED);
+  const sha = requireString(record['sha'], 'self_review.sha');
+  if (sha.length === 0) fail('non-empty', 'self_review.sha', 'must be a non-empty string');
+  const verdict = requireEnum(record['verdict'], 'self_review.verdict', SELF_REVIEW_VERDICTS);
+  const noted_at = requireString(record['noted_at'], 'self_review.noted_at');
+  if (!Object.hasOwn(record, 'note')) return { sha, verdict, noted_at };
+  const note = requireString(record['note'], 'self_review.note');
+  return { sha, verdict, noted_at, note };
+}
+
 function validateFindingsFileV2(value: unknown): FindingsFileV2 {
   const root = requireRecord(value, '');
   /* Schema gate FIRST: a v1 file is missing v2-required keys, so a
@@ -516,7 +535,7 @@ function validateFindingsFileV2(value: unknown): FindingsFileV2 {
     );
   }
   requireKeys(root, '', TOP_REQUIRED);
-  rejectUnknownKeys(root, '', TOP_REQUIRED);
+  rejectUnknownKeys(root, '', TOP_ALLOWED);
   const mode = requireEnum(root['mode'], 'mode', MODES);
   const generated_at = requireString(root['generated_at'], 'generated_at');
   const run_id = requireNullableId(root['run_id'], 'run_id');
@@ -532,6 +551,9 @@ function validateFindingsFileV2(value: unknown): FindingsFileV2 {
   const revision = requireInteger(root['revision'], 'revision');
   if (revision < 0) fail('type', 'revision', `must be >= 0, got ${revision}`);
   const verification = validateVerification(root['verification']);
+  const self_review = Object.hasOwn(root, 'self_review')
+    ? validateSelfReview(root['self_review'])
+    : null;
 
   const findingsRaw = root['findings'];
   if (!Array.isArray(findingsRaw)) {
@@ -567,7 +589,7 @@ function validateFindingsFileV2(value: unknown): FindingsFileV2 {
     });
   }
 
-  return { schema: 2, mode, generated_at, run_id, base_sha, revision, verification, findings };
+  return { schema: 2, mode, generated_at, run_id, base_sha, revision, verification, self_review, findings };
 }
 
 // ── Public read API ──────────────────────────────────────────────────────────
@@ -592,6 +614,24 @@ export function readFindings(path: string, deps: FindingsIoDeps = { readFile: re
 // byte-idempotent. Trailing newline, two-space indent (matches the repo's JSON).
 // `infra_error` is emitted only when present.
 function serializeFindingsV2(file: FindingsFileV2): string {
+  const selfReview =
+    file.self_review === null
+      ? {}
+      : {
+          self_review:
+            file.self_review.note === undefined
+              ? {
+                  sha: file.self_review.sha,
+                  verdict: file.self_review.verdict,
+                  noted_at: file.self_review.noted_at,
+                }
+              : {
+                  sha: file.self_review.sha,
+                  verdict: file.self_review.verdict,
+                  noted_at: file.self_review.noted_at,
+                  note: file.self_review.note,
+                },
+        };
   const ordered = {
     schema: file.schema,
     mode: file.mode,
@@ -607,6 +647,7 @@ function serializeFindingsV2(file: FindingsFileV2): string {
             scope: file.verification.scope,
             completed_at: file.verification.completed_at,
           },
+    ...selfReview,
     findings: file.findings.map((f) => {
       const base = {
         id: f.id,

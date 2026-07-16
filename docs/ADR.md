@@ -140,6 +140,11 @@ mutate mid-run.
    the refactor to `needs-human` (the same fail-closed exit as a red verify) — the
    engine has no verb to reopen a bound finding.
 
+**Amendment — 2026-07-15.** The same-lens fix-diff verdict is persisted as a
+HEAD-bound `self_review` record. Handoff readiness requires a clean verdict bound
+to the current HEAD; an absent, non-clean, or stale verdict fails closed before a
+landing instruction is emitted.
+
 ### Consequences
 
 - The fix loop can no longer green locally on a standard the merge will later fail.
@@ -524,4 +529,3 @@ entries, which is where an unrecorded decline surfaces.
 - A declined Stage 2 lowers the bar VISIBLY when the convention is followed —
   the debt entry survives session boundaries; making that impossible to skip
   (receipt + gate) is the deferred hardening above.
-

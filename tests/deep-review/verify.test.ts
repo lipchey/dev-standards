@@ -37,6 +37,7 @@ function baseFile(): FindingsFileV2 {
     base_sha: 'base-1',
     revision: 0,
     verification: null,
+    self_review: null,
     findings: [],
   };
 }
@@ -219,7 +220,7 @@ function repoWithFixMode(verifyAfterFix?: '--fast' | '--full'): { repo: string; 
   fs.writeFileSync(
     fpath,
     `${JSON.stringify(
-      { schema: 2, mode: 'review-and-refactor', generated_at: '2026-06-14T00:00:00Z', run_id: 'run-1', base_sha: 'base-1', revision: 0, verification: null, findings: [] },
+      { schema: 2, mode: 'review-and-refactor', generated_at: '2026-06-14T00:00:00Z', run_id: 'run-1', base_sha: 'base-1', revision: 0, verification: null, self_review: null, findings: [] },
       null,
       2,
     )}\n`,

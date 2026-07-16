@@ -20,6 +20,8 @@ import { commitSlice, realSliceDeps } from './slice.ts';
 import { writeReport, renderReport } from './report.ts';
 import { selectWorktree, realWorktreeDeps } from './worktree.ts';
 import { decideHandoff, realHandoffDeps } from './handoff.ts';
+import { runSelfReview, realSelfReviewDeps } from './self-review.ts';
+import type { SelfReviewInput } from './self-review.ts';
 import { runFinalVerify, realVerifyDeps } from './verify.ts';
 import { SlugError, sanitizeFeatureSlug } from './feature-slug.ts';
 import { runPreflight } from './preflight.ts';
@@ -67,6 +69,7 @@ const COMMANDS = [
   'report',
   'select-worktree',
   'handoff',
+  'self-review',
   'verify',
   'guides-read',
 ] as const;
@@ -517,6 +520,53 @@ function handoffCmd(rest: string[], deps: CliDeps): number {
   return result.exitCode;
 }
 
+function selfReviewCmd(rest: string[], deps: CliDeps): number {
+  const verdict = parseNamedFlag(rest, '--verdict');
+  if (verdict !== 'clean' && verdict !== 'violation') {
+    deps.stderr(
+      `deep-review self-review: invalid --verdict operand ${JSON.stringify(verdict)} (expected clean or violation)\n`,
+    );
+    return EXIT_USAGE;
+  }
+  const validatedVerdict: SelfReviewInput['verdict'] = verdict;
+  const notePresent = rest.some((arg) => arg === '--note' || arg.startsWith('--note='));
+  const note = parseNamedFlag(rest, '--note');
+  /* parseNamedFlag returns the token after a bare `--note` unconditionally, so a following
+     option (`--note --findings f`) or an empty value is a MISSING note, not a real one; the
+     inline `--note=<value>` form may legitimately carry a leading `--`. */
+  const noteMissingValue =
+    note === undefined || note === '' || (rest.includes('--note') && note.startsWith('--'));
+  if (notePresent && noteMissingValue) {
+    deps.stderr('deep-review self-review: --note requires a value\n');
+    return EXIT_USAGE;
+  }
+  const findingsPath = parseFindingsFlag(rest);
+  if (findingsPath === undefined || findingsPath === '') {
+    deps.stderr('deep-review self-review: missing --findings <path>\n');
+    return EXIT_USAGE;
+  }
+  const env = resolveEnv(deps);
+  const config = loadConfig(resolve(env.cwd, 'quality.json'));
+  const deadline = createDeadline(config.budget.seconds);
+  const pfExit = preflightFail(config, env, 'self-review', deps);
+  if (pfExit !== undefined) return pfExit;
+  const identity = identityGate(env, 'self-review', findingsPath, deadline);
+  if (!identity.ok) {
+    deps.stderr(`${JSON.stringify({ error: identity.machineError })}\n`);
+    return identity.exitCode;
+  }
+  const ctx = buildContext(env, config, identity.descriptor, deadline);
+  const input: SelfReviewInput =
+    note === undefined ? { verdict: validatedVerdict } : { verdict: validatedVerdict, note };
+  const result = runSelfReview(input, realSelfReviewDeps(env.cwd, findingsPath, ctx));
+  if (result.machineError !== undefined) {
+    deps.stderr(`${JSON.stringify({ error: result.machineError })}\n`);
+  } else {
+    deps.stdout(`self-review ${verdict}: recorded\n`);
+  }
+  return result.exitCode;
+}
+
 // `verify --findings <path> [--scope <--fast|--full>]` — the final verify gate (E7).
 // The deep-review runtime calls this AFTER all slices and BEFORE handoff: a GREEN
 // verify (exit 0) records the verification stamp and clears the refactor to proceed;
@@ -722,6 +772,7 @@ const DISPATCH: Record<Command, CommandHandler> = {
   report,
   'select-worktree': selectWorktreeCmd,
   handoff: handoffCmd,
+  'self-review': selfReviewCmd,
   verify: verifyCmd,
   'guides-read': guidesReadCmd,
 };

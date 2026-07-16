@@ -48,6 +48,7 @@ function validFile(findings: FindingRecord[], over: Partial<FindingsFileV2> = {}
     base_sha: null,
     revision: 0,
     verification: null,
+    self_review: null,
     findings,
     ...over,
   };
@@ -156,6 +157,80 @@ test('reads a bound file with a verification record', () => {
   assert.deepEqual(parsed.verification, { sha: 'head-sha', scope: 'verify:fast', completed_at: '2026-06-14T00:00:00Z' });
 });
 
+test('reads a self_review record with its optional note', () => {
+  const selfReview = {
+    sha: 'head-sha',
+    verdict: 'clean' as const,
+    noted_at: '2026-07-15T00:00:00Z',
+    note: 'same-lens review complete',
+  };
+  const file = validFile([], { self_review: selfReview });
+  const parsed = readFindings('/f.json', { readFile: () => rawFile(file) });
+  assert.deepEqual(parsed.self_review, selfReview);
+});
+
+test('reads an explicit null self_review', () => {
+  const parsed = readFindings('/f.json', { readFile: () => rawFile(validFile([], { self_review: null })) });
+  assert.equal(parsed.self_review, null);
+});
+
+test('reads one old schema-v2 JSON fixture with self_review absent and normalizes it to null', () => {
+  const oldJson = rawFile({
+    schema: 2,
+    mode: 'review-only',
+    generated_at: '2026-06-14T00:00:00Z',
+    run_id: null,
+    base_sha: null,
+    revision: 0,
+    verification: null,
+    findings: [],
+  });
+  const parsed = readFindings('/old.json', { readFile: () => oldJson });
+  assert.equal(parsed.self_review, null);
+});
+
+test('rejects malformed self_review verdicts and empty shas', () => {
+  const badVerdict = { ...validFile([]), self_review: { sha: 'head', verdict: 'maybe', noted_at: 't' } };
+  const emptySha = { ...validFile([]), self_review: { sha: '', verdict: 'clean', noted_at: 't' } };
+  assertRule(() => readFindings('/verdict.json', { readFile: () => rawFile(badVerdict) }), 'enum');
+  assertRule(() => readFindings('/sha.json', { readFile: () => rawFile(emptySha) }), 'non-empty');
+});
+
+test('rejects a non-string self_review note (rule: type) and an unknown self_review key (rule: additional-property)', () => {
+  const badNote = { ...validFile([]), self_review: { sha: 'head', verdict: 'clean', noted_at: 't', note: 1 } };
+  const extraKey = { ...validFile([]), self_review: { sha: 'head', verdict: 'clean', noted_at: 't', bogus: 1 } };
+  assertRule(() => readFindings('/note.json', { readFile: () => rawFile(badNote) }), 'type');
+  assertRule(() => readFindings('/extra.json', { readFile: () => rawFile(extraKey) }), 'additional-property');
+});
+
+test('serializes self_review canonically: after verification, before findings, exact nested bytes + trailing newline', () => {
+  const present = validFile([], {
+    verification: { sha: 'v-sha', scope: 'verify:full', completed_at: '2026-07-15T00:00:00Z' },
+    self_review: { sha: 'r-sha', verdict: 'clean', noted_at: '2026-07-15T00:00:00Z', note: 'ok' },
+  });
+  const mem = memMutate({ [FINDINGS_PATH]: rawFile(present) });
+  mutateFindings(FINDINGS_PATH, CTX, (file) => file, mem.deps);
+  const raw = mem.store.get(FINDINGS_PATH) ?? '';
+  assert.ok(raw.endsWith('\n'), 'trailing newline');
+  assert.deepEqual(Object.keys(JSON.parse(raw) as object), [
+    'schema',
+    'mode',
+    'generated_at',
+    'run_id',
+    'base_sha',
+    'revision',
+    'verification',
+    'self_review',
+    'findings',
+  ]);
+  assert.ok(
+    raw.includes(
+      '  "self_review": {\n    "sha": "r-sha",\n    "verdict": "clean",\n    "noted_at": "2026-07-15T00:00:00Z",\n    "note": "ok"\n  },',
+    ),
+    'exact self_review block (nested key order + 2-space indent)',
+  );
+});
+
 test('rejects a v1 (schema 1) file loudly with a regenerate instruction (rule: schema-version)', () => {
   const v1 = {
     schema: 1,
@@ -252,6 +327,23 @@ test('mutateFindings applies fn under the lock, bumps revision, writes, and rele
   assert.deepEqual(persisted, out);
   // The lock is released after a successful mutation.
   assert.equal(mem.locks.size, 0, 'lock released');
+});
+
+test('mutateFindings serializes self_review only when non-null and round-trips a present record', () => {
+  const present = validFile([], {
+    self_review: { sha: 'head-sha', verdict: 'clean', noted_at: '2026-07-15T00:00:00Z', note: 'clean' },
+  });
+  const presentMem = memMutate({ [FINDINGS_PATH]: rawFile(present) });
+  const presentOut = mutateFindings(FINDINGS_PATH, CTX, (file) => file, presentMem.deps);
+  const presentRaw = presentMem.store.get(FINDINGS_PATH) ?? '';
+  assert.equal(Object.hasOwn(JSON.parse(presentRaw) as object, 'self_review'), true);
+  assert.deepEqual(readFindings(FINDINGS_PATH, { readFile: () => presentRaw }), presentOut);
+
+  const nullMem = memMutate({ [FINDINGS_PATH]: rawFile(validFile([])) });
+  mutateFindings(FINDINGS_PATH, CTX, (file) => file, nullMem.deps);
+  const nullRaw = nullMem.store.get(FINDINGS_PATH) ?? '';
+  assert.equal(Object.hasOwn(JSON.parse(nullRaw) as object, 'self_review'), false);
+  assert.equal(readFindings(FINDINGS_PATH, { readFile: () => nullRaw }).self_review, null);
 });
 
 test('mutateFindings binds an unbound draft (null -> value allowed); a later run_id change is rejected (rule: immutable)', () => {

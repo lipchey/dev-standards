@@ -38,6 +38,7 @@ function validFile(findings: FindingRecord[], over: Partial<FindingsFileV2> = {}
     base_sha: null,
     revision: 0,
     verification: null,
+    self_review: null,
     findings,
     ...over,
   };

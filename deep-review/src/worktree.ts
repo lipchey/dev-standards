@@ -97,6 +97,25 @@ export function isWorktreeTooling(p: string): boolean {
   return WORKTREE_TOOLING_PATHS.some((t) => p === t || p.startsWith(`${t}/`));
 }
 
+/*
+ * Dirty paths from `git status --porcelain`, EXCLUDING the engine's own worktree-tooling
+ * footprint (isWorktreeTooling). The path starts at column 3; a rename's "old -> new" keeps
+ * the new path. Shared by the handoff clean-worktree gate (§5.5) and the self-review capture
+ * gate so a stamped verdict binds only to a committed tree that equals HEAD.
+ * ponytail: the SUBMODULE_PATH exemption is a blanket one — superproject porcelain collapses a
+ * dirty vendored submodule into one `?m vendor/dev-standards` line, so a TRACKED source edit
+ * inside the submodule is exempted alongside the defensive tooling case. Narrowing it needs a
+ * nested `git -C <submodule> status` at both call sites (handoff too) — BACKLOG.
+ */
+export function nonToolingDirtyPaths(status: string): string[] {
+  return status
+    .split('\n')
+    .map((line) => line.replace(/\s+$/, ''))
+    .filter((line) => line !== '')
+    .map((line) => line.slice(3).replace(/^.* -> /, ''))
+    .filter((p) => p !== '' && !isWorktreeTooling(p));
+}
+
 // ── Effects seam ───────────────────────────────────────────────────────────────
 
 // The result of a fixed-argv spawn. `status` is the process exit code, or null when the process
@@ -297,6 +316,41 @@ function copyTreeReal(src: string, dest: string): void {
   }
 }
 
+class HashTreeReadError extends Error {}
+
+function hashTree(root: string): string {
+  const files: Array<{ key: string; abs: string }> = [];
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+      } else {
+        files.push({
+          /* Tree-root-relative keys keep main-checkout and `.tmp-*` snapshots comparable. */
+          key: path.relative(root, abs).split(path.sep).join('/'),
+          abs,
+        });
+      }
+    }
+  };
+
+  try {
+    walk(root);
+    files.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    const hash = crypto.createHash('sha256');
+    for (const file of files) {
+      hash.update(file.key);
+      hash.update('\0');
+      hash.update(fs.readFileSync(file.abs));
+      hash.update('\0');
+    }
+    return hash.digest('hex');
+  } catch {
+    throw new HashTreeReadError();
+  }
+}
+
 function copyTree(deps: WorktreeDeps, src: string, dest: string): void {
   if (deps.copyDir !== undefined) {
     deps.copyDir(src, dest);
@@ -358,20 +412,20 @@ function mainCheckoutOf(deps: WorktreeDeps, wtPath: string): string | null {
 // post-copy re-validation, so the snapshot cannot be trusted.
 function concurrentBootstrapError(rel: string): ToolingError {
   return new ToolingError(
-    `dev-standards dist ${rel} changed while being copied into the worktree ` +
+    `dev-standards dist ${rel} changed or had a content mismatch while being copied into the worktree ` +
       '(a concurrent scripts/ds-bootstrap.sh rebuild in the main checkout); re-run select-worktree',
   );
 }
 
-// Copies one in-submodule dist dir from the main checkout as a RACE-PROOF immutable snapshot.
-// ds-bootstrap's build DELETES both dist trees and writes each stamp only AFTER rebuilding, so a
-// rebuild landing mid-copy can capture a tree whose stamp is the OLD pin (== this worktree's pin,
-// so the verify preflight would PASS) but whose bundle is the NEW revision — a silently wrong
-// engine. Guard: copy into a temp dir beside the destination, then re-validate the snapshot (the
-// SOURCE stamp still == pinned, the COPIED stamp == pinned, the bundle entrypoint is present) and
-// only an all-pass renames it into place; any mismatch removes the temp dir and throws. The
-// same-pin re-bootstrap window (stamp unchanged but bundle rewritten) stays a ceiling — closing it
-// needs a build lock or content hashing upstream.
+/*
+ * The three-way byte hash narrows the same-pin rebuild window, but sequential live-tree
+ * traversals are not linearizable. A STABLE partial build still slips through: a direct
+ * `build:runner`/`build:deep-review` (no `prebuild` rm, so `.built-from` stays == pin)
+ * paused mid-write leaves a torn-but-static tree all three traversals agree on.
+ * ponytail: only a build lock or a writer that invalidates the stamp before mutating +
+ * atomically publishes an output digest strictly closes it (BACKLOG); byte-identical
+ * completed-output ABA remains a benign ceiling.
+ */
 function snapshotDist(
   deps: WorktreeDeps,
   main: string,
@@ -387,31 +441,34 @@ function snapshotDist(
     try {
       fs.rmSync(tmp, { recursive: true, force: true });
     } catch {
-      // best-effort: a leaked temp dir beside the destination is prunable, never a live artifact
+      /* Cleanup must not mask the primary bootstrap failure. */
     }
   };
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  copyTree(deps, src, tmp);
   try {
+    const srcBefore = hashTree(src);
+    copyTree(deps, src, tmp);
     const sourceStamp = (readFileMaybe(deps, path.join(src, DIST_STAMP)) ?? '').trim();
     const copiedStamp = (readFileMaybe(deps, path.join(tmp, DIST_STAMP)) ?? '').trim();
     if (sourceStamp !== pinned || copiedStamp !== pinned) throw concurrentBootstrapError(target.rel);
     if (!deps.existsSync(path.join(tmp, target.entrypoint))) throw concurrentBootstrapError(target.rel);
+    const copied = hashTree(tmp);
+    const srcAfter = hashTree(src);
+    if (srcBefore !== srcAfter || srcAfter !== copied) throw concurrentBootstrapError(target.rel);
+    /* A fresh worktree has no live dist, so atomic publish cannot clobber a live tree. */
+    fs.renameSync(tmp, dest);
   } catch (error) {
     removeTmp();
+    if (error instanceof HashTreeReadError) throw concurrentBootstrapError(target.rel);
     throw error;
   }
-  // Atomic publish: a fresh worktree has no dist yet (gitignored inside the submodule), so this
-  // rename never clobbers a live tree.
-  fs.renameSync(tmp, dest);
 }
 
-// Sets up a fresh consumer worktree: init the submodule, then (when the main checkout's build stamp
-// matches this worktree's pinned submodule SHA) COPY the built dist dirs as immutable race-proof
-// snapshots and symlink node_modules / .tools from the main checkout. A stamp mismatch throws
-// ToolingError (run bootstrap). A repo with no `vendor/dev-standards` gitlink (core itself) is a
-// no-op.
+/*
+ * Consumer tooling snapshots are content-checked against the main checkout because symlinking the
+ * dist would leave a selected worktree exposed to a later bootstrap.
+ */
 export function setupWorktreeTooling(deps: WorktreeDeps, wtPath: string): void {
   const pinned = pinnedSubmoduleSha(deps, wtPath);
   if (pinned === null) return; // no consumer gitlink -> nothing to wire
@@ -431,8 +488,7 @@ export function setupWorktreeTooling(deps: WorktreeDeps, wtPath: string): void {
     );
   }
 
-  // COPY the dist dirs as immutable, race-proof snapshots; SYMLINK the pin-independent tooling. One
-  // temp-dir suffix per setup keeps the mid-copy tmp dirs unique against a concurrent select-worktree.
+  /* One suffix per setup prevents concurrent selectors from sharing partial snapshot paths. */
   const runId = crypto.randomUUID();
   for (const target of COPY_TARGETS) {
     snapshotDist(deps, main, wtPath, target, pinned, runId);

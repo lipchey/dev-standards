@@ -299,7 +299,7 @@ One command, run inside a git worktree: an internal review (phase 1, the
 `review-only` steps above) followed by a fix phase (phase 2), driven by the
 engine's own CLI verbs, in this order:
 
-`select-worktree -> classify -> commit-slice -> verify -> report -> handoff`
+`select-worktree -> classify -> commit-slice -> self-review -> verify -> report -> handoff`
 
 Every verb after `select-worktree` takes `--findings <path>`, a findings JSON
 file under the reports dir (`paths.reports`, default `reports/quality/`) that
@@ -338,13 +338,14 @@ classification, status, sha) across the whole run.
    self-review the WHOLE produced diff - diffed against the run descriptor's
    `initial_head_sha` (not an ambiguous `<base>` ref) - under the same merged guide
    lens, architecture/placement/conventions INCLUDED (`.claude/code-conventions.md`).
-   The engine has no verb to reopen a bound finding (`mutateFindings` is the sole
-   findings writer), so a violation still standing here does NOT become a new finding
-   in this run and does NOT proceed to handoff: record it in the report and route the
-   refactor to `needs-human` - the same fail-closed exit as a red verify. Any Codex
-   Gate-C / cross-run prompt over a produced FIX diff carries this same
-   architecture/placement/conventions lens (cite `code-conventions.md`), never
-   behavior-only. Then `verify` runs the final gate at the tier that judges the merge
+   Record that verdict before `verify` with `deep-review self-review --verdict
+   clean|violation [--note <text>] --findings <path>` (ADR-013). A violation or an
+   omitted verdict mechanically blocks `handoff`; a standing violation does NOT
+   become a new finding in this run and routes the refactor to `needs-human` - the
+   same fail-closed outcome as a red verify. Any Codex Gate-C / cross-run prompt over
+   a produced FIX diff carries this same architecture/placement/conventions lens
+   (cite `code-conventions.md`), never behavior-only. Then `verify` runs the final
+   gate at the tier that judges the merge
    (`--full` default; `deep_review.verify_after_fix` overrides) across the applied
    slices in the worktree - the skill's own changes only, no base integration. Red
    means the whole refactor is `needs-human`; nothing proceeds to handoff.
