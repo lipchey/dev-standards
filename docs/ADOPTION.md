@@ -79,6 +79,49 @@ project-specific gates start empty, so `./scripts/verify` passes immediately.
    declined/postponed Stage 2 leaves a `stage-2 pending: <feature>` debt entry
    in the repo's status doc.
 
+### Optional gate: test-to-source placement (report-only)
+
+If the repo keeps a settled test-layout convention — each test mirrors its
+subject's SOURCE path, replicating every intermediate subfolder — wire the
+`check-test-placement` assist (ships in the submodule) so *new* drift is surfaced
+without blocking. It is opt-in, not seeded: the maps and exemptions are per-repo
+and cannot be a generic default (ADR-021 §Decision.4). The judgment cases a
+path-map can't express stay owned by the `profile-tests-quality.md` placement lens.
+
+Add it as a `full`-tier `mode: report-only` check — placement findings (exit 1) are
+non-blocking; bad args / unsupported globs (exit 2) fail closed via
+`operational_exit_codes`. One `--map testRoot:sourceRoot:sourceExt` per
+test-root → source-root pair (several rows may share a testRoot — e.g. a
+`tests/tools` test whose subject is a `scripts/*.sh`); one exact-path `--ignore` per
+cross-cutting / aspect test with no 1:1 subject; and a `--test-glob` for every test
+extension the repo uses — the default set (`**/*.test.ts`, `**/*.test.mjs`,
+`**/*.spec.ts`) omits `.test.tsx`, so a React repo must pass its own globs.
+
+```json
+{
+  "name": "check-test-placement",
+  "argv": [
+    "node", "vendor/dev-standards/tools/check-test-placement.mjs",
+    "--map", "tests/<area>:<srcRoot>:.ts",
+    "--test-glob", "**/*.test.ts",
+    "--ignore", "tests/<area>/<cross-cutting>.test.ts",
+    "--", "{files:placement_tree}"
+  ],
+  "timeout_seconds": 10,
+  "mode": "report-only",
+  "operational_exit_codes": [2]
+}
+```
+
+Declare the matching `repo_all` fileset (`placement_tree` above) with `include`
+globs covering BOTH the test dirs and the source dirs they mirror to, so the tool's
+in-memory tree can resolve each computed mirror path. Then raise
+`budgets.full_seconds` by the check's `timeout_seconds`: the validator hard-errors
+(`tier-budget`) when a tier's summed timeouts exceed its budget. Subject resolution
+is dot-strip only (`exec.bypass.test.ts` → `exec.ts`), never hyphen-strip — a
+descriptively-named test whose stem is not a dot-suffixed source basename needs an
+`--ignore` or a rename.
+
 ## GitHub platform settings
 
 Configured in the GitHub repo UI, not in `quality.json` or the verify gates —
