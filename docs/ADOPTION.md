@@ -102,7 +102,12 @@ platform-managed protections and signals that complement the repo-owned gates
    eight `profile-*.md`) is read in place
    from the package; a same-named overlay may only **add/extend** a guide, and
    an extra `.md` adds a project-only guide. Overlays never override or delete a
-   canonical rule. When a project rule genuinely diverges from a core guide,
+   canonical rule. `guides_dir` must be a **real directory** and each overlay a
+   **plain regular `*.md` file**: any symlink in the `guides_dir` path (leaf or
+   ancestor), and a symlinked or otherwise non-regular `*.md` entry, are **rejected
+   fail-closed** — deep-review will not run until fixed, so a review rule can never
+   silently vanish (ADR-016). When a project rule genuinely diverges
+   from a core guide,
    mark the project line `> deviates-from-core: <reason>`. This is
    **documentation of a human reconciliation decision** — so a later
    promotion session does not silently merge the deviation back into core — not

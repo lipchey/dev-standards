@@ -1,6 +1,7 @@
 /* Source and bundled modules stay two levels below the package root. */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
+import type { Dirent } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
@@ -30,8 +31,9 @@ const REQUIRED_TEMPLATE_NAMES = [
 /* TRACEABILITY.md shares the templates dir but is the migration/canary registry,
    not review corpus: loading it would leak BLINDED canaries into the merged guide
    bodies (and, for the anchor overlay, into the ADR-016 required-read set). The
-   name is reserved in BOTH source kinds (package templates and consumer overlays)
-   — guides-read.ts filters its overlay enumeration with the same set. */
+   name is reserved in BOTH source kinds — the template lister and the overlay loader
+   (realLoadOverlaySources) each skip it, so it never becomes a corpus guide or a
+   required-read tail. */
 export const NON_GUIDE_TEMPLATE_NAMES: ReadonlySet<string> = new Set(['TRACEABILITY.md']);
 
 export const REVIEW_GUIDE_TEMPLATES_DIR = join(
@@ -58,10 +60,23 @@ export type ReviewGuideLoadOutcome =
   | { ok: true; guides: LoadedReviewGuide[] }
   | { ok: false; templatesDir: string; reason?: string };
 
+/* An overlay guide read fail-closed from the consumer-controlled dir: name, absolute
+   path, and the body read through a no-follow descriptor. */
+export interface OverlaySource {
+  name: string;
+  path: string;
+  body: string;
+}
+
 export interface ReviewGuideLoadDeps {
   templatesDir?: string;
+  /* Template enumeration only — the templates dir is the trusted vendored submodule, so a
+     name lister + readFile suffice. The overlay dir is untrusted and uses its own hardened
+     seam (loadOverlaySources) instead. */
   listMarkdownFiles?: (directory: string) => string[];
   readFile?: (filePath: string) => string;
+  /* undefined ⇒ the overlay dir is absent (optional); a throw ⇒ fail closed. */
+  loadOverlaySources?: (directory: string) => OverlaySource[] | undefined;
 }
 
 function realListMarkdownFiles(directory: string): string[] {
@@ -69,6 +84,52 @@ function realListMarkdownFiles(directory: string): string[] {
     .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
     .map((entry) => entry.name)
     .sort();
+}
+
+function isNodeError(value: unknown): value is NodeJS.ErrnoException {
+  return value instanceof Error && typeof (value as NodeJS.ErrnoException).code === 'string';
+}
+
+/* The overlay dir is the ONE consumer-controlled input into the review corpus, so it is
+   fail-closed per leaf on anything that is not a plain regular `*.md`: a symlink, a directory,
+   or any non-regular entry named `*.md`. Silently dropping such an entry (the pre-hardening
+   `entry.isFile()` filter did) let a review rule vanish AND escape the read gate. The reserved
+   registry name is skipped BEFORE the type check so a reserved-name symlink is ignored, not a
+   hard failure. The DIR itself is not re-checked for symlinks here — the caller confines
+   guides_dir first (assertGuidesDirConfined rejects any symlink component), so an ENOENT from
+   readdir here means genuinely absent (optional overlay); any other errno fails closed.
+   ponytail: Node has no `openat`, so ANCESTOR dir components stay path-based — an ancestor-swap
+   race survives; the no-follow open closes the LEAF check→read race only (a regular file
+   swapped for a symlink after enumeration). Native addon if that ceiling ever bites. */
+function realLoadOverlaySources(directory: string): OverlaySource[] | undefined {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return undefined;
+    throw error;
+  }
+  const sources: OverlaySource[] = [];
+  for (const entry of entries) {
+    if (!entry.name.endsWith('.md')) continue;
+    if (NON_GUIDE_TEMPLATE_NAMES.has(entry.name)) continue;
+    const overlayPath = join(directory, entry.name);
+    let fd: number | undefined;
+    try {
+      /* O_NOFOLLOW rejects a symlink leaf (ELOOP); O_NONBLOCK so a `*.md` that is a FIFO
+         cannot BLOCK the open forever (a read-side FIFO open waits for a writer) — it
+         returns a fd that fstat then rejects as non-regular. Both are defense: the gate
+         must fail closed, never hang, on a hostile overlay entry. */
+      fd = openSync(overlayPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      if (!fstatSync(fd).isFile()) {
+        throw new Error(`overlay entry "${entry.name}" is not a regular file`);
+      }
+      sources.push({ name: entry.name, path: overlayPath, body: readFileSync(fd, 'utf8') });
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
+  return sources;
 }
 
 function mergeSource(
@@ -92,6 +153,7 @@ export function loadReviewGuides(
   const templatesDirectory = deps.templatesDir ?? REVIEW_GUIDE_TEMPLATES_DIR;
   const listMarkdownFiles = deps.listMarkdownFiles ?? realListMarkdownFiles;
   const readFile = deps.readFile ?? ((filePath: string): string => readFileSync(filePath, 'utf8'));
+  const loadOverlaySources = deps.loadOverlaySources ?? realLoadOverlaySources;
 
   let templateNames: string[];
   try {
@@ -122,47 +184,30 @@ export function loadReviewGuides(
     return { ok: false, templatesDir: templatesDirectory };
   }
 
-  /* Overlay absence is optional (ENOENT), but any OTHER enumeration error
-     (ENOTDIR, EACCES) must fail closed — an unreadable overlay silently dropped
-     would review with a thinner rulebook than the repo configured. The reserved
-     registry name is excluded here too: a consumer overlay named TRACEABILITY.md
-     would otherwise merge as a repo-extra guide, get broadcast to every profile
-     worker, and could unblind a copied canary registry. */
-  let overlayNames: string[];
+  /* Overlay absence is optional (ENOENT ⇒ undefined); every other fault — an unreadable
+     dir, a dangling symlink dir, a symlinked/non-regular `*.md` leaf — throws and fails
+     closed here. An overlay silently dropped would review with a thinner rulebook than the
+     repo configured AND (after the 2026-07-16 anchor rescope, where non-anchor overlays are
+     no longer a main-session required read) escape the read gate entirely. This is the
+     single fail-closed point for both the guides-read gate and fix-mode preflight; the
+     reserved registry name is excluded inside the loader so a TRACEABILITY.md overlay never
+     merges as a corpus guide (which would unblind a copied canary registry). */
+  let overlaySources: OverlaySource[];
   try {
-    overlayNames = listMarkdownFiles(overlayDirectory).filter(
-      (name) => !NON_GUIDE_TEMPLATE_NAMES.has(name),
-    );
+    overlaySources = loadOverlaySources(overlayDirectory) ?? [];
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') {
-      return { ok: false, templatesDir: templatesDirectory };
-    }
-    overlayNames = [];
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      templatesDir: templatesDirectory,
+      reason: `repo overlay dir "${overlayDirectory}" is unavailable: ${detail}`,
+    };
   }
-  for (const overlayName of overlayNames) {
-    const overlayPath = join(overlayDirectory, overlayName);
-    let overlayBody: string;
-    try {
-      overlayBody = readFile(overlayPath);
-    } catch (error) {
-      /* A LISTED overlay that cannot be read fails closed (ADR-016): the enumeration
-         above proved the file exists, so an unreadable one is a real misconfiguration,
-         not an absent optional. Silently dropping it would let a profile or legacy
-         overlay vanish from the worker corpus AND — after the 2026-07-16 anchor rescope,
-         where non-anchor overlays are no longer a main-session required read — escape
-         the read gate entirely. This is the single fail-closed point for both the
-         guides-read gate and fix-mode preflight. */
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        ok: false,
-        templatesDir: templatesDirectory,
-        reason: `repo overlay "${overlayName}" is listed but unreadable: ${detail}`,
-      };
-    }
-    mergeSource(guidesByName, overlayName, {
+  for (const source of overlaySources) {
+    mergeSource(guidesByName, source.name, {
       kind: 'repo-overlay',
-      path: overlayPath,
-      body: overlayBody,
+      path: source.path,
+      body: source.body,
     });
   }
 

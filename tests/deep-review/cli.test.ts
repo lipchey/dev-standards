@@ -154,6 +154,20 @@ test('preflight: commit-slice with fix-mode DISABLED -> EXIT_PREFLIGHT (before a
   assert.match(error.message, /disabled|enabled/);
 });
 
+test('preflight: a fix-verb whose guides_dir symlinks OUTSIDE the repo -> EXIT_PREFLIGHT (cli wires cwd+realpath into the shared confinement)', () => {
+  /* Proves the cli path, not just the unit: a green runPreflight test cannot catch cli.ts
+     forgetting to pass env.cwd/env.realpath — only the confinement resolving a real symlink
+     against the real cwd rejects this escape. */
+  const dir = dirWithFixMode();
+  const outside = tmpDir();
+  fs.symlinkSync(outside, path.join(dir, 'guides'));
+  const fpath = writeFindings(dir);
+  const cap = capture(dir);
+  const code = runCli(['commit-slice', 'f-001', '--findings', fpath], cap.deps);
+  assert.equal(code, EXIT_PREFLIGHT);
+  assert.match(lastError(cap.errLines()).message, /must be a real directory, not a symlink/);
+});
+
 test('preflight ORDER: commit-slice with a MISSING finding-id -> EXIT_USAGE even when fix-mode is disabled', () => {
   const dir = dirWithFixMode({ enabled: false });
   const cap = capture(dir);

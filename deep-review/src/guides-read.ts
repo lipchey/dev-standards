@@ -13,10 +13,9 @@
      the same guide under different absolute prefixes — both satisfy it. */
 
 import path from 'node:path';
-import { existsSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import {
   loadReviewGuides,
-  NON_GUIDE_TEMPLATE_NAMES,
   REVIEW_CONTRACT_TEMPLATE_NAME,
   REVIEW_GUIDE_TEMPLATES_DIR,
 } from './guides.ts';
@@ -59,31 +58,11 @@ export interface RequiredReadSetDeps {
      the anchor prefix stays inside the test root (see requiredReadSet). */
   templatesDir?: string;
   loadGuides?: (overlayDirectory: string) => ReviewGuideLoadOutcome;
-  listOverlay?: (directory: string) => string[] | undefined;
   exists?: (absolutePath: string) => boolean;
-  /* Resolves symlinks for the overlay-dir confinement; defaults to fs.realpathSync. */
+  /* Read-proof matching in computeMissing (via evaluateGuidesRead) realpaths reads + roots;
+     defaults to fs.realpathSync. requiredReadSet's confinement no longer uses it (it rejects
+     any symlink component outright, so no path is resolved through a symlink). */
   realpath?: (absolutePath: string) => string;
-}
-
-function realListOverlay(directory: string): string[] | undefined {
-  try {
-    /* The reserved registry name never becomes a required overlay read — the loader
-       (guides.ts) excludes it from the merged corpus, so requiring it here would
-       demand reading a file the corpus ignores. */
-    return readdirSync(directory, { withFileTypes: true })
-      .filter(
-        (entry) =>
-          entry.isFile() && entry.name.endsWith('.md') && !NON_GUIDE_TEMPLATE_NAMES.has(entry.name),
-      )
-      .map((entry) => entry.name);
-  } catch (error) {
-    /* Only ENOENT means "no overlay" (optional). ENOTDIR (guides_dir points at a file),
-       EACCES, and every other errno are a misconfiguration the reviewer must fix — fail
-       closed rather than silently dropping the overlay requirement. */
-    if (isNodeError(error) && error.code === 'ENOENT') return undefined;
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new GuidesUnavailable(`overlay directory "${directory}" is unreadable: ${detail}`);
-  }
 }
 
 function isNodeError(value: unknown): value is NodeJS.ErrnoException {
@@ -133,30 +112,12 @@ export function requiredReadSet(
   deps: RequiredReadSetDeps = {},
 ): string[] {
   const templatesDir = deps.templatesDir ?? REVIEW_GUIDE_TEMPLATES_DIR;
-  const realpath = deps.realpath ?? realpathSync;
-  const overlayDirectory = path.resolve(cwd, config.guidesDir);
-  /* Confine the overlay up front so a guides_dir that escapes the repo fails closed even when
-     that dir is EMPTY or MISSING (otherwise it lists to undefined/[] and the pass falls through
-     to allow). Two layers: (1) LEXICAL — a `../` or absolute spelling; (2) SYMLINK — an in-repo
-     `.claude/review-guides` symlinked to an outside dir, resolved via the deepest existing
-     ancestor (the no-touch.ts confinement pattern). The symlink layer runs only when cwd itself
-     realpaths (a real deployment); a fake/absent cwd (unit tests) keeps the lexical layer. */
-  if (!isWithinRoot(cwd, overlayDirectory)) {
-    throw new GuidesUnavailable(
-      `deep_review.guides_dir "${config.guidesDir}" resolves outside the repo root "${cwd}"`,
-    );
-  }
-  const repoRootReal = realpathOrUndefined(realpath, cwd);
-  if (repoRootReal !== undefined) {
-    const overlayReal = realpathOfDeepestExisting(realpath, overlayDirectory);
-    if (overlayReal !== undefined && !isWithinRoot(repoRootReal, overlayReal)) {
-      throw new GuidesUnavailable(
-        `deep_review.guides_dir "${config.guidesDir}" resolves outside the repo root via a symlink`,
-      );
-    }
-  }
+  /* Confine the overlay up front (shared with fix-mode preflight via assertGuidesDirConfined,
+     so neither gate is weaker than the other) so a guides_dir that escapes the repo — or is
+     reached through a symlink — fails closed even when that dir is EMPTY or MISSING; otherwise
+     it loads to no overlay and the pass falls through to allow. */
+  const overlayDirectory = assertGuidesDirConfined(cwd, config.guidesDir);
   const loadGuides = deps.loadGuides ?? ((overlay: string) => loadReviewGuides(overlay, { templatesDir }));
-  const listOverlay = deps.listOverlay ?? realListOverlay;
   const exists = deps.exists ?? existsSync;
 
   const outcome = loadGuides(overlayDirectory);
@@ -169,29 +130,18 @@ export function requiredReadSet(
   const tails = new Set<string>();
   for (const guide of outcome.guides) {
     for (const source of guide.sources) {
-      /* Only the anchor template (review-contract.md) is a main-session required read;
-         the profile bodies are profile-route reads, still LOADED above for the corpus
-         availability check but no longer gated on the main transcript. */
-      if (
-        source.kind === 'package-template' &&
-        MAIN_SESSION_REQUIRED_TEMPLATE_NAMES.has(path.basename(source.path))
-      ) {
+      /* Only the anchor (review-contract.md) is a main-session required READ; the profile
+         bodies are profile-route reads, still LOADED for the corpus availability check but
+         not gated on the main transcript. Both the package template AND — when the consumer
+         overlays it — the repo-overlay copy of the anchor are required, derived from the
+         loader's OWN returned sources: one authoritative snapshot, never a second directory
+         listing that could disagree under a filesystem race. */
+      if (!MAIN_SESSION_REQUIRED_TEMPLATE_NAMES.has(path.basename(source.path))) continue;
+      if (source.kind === 'package-template') {
         tails.add(path.posix.join(anchorPrefix, path.basename(source.path)));
+      } else {
+        tails.add(repoRelativeTail(cwd, source.path));
       }
-    }
-  }
-
-  const overlayNames = listOverlay(overlayDirectory);
-  if (overlayNames !== undefined) {
-    for (const name of overlayNames) {
-      /* Belt-and-braces vs injected listers: the reserved registry name is filtered
-         at the source (realListOverlay) AND here. */
-      if (NON_GUIDE_TEMPLATE_NAMES.has(name)) continue;
-      /* Only the anchor overlay (review-contract) is a main-session required read; a
-         profile or legacy overlay is profile-route material. Its AVAILABILITY is still
-         fail-closed — an unreadable one made loadGuides return !ok above. */
-      if (!MAIN_SESSION_REQUIRED_TEMPLATE_NAMES.has(name)) continue;
-      tails.add(repoRelativeTail(cwd, path.join(overlayDirectory, name)));
     }
   }
 
@@ -276,21 +226,55 @@ function realpathOrUndefined(
   }
 }
 
-/* Realpath the deepest EXISTING ancestor of `target` (the leaf may not exist yet), mirroring
-   no-touch.ts: a symlinked ancestor escapes even when the final path is absent. Returns
-   undefined when nothing up the chain resolves — not an escape, just a fully-missing path. */
-function realpathOfDeepestExisting(
-  realpath: (absolutePath: string) => string,
-  target: string,
-): string | undefined {
-  let current = target;
-  for (;;) {
-    const resolved = realpathOrUndefined(realpath, current);
-    if (resolved !== undefined) return resolved;
-    const parent = path.dirname(current);
-    if (parent === current) return undefined;
-    current = parent;
+/* Reject any SYMLINK among the repo-relative path components of `guides_dir`, fail-CLOSED.
+   A symlinked guides_dir (or ancestor) is REFUSED, not followed, because it breaks two things
+   at once: (1) the required-read tail is computed lexically (requiredReadSet) while read-proof
+   is realpath-matched (computeMissing) — a symlinked dir realpaths the reviewer's Read to a
+   different path than the required tail, so the anchor overlay can never be proven read and the
+   Stop-gate blocks forever; and (2) a DANGLING symlink component otherwise ENOENTs the whole
+   path so the overlay reads as "absent" and its rules silently vanish (a fail-open). Walk from
+   just below cwd to the leaf: a symlink component throws; a genuinely-absent component (ENOENT,
+   not a symlink) ends the walk (a missing optional overlay is fine); every other lstat errno
+   fails closed (never degrade to "absent"). */
+function assertNoSymlinkComponent(cwd: string, guidesDir: string, overlayDirectory: string): void {
+  const relative = path.relative(cwd, overlayDirectory);
+  if (relative === '' || relative === '.') return;
+  let current = cwd;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    let isSymlink: boolean;
+    try {
+      isSymlink = lstatSync(current).isSymbolicLink();
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'ENOENT') return;
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new GuidesUnavailable(
+        `deep_review.guides_dir component "${current}" could not be examined: ${detail}`,
+      );
+    }
+    if (isSymlink) {
+      throw new GuidesUnavailable(
+        `deep_review.guides_dir "${guidesDir}" must be a real directory, not a symlink (at "${current}")`,
+      );
+    }
   }
+}
+
+/* Confine `guides_dir` to the repo, fail-CLOSED, and return the resolved overlay dir. Shared by
+   fix-mode preflight (runPreflight) and the Stop-gate (requiredReadSet) so neither is weaker:
+   the pre-hardening preflight confined LEXICALLY only, letting an in-repo guides_dir symlinked
+   OUTSIDE the repo pass the file-editing verb while the gate rejected it. Two layers: (1) a
+   LEXICAL escape (`../`, absolute); (2) any SYMLINK component (assertNoSymlinkComponent), which
+   subsumes symlink-escape, in-repo-symlink (unprovable-overlay), and dangling-ancestor cases. */
+export function assertGuidesDirConfined(cwd: string, guidesDir: string): string {
+  const overlayDirectory = path.resolve(cwd, guidesDir);
+  if (!isWithinRoot(cwd, overlayDirectory)) {
+    throw new GuidesUnavailable(
+      `deep_review.guides_dir "${guidesDir}" resolves outside the repo root "${cwd}"`,
+    );
+  }
+  assertNoSymlinkComponent(cwd, guidesDir, overlayDirectory);
+  return overlayDirectory;
 }
 
 export type GuidesReadDecision =
