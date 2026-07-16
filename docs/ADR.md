@@ -216,6 +216,28 @@ run deadline — per the CLAUDE.md seed-parity rule: a consumer-facing standard
 lands in the seeds in the same batch, the pilot is an adopter, not the source
 of truth.
 
+### Amendment (2026-07-16, reviewer lens + starter baseline)
+
+ADR-014 made the naming standard operational on the CONSUMER side (the template
+requires a declared allowlist or an explicit "abbreviations are fine" stance) but
+left the REVIEWER with no lens to enforce it: `profile-naming-and-constants.md`
+judged name meaningfulness by taste alone. The naming profile now carries a
+Conditionality-gated judgment prompt — where a repo declares a
+blessed-abbreviation allowlist, an abbreviation neither on the list nor spelled
+out is a finding, and a new abbreviation introduced without a same-PR list
+addition is a finding; the length/ASCII gate is only the floor. The gating
+mirrors ADR-015's home-conditional placement lenses (a repo declaring
+"abbreviations are fine" is out of scope). `code-conventions-template.md`
+§Naming now also seeds a universal starter baseline (`api, ctx, id, idx, opts,
+…`) a new consumer extends with its domain abbreviations: the concrete list
+stays consumer-owned (per the core/consumer split), only the enforcement lens
+and the starter vocabulary are shared. Seed parity: the template edit is the
+seed and the profile is read in place (no dist sync), same batch. Making the
+list authoritative retired the pilot's `pos` naming canary (ADR-018 registry):
+the pilot blessed `pos`, so the retained state is no longer an offense once
+allowlist membership decides compliance — burned in `TRACEABILITY.md` this batch
+(without it the new lens would silently neuter a live canary).
+
 ---
 
 ## ADR-015 — Constant/type placement become always-on review judgments

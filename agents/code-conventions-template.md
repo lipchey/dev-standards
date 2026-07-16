@@ -50,6 +50,19 @@ explicit "abbreviations are fine" stance. A bare "use descriptive names" rule
 backed only by a length gate leaves the aspirational half ungated and guarantees
 arbitrary, reviewer-dependent enforcement.
 
+If you choose the allowlist, start from this universal baseline and extend it
+with your domain's abbreviations - each added in the same PR that introduces it -
+kept alphabetized on one line:
+`api, attr, buf, cfg, cli, cors, css, ctx, db, deps, dir, dom, env, err, hmac,
+html, http, id, idx, iso, json, kv, len, max, meta, min, ms, msg, num, opts,
+params, prev, px, raw, sql, src, str, tmp, tok, ui, url, utc, uuid, ws`.
+A compound of blessed abbreviations and whole words (`msGap`, `rawId`) is
+compliant; where a min-length gate is active, the two-character entries (`db`,
+`id`, `kv`, `ms`, `px`, `ui`, `ws`) are only ever compound components, never
+standalone names. Spell out anything not on the list (`sr` -> `sampleRate`,
+`ev` -> `event`); domain terms (`matcher`, `tracker`, `normalize`) are words, not
+abbreviations, and never need listing.
+
 ## Tests
 
 State where tests and fixtures live, how source areas map to their tests, and

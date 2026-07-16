@@ -35,6 +35,12 @@ material plus repo experience; upstream has no dedicated lens for it.
   keeps the named home, visible in the layout or declared in
   `.claude/code-conventions.md`. A repo without that home is out of scope for
   that rule.
+- The blessed-abbreviation allowlist lens (§Naming and readability) applies where
+  the repo declares that allowlist in `.claude/code-conventions.md` (ADR-014's
+  operational-naming choice). A repo that declares the alternative "abbreviations
+  are fine" stance is out of scope for it. ADR-014 requires one of those two
+  stances, so "no declared naming standard" is an adoption gap, not a licence to
+  skip this lens.
 - The cross-boundary ubiquitous-language prompt is strong for multi-context
   domains and often inapplicable to a small single-purpose repo. Do not invent
   bounded contexts.
@@ -46,6 +52,16 @@ Judgment prompts:
 - Does each name say what the thing is/does in the repo's ubiquitous language,
   or does it mislead (a `get` that mutates, a `list` that returns one, a boolean
   named for the false case)?
+- Where the repo declares a blessed-abbreviation allowlist, judge author-chosen
+  abbreviated identifiers against it rather than against taste: an abbreviation
+  neither on the list nor spelled out to whole words is a finding, and a NEW
+  abbreviation the diff introduces without adding it to that list in the same
+  change is a finding. Whether an abbreviation is blessed is the one thing the
+  length/ASCII floor and the short-property-key gate cannot see, so it is the
+  reviewer's call - but honor the repo's declared exceptions (external-schema and
+  wire property names, framework-canonical imports) and reference, never repeat,
+  a token those gates already own (see §Conditionality: a repo that declares
+  "abbreviations are fine" is out of scope).
 - Is intent obvious without a comment, or does non-trivial logic go unexplained
   where a one-line why-comment would save the next reader? More comments is not
   better; the missing *why* on a surprising line is the finding.
