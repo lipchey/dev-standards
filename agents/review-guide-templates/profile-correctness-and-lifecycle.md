@@ -106,6 +106,31 @@ Apply these with whichever stack section is loaded:
   Re-breaking or reverting that intent is a regression the current-state view,
   CodeGraph included, cannot see. Blaming post-change lines shows only this
   diff, not the intent it overwrites.
+- **Attestation integrity.** Does a record keyed to a commit SHA (a verify /
+  self-review / sign-off stamp bound to `HEAD`) ALSO constrain the tree state at
+  capture - a clean (non-tooling) worktree, or a content hash - so it cannot
+  attest a dirty tree whose extra changes never land? A stamp read clean against
+  `HEAD` while the worktree is dirty, then discarded, leaves downstream believing
+  `clean == HEAD`. **Check:** for any new HEAD-bound record, what tree does it
+  actually attest, and can it differ from what lands? (2026-07-16, dev-standards
+  deep-review self-review Gate C)
+- **Callback inertness past owner lifecycle.** Must a callback that can outlive
+  its owner (a timer, listener, subscription, or a resolved promise's `.then`)
+  become INERT once that owner is torn down - guarded by a cancelled/disposed
+  flag or unregistered - so a late firing cannot mutate freed or replaced state?
+  This is the framework-agnostic form of the React cleanup / stale-request rules
+  (§React / UI TS) and the resource-release rules (§Resource leaks); apply it to
+  any lifecycle-bound callback. **Check:** for each callback a lifecycle-bound
+  owner registers, what happens if it fires after that owner is gone?
+  (2026-07-15, dev-standards review-recall C2)
+- **Separated `--flag <value>` parsing.** Does a parser that takes the token
+  AFTER `--flag` reject a following OPTION-like token (`--`-prefixed) and an empty
+  value as a MISSING value, rather than swallowing the next flag
+  (`--note --findings f` -> `note = "--findings"`)? A presence-only guard
+  (`flag present && value === undefined`) misses it; the inline `--flag=<value>`
+  form is unambiguous and needs no such guard. **Check:** for every separated
+  `--flag <value>`, is a `--`-prefixed or empty next token treated as an absent
+  value? (2026-07-16, dev-standards deep-review CLI Gate C)
 
 Optional-value flow belongs to
 → see `profile-types-and-contracts.md` §Public contracts and optional values.

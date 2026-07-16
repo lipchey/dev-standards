@@ -163,6 +163,25 @@ platform-managed protections and signals that complement the repo-owned gates
 Skill bodies are **not** a tuning surface — never fork them; behavior a guide
 can't express goes upstream (fix-upstream loop below).
 
+## Wiring checklist for a new app / package / workspace
+
+Every quality gate is scoped by an explicit path list, so a newly-added workspace
+is invisible to all of them — silently unlinted, unchecked, uncovered — until each
+list names it. When a diff adds a workspace, extend **every** scoped list in the
+same change:
+
+- **eslint** — add the workspace's files to the preset `files` globs (and any
+  boundary/import-zone blocks that must cover it).
+- **`quality.json` filesets** — add it to the `staged` and `full` filesets its
+  tiers expand (a `git_staged` fileset plus the full-tree one).
+- **typecheck chain** — add its `tsconfig`/project reference so it is type-checked.
+- **any deep-review / contract gate** — name the new zone in the relevant
+  `quality.json` check args so it is not skipped.
+
+The structure-and-boundaries review lens now prompts for this on any diff that
+adds a workspace (`profile-architecture-and-boundaries.md` §Baseline structural
+checks).
+
 ## Deep review is opt-in
 
 `deep-review-refactor` reviews a completed feature branch's diff (not the whole

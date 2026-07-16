@@ -99,6 +99,12 @@ exhaustive handling, `readonly` on shared data, and typed errors carrying a
   A bare `as` cast is a claim the compiler believes without proof.
 - Are shared or returned arrays/objects `readonly` where callers must not mutate
   them? A mutable return invites action-at-a-distance.
+- Is that `readonly` DEEP enough for the boundary? `Readonly<T>` and a `readonly`
+  array are SHALLOW - a nested object or array field stays writable, so a caller
+  can still reach in and mutate across the boundary. **Check:** for data crossing
+  a published boundary, is a nested mutable field left writable where it needs
+  `ReadonlyArray`/recursive-readonly or a frozen structure? (2026-07-15,
+  dev-standards review-recall C2)
 - Do thrown errors carry a typed shape and a `cause`, or is context lost by
   re-throwing a bare `Error(string)`?
 
