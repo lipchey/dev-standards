@@ -31,6 +31,47 @@ function tailOf(text: string): string {
   return trimmed.length > STDERR_TAIL_MAX ? trimmed.slice(-STDERR_TAIL_MAX) : trimmed;
 }
 
+// Bounds the synchronous wait for a SIGKILLed process group to fully drain. A pre-commit CLI runs
+// synchronously, so a short bounded busy-wait is acceptable; the cap prevents a hang if a member is
+// somehow unkillable.
+const REAP_DRAIN_TIMEOUT_MS = 1000;
+const REAP_POLL_MS = 5;
+
+// Synchronous sleep with no event loop: Atomics.wait blocks the thread for `ms`. Used ONLY inside
+// the bounded reap-drain poll below — this code path is already synchronous (spawnSync), so
+// blocking is fine, and setTimeout can't be awaited here.
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/* Kill the whole detached process group led by `pid` with SIGKILL, then WAIT (bounded) until no
+   group member remains. The wait is the point: after this returns, a caller that rolls back cannot
+   race a still-living descendant that writes to the tree. `process.kill(-pid, 0)` is an existence
+   probe — it succeeds while any member survives and throws ESRCH once the group is empty. Shared by
+   exec.ts (runCheck/runProcess) and git.ts so the kill+wait mechanic lives in ONE place.
+   Ceiling: once spawnSync has reaped the immediate child the leader PID is freed and could in
+   theory be recycled — the same window the timeout path already accepted; fine for this trusted
+   local pilot. */
+export function reapGroup(pid: number): void {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ESRCH') return; // group already empty
+    throw e;
+  }
+  const deadline = Date.now() + REAP_DRAIN_TIMEOUT_MS;
+  for (;;) {
+    try {
+      process.kill(-pid, 0); // succeeds while at least one group member is still alive
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ESRCH') return; // drained
+      throw e;
+    }
+    if (Date.now() >= deadline) return; // bounded: give up rather than hang forever
+    sleepSync(REAP_POLL_MS);
+  }
+}
+
 // The shared spawn mechanic behind both `runCheck` and `runProcess`: run `argv` as a detached
 // process-group leader (`detached: true`) so a timeout can SIGKILL the whole subtree, not just
 // the immediate child, then reap the group on ETIMEDOUT. `stdio` is the ONLY thing that differs
@@ -60,17 +101,17 @@ function spawnGroup(
     maxBuffer: 64 * 1024 * 1024,
   } as SpawnSyncOptions) as SpawnSyncReturns<string>;
 
-  let timedOut = false;
-  if (result.error !== undefined && (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
-    timedOut = true;
-    // Reap the whole process group; the immediate child is already SIGKILLed by spawnSync.
-    if (result.pid) {
-      try {
-        process.kill(-result.pid, 'SIGKILL');
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e;
-      }
-    }
+  const err = result.error as NodeJS.ErrnoException | undefined;
+  const timedOut = err?.code === 'ETIMEDOUT';
+  /* Reap the whole detached process group on EVERY abnormal outcome — not just a timeout.
+     spawnSync's killSignal reaches only the immediate child, so on a signal-kill (status null) or a
+     spawn/operational fault (ENOBUFS on maxBuffer overflow, …) a grandchild left in the group
+     survives and can keep mutating files AFTER the caller rolls back. reapGroup kills AND waits for
+     the group to drain, so no survivor can race the rollback. A clean exit-code return
+     (err === undefined && status !== null) leaves the group alone: a well-behaved tool has no
+     lingering members, and force-killing there could nuke a legitimately detached child. */
+  if ((err !== undefined || result.status === null) && result.pid) {
+    reapGroup(result.pid);
   }
   return { result, timedOut };
 }

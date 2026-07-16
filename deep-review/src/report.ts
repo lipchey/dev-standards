@@ -16,6 +16,7 @@
 // finding (EXIT_FAILURE, file NOT written), `clean` writes the report via the
 // confined atomic writer to <reportsDir>/deep-review-<date>.md.
 
+import path from 'node:path';
 import { EXIT_OK, EXIT_FAILURE, EXIT_SCANNER_UNAVAILABLE } from './types.ts';
 import type { FindingRecord, FindingsFileV2, FindingStatus, MachineError, SecretScanResult } from './types.ts';
 import { HANDOFF_BLOCKING_STATUSES } from './types.ts';
@@ -108,13 +109,23 @@ export function renderReport(findingsFile: FindingsFileV2): string {
 
 // ── Write seam ───────────────────────────────────────────────────────────────
 
-// The injected effects for `writeReport`. `reportsDir` is the manifest's
-// `paths.reports` (the CLI resolves it against the repo root). `scanResult` is the
-// secret scan of the rendered body, already run by the CLI edge. `now` (default
-// `() => new Date()`) yields the report date; `write` (default `writeConfined`)
-// performs the confined atomic write and returns the absolute path.
+// The injected effects for `writeReport`. `reportsDir` is the manifest's `paths.reports`
+// (BUG-11: kept REPO-RELATIVE by the CLI, confined against `repoRootAbs`, below — never
+// pre-resolved to an absolute path by the caller). `scanResult` is the secret scan of the
+// rendered body, already run by the CLI edge. `now` (default `() => new Date()`) yields the
+// report date; `write` (default `writeConfined`) performs the confined atomic write and returns
+// the absolute path.
 export interface WriteReportDeps {
   reportsDir: string;
+  // BUG-11: the CONFINEMENT ROOT for the atomic writer. Optional so a caller that already
+  // resolved `reportsDir` to an absolute, pre-confined directory (report.test.ts's fixtures)
+  // keeps writing there unchanged — passing a bare directory as its OWN confinement root makes
+  // `writeConfined`'s check tautological (a directory is always "within itself"), which is
+  // exactly the bug: a manifest `paths.reports` of `../outside` or a symlinked ancestor escaped
+  // the repo undetected. The CLI edge (cli.ts) always supplies this as the TRUE repo root
+  // (`env.realpath(env.cwd)`) with `reportsDir` kept REPO-RELATIVE, mirroring
+  // runner/src/report.ts's own `writeReport(report, root, reportsPath)`.
+  repoRootAbs?: string;
   scanResult: SecretScanResult;
   now?: () => Date;
   write?: (rootDir: string, relPath: string, content: string) => string;
@@ -167,6 +178,14 @@ export function writeReport(findingsFile: FindingsFileV2, deps: WriteReportDeps)
   }
 
   const body = renderReport(findingsFile);
-  const filePath = write(deps.reportsDir, `deep-review-${reportDate(now)}.md`, body);
+  const filename = `deep-review-${reportDate(now)}.md`;
+  // BUG-11: when a TRUE confinement root is supplied, the write target is `reportsDir` joined
+  // under THAT root (path.join, not path.resolve — reportsDir must stay a RELATIVE operand so
+  // writeConfined's own realpath check can catch a `../` or a symlinked-ancestor escape). Without
+  // one (the pre-existing direct-caller shape), `reportsDir` is used exactly as before: itself
+  // the confinement root, with the bare filename as the relative target.
+  const [rootDir, relPath] =
+    deps.repoRootAbs === undefined ? [deps.reportsDir, filename] : [deps.repoRootAbs, path.join(deps.reportsDir, filename)];
+  const filePath = write(rootDir, relPath, body);
   return { exitCode: EXIT_OK, path: filePath };
 }

@@ -1,6 +1,6 @@
-// Manifest glob dialect: * stays within one segment, ** crosses segments, and
-// doublestar-slash may match zero directories. Bottom-up DP avoids RegExp
-// backtracking on adjacent doublestars.
+// Manifest glob dialect: * stays within one segment; ** crosses segments but ONLY as a whole
+// segment (an embedded a**b is within-segment stars, matching tools/*.mjs); doublestar-slash may
+// match zero directories. Bottom-up DP avoids RegExp backtracking on adjacent doublestars.
 export function matches(path: string, pattern: string): boolean {
   const tokens = tokenize(pattern);
   const n = path.length;
@@ -52,17 +52,26 @@ function tokenize(pattern: string): Token[] {
   const tokens: Token[] = [];
   for (let i = 0; i < pattern.length; i += 1) {
     if (pattern[i] === '*') {
-      if (pattern[i + 1] === '*') {
+      // A `**` is a globstar (crosses `/`) ONLY as a WHOLE path segment: preceded by start-or-`/`
+      // and followed by `/`-or-end. Anywhere else (a**b, src**.ts) the two stars are ordinary
+      // within-segment wildcards that never cross `/`, matching tools/*.mjs which split on `/`
+      // first (BUG-09). The validator rejects embedded `**`, so aligned matchers only need to
+      // agree on it for conformance.
+      const atSegmentStart = i === 0 || pattern[i - 1] === '/';
+      if (pattern[i + 1] === '*' && atSegmentStart) {
         if (pattern[i + 2] === '/') {
           tokens.push({ kind: 'globslash' });
           i += 2;
-        } else {
+          continue;
+        }
+        if (i + 2 === pattern.length) {
           tokens.push({ kind: 'globstar' });
           i += 1;
+          continue;
         }
-      } else {
-        tokens.push({ kind: 'star' });
       }
+      // A lone `*`, or one star of an embedded double-star: a single within-segment wildcard.
+      tokens.push({ kind: 'star' });
       continue;
     }
     tokens.push({ kind: 'lit', ch: pattern[i] as string });

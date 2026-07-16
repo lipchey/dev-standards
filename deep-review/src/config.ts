@@ -27,10 +27,13 @@ const DEFAULT_BUDGET_SECONDS = 900;
 // the default. LIMITATION: the no-touch match is LEXICAL (like quality.json / the
 // project-facts ref / the baseline `verify`); a consumer that makes verify_entry a SYMLINK
 // to an unprotected in-repo file leaves that target editable — keep the shim a regular file.
-/* Shared by verify_entry and every required_reads entry (§P2-2): both must resolve inside
-   the worktree, and the guides-read gate's tail match compares against these repo-relative
-   values, so an escaping/backslash/trailing-slash spelling must be rejected at the one
-   projection point rather than silently mis-anchoring the read-proof check. */
+/* Shared by verify_entry, every required_reads entry (§P2-2), and (BUG-11) paths.reports: all
+   must resolve inside the worktree. verify_entry/required_reads feed the guides-read gate's tail
+   match (an escaping/backslash/trailing-slash spelling would silently mis-anchor the read-proof
+   check); paths.reports feeds the report writer's confinement root (cli.ts hands the repo root +
+   this value to the SAME atomic writer runner uses — a `../`-escaping or absolute value must
+   never reach it as a "safe" relative target). `field` is the FULL dotted manifest path (e.g.
+   `deep_review.guides_dir`, `paths.reports`) so the thrown message points at the right key. */
 function requireRepoRelative(manifestPath: string, field: string, entry: string): string {
   if (
     entry === '' ||
@@ -40,7 +43,7 @@ function requireRepoRelative(manifestPath: string, field: string, entry: string)
     entry.split('/').includes('..')
   ) {
     throw new Error(
-      `manifest at ${manifestPath} is invalid: deep_review.${field} must be a repo-relative path without '..' segments, backslashes, or a trailing slash, got ${JSON.stringify(entry)}`,
+      `manifest at ${manifestPath} is invalid: ${field} must be a repo-relative path without '..' segments, backslashes, or a trailing slash, got ${JSON.stringify(entry)}`,
     );
   }
   return entry;
@@ -83,13 +86,17 @@ export function loadConfig(filePath: string): DeepReviewConfig {
        Confined repo-relative like verify_entry: an absolute/escaping guides_dir would make the
        fix-mode no-touch glob (`policyProtectedPaths`) match nothing, leaving the overlay
        editable, and would need runtime confinement everywhere it is resolved. */
-    guidesDir: requireRepoRelative(filePath, 'guides_dir', deepReview?.guides_dir ?? '.claude/review-guides'),
+    guidesDir: requireRepoRelative(filePath, 'deep_review.guides_dir', deepReview?.guides_dir ?? '.claude/review-guides'),
     noTouchGlobsRef: deepReview?.no_touch_globs_ref,
     verifyAfterFix: deepReview?.verify_after_fix,
-    verifyEntry: requireRepoRelative(filePath, 'verify_entry', deepReview?.verify_entry ?? 'verify'),
-    reportsDir: result.manifest.paths.reports,
+    verifyEntry: requireRepoRelative(filePath, 'deep_review.verify_entry', deepReview?.verify_entry ?? 'verify'),
+    // BUG-11: the schema only shape-checks `paths.reports` (non-empty string) — reject an
+    // escaping value HERE, the single projection point, so cli.ts's report writer (and every
+    // other reader of config.reportsDir) never sees a `../` or absolute path dressed up as a
+    // repo-relative reports directory.
+    reportsDir: requireRepoRelative(filePath, 'paths.reports', result.manifest.paths.reports),
     requiredReads: (deepReview?.required_reads ?? []).map((entry) =>
-      requireRepoRelative(filePath, 'required_reads', entry),
+      requireRepoRelative(filePath, 'deep_review.required_reads', entry),
     ),
   };
 }

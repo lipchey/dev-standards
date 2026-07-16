@@ -88,9 +88,28 @@ export function runFixStaged(
   if (expired()) return 1;
   const regular = new Set(stagedRegularFiles(stageable, root, budget()));
   const nonRegular = stageable.filter((file) => !regular.has(file));
-  const safe = stageable.filter((file) => regular.has(file));
   if (nonRegular.length > 0) {
     write(err, `fix-staged: skipping ${nonRegular.length} non-regular file(s) (symlink/submodule): ${nonRegular.join(', ')}`);
+  }
+
+  /* A hardlinked repo file (nlink > 1) may share its inode with a path OUTSIDE the repo, so
+     formatting it in place silently rewrites that outside file — and `git checkout`, which restores
+     by path not inode, cannot undo the external write. Reject nlink !== 1 BEFORE any mutation.
+     (The index-mode check above already dropped symlinks/gitlinks; this filesystem lstat additionally
+     drops hardlinks and any file retyped in the window since that probe.) */
+  const hardlinked: string[] = [];
+  const safe: string[] = [];
+  for (const file of stageable) {
+    if (!regular.has(file)) continue;
+    const st = lstatSync(join(root, file), { throwIfNoEntry: false });
+    if (st === undefined || !st.isFile() || st.nlink !== 1) {
+      hardlinked.push(file);
+      continue;
+    }
+    safe.push(file);
+  }
+  if (hardlinked.length > 0) {
+    write(err, `fix-staged: skipping ${hardlinked.length} hardlinked/irregular file(s) (nlink != 1): ${hardlinked.join(', ')}`);
   }
   if (safe.length === 0) {
     write(out, 'fix-staged: no regular staged files to format');
@@ -98,8 +117,14 @@ export function runFixStaged(
   }
 
   if (expired()) return 1;
-  // expandArgv rejects option-like file operands; it runs BEFORE any mutation, so a throw here is safe.
-  const argv = expandArgv([...format.argv, `{files:${SAFE_TOKEN}}`], new Map([[SAFE_TOKEN, safe]]));
+  /* Expand ONLY the internal safe-file token, then prepend format.argv VERBATIM. format.argv must
+     never flow through token expansion: a `{files:<fileset>}` there (an unknown/empty fileset)
+     would expand to zero args and let the appended staged path slide into argv[0] — the program to
+     execute (BUG-07). Keeping format.argv literal guarantees argv[0] stays the configured formatter,
+     never a staged file. expandArgv still guards the safe operands (option-like / glob-metachar) and
+     runs BEFORE any mutation, so a throw here is safe. */
+  const operands = expandArgv([`{files:${SAFE_TOKEN}}`], new Map([[SAFE_TOKEN, safe]]));
+  const argv = [...format.argv, ...operands];
   const formatted = runProcess({ argv, cwd: root, timeoutMs: remaining() });
   if (formatted.kind !== 'ok') {
     rollback(safe, root, err);
@@ -115,9 +140,14 @@ export function runFixStaged(
   try {
     for (const file of safe) {
       const stat = lstatSync(join(root, file), { throwIfNoEntry: false });
-      if (stat === undefined || !stat.isFile()) {
+      /* Re-check type AND link count AFTER formatting: a formatter that unlinked the operand and
+         re-created it as a hardlink to an outside file leaves a REGULAR file (isFile() alone would
+         pass) but with nlink > 1. nlink === 1 is the operative guard — a fresh nlink-1 inode (e.g. an
+         atomic-rename writer) is unshared and therefore safe, so we deliberately do NOT also require
+         inode identity, which would break such writers without adding safety. */
+      if (stat === undefined || !stat.isFile() || stat.nlink !== 1) {
         rollback(safe, root, err);
-        write(err, `fix-staged: formatter left ${file} missing or non-regular; reverted`);
+        write(err, `fix-staged: formatter left ${file} missing, non-regular, or hardlinked; reverted`);
         return 1;
       }
     }
@@ -134,7 +164,7 @@ export function runFixStaged(
     return 1;
   }
 
-  const skipped = partial.length + nonRegular.length;
+  const skipped = partial.length + nonRegular.length + hardlinked.length;
   const tail = skipped > 0 ? `, skipped ${skipped}` : '';
   write(out, `fix-staged: formatted and re-staged ${safe.length} file(s)${tail}`);
   return 0;

@@ -245,6 +245,24 @@ test('verifyDescriptor: a descriptor whose branch_ref no longer matches HEAD -> 
   fs.rmSync(base, { recursive: true, force: true });
 });
 
+test('descriptor budget fields (BUG-05): a tampered/corrupt budget_seconds or expires_at -> ok:false (parseDescriptor narrows the pair, never trusts a corrupt one)', () => {
+  const { base, repo } = makeBase();
+  const wtPath = fallbackWtPath(repo, 'budgettamper');
+  assert.equal(selectWorktree('budgettamper', deps(repo)).exitCode, EXIT_OK);
+  const descPath = path.join(worktreeGitDir(wtPath), 'deep-review-run.json');
+  const descriptor = JSON.parse(fs.readFileSync(descPath, 'utf8')) as Record<string, unknown>;
+
+  // A non-parseable expires_at would otherwise reach createDeadline as NaN (BigInt(NaN) throws).
+  fs.writeFileSync(descPath, JSON.stringify({ ...descriptor, budget_seconds: 900, expires_at: 'not-a-date' }));
+  assert.equal(verifyDescriptor(wtPath).ok, false);
+
+  // A non-positive budget_seconds (here paired with a valid date) is rejected at the boundary too.
+  fs.writeFileSync(descPath, JSON.stringify({ ...descriptor, budget_seconds: -1, expires_at: new Date().toISOString() }));
+  assert.equal(verifyDescriptor(wtPath).ok, false);
+
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
 // ── wrong-reuse refused (S21 collision, plain dir) ─────────────────────────────
 
 test('wrong-reuse: a plain dir (not a worktree) at wtPath -> EXIT_WRONG_STATE, no mutation', () => {

@@ -26,10 +26,12 @@ type RuleName =
   | 'check-name-unique'
   | 'workspace-name-unique'
   | 'glob-dialect'
+  | 'glob-globstar-segment'
   | 'diff-filter-scope'
   | 'format-fileset-reference'
   | 'format-fileset-source'
-  | 'format-fileset-filter';
+  | 'format-fileset-filter'
+  | 'format-argv-token';
 
 type UniquenessRule = 'fileset-name-unique' | 'check-name-unique' | 'workspace-name-unique';
 
@@ -111,6 +113,9 @@ const DEEP_REVIEW_BUDGET_REQUIRED = ['seconds'] as const;
 const DEEP_REVIEW_BUDGET_KEYS = ['seconds', 'tokens'] as const;
 
 const FILES_TOKEN = /^\{files:([\w-]+)\}$/;
+// A fileset name must be referenceable via the `{files:<name>}` token, whose grammar is `[\w-]+`.
+// Anything else (a dot, space, …) validates as a non-empty string yet can never be referenced.
+const FILESET_NAME_PATTERN = /^[\w-]+$/;
 // The schema dialect allows only `*`, `**`, and literals.
 const UNSUPPORTED_GLOB_SYNTAX = /[?[{]/;
 
@@ -256,6 +261,9 @@ function validateStringArray(
   path: string,
   minItems: 0 | 1,
   errors: ValidationError[],
+  // When true, each item must be a NON-EMPTY string (mirrors schema items.minLength:1). Off by
+  // default so callers whose schema allows "" (e.g. plain argv) are unaffected.
+  requireNonEmptyItems = false,
 ): void {
   if (!isUnknownArray(value)) {
     addError(errors, path, 'type', `must be an array of strings, got ${describeValue(value)}`, value);
@@ -267,6 +275,8 @@ function validateStringArray(
   value.forEach((item, index) => {
     if (typeof item !== 'string') {
       addError(errors, `${path}[${index}]`, 'type', `must be a string, got ${describeValue(item)}`, item);
+    } else if (requireNonEmptyItems && item.length === 0) {
+      addError(errors, `${path}[${index}]`, 'min-length', 'must be a non-empty string', item);
     }
   });
 }
@@ -399,11 +409,26 @@ function validateFileset(value: unknown, path: string, errors: ValidationError[]
   if (fileset === undefined) return;
   requireKeys(fileset, path, FILESET_REQUIRED, errors);
   rejectUnknownKeys(fileset, path, FILESET_ALLOWED, errors);
-  if (Object.hasOwn(fileset, 'name')) validateNonEmptyString(fileset['name'], `${path}.name`, errors);
+  if (Object.hasOwn(fileset, 'name')) validateFilesetName(fileset['name'], `${path}.name`, errors);
   if (Object.hasOwn(fileset, 'source')) validateEnum(fileset['source'], `${path}.source`, FILESET_SOURCES, errors);
-  if (Object.hasOwn(fileset, 'include')) validateStringArray(fileset['include'], `${path}.include`, 1, errors);
-  if (Object.hasOwn(fileset, 'exclude')) validateStringArray(fileset['exclude'], `${path}.exclude`, 0, errors);
+  if (Object.hasOwn(fileset, 'include')) validateStringArray(fileset['include'], `${path}.include`, 1, errors, true);
+  if (Object.hasOwn(fileset, 'exclude')) validateStringArray(fileset['exclude'], `${path}.exclude`, 0, errors, true);
   if (Object.hasOwn(fileset, 'diff_filter')) validateDiffFilter(fileset['diff_filter'], `${path}.diff_filter`, errors);
+}
+
+// A fileset name must be a non-empty string AND match the `{files:<name>}` token grammar, else it
+// validates but is unreferenceable. Mirrors the schema's `pattern` on filesets.items.name.
+function validateFilesetName(value: unknown, path: string, errors: ValidationError[]): void {
+  validateNonEmptyString(value, path, errors);
+  if (typeof value === 'string' && value.length > 0 && !FILESET_NAME_PATTERN.test(value)) {
+    addError(
+      errors,
+      path,
+      'pattern',
+      'fileset name must match ^[A-Za-z0-9_-]+$ so it can be referenced via {files:<name>}',
+      value,
+    );
+  }
 }
 
 function validateDiffFilter(value: unknown, path: string, errors: ValidationError[]): void {
@@ -573,6 +598,24 @@ function validateSemantics(root: Record<string, unknown>, errors: ValidationErro
 function validateFormatSemantics(root: Record<string, unknown>, errors: ValidationError[]): void {
   const format = root['format'];
   if (!isRecord(format)) return;
+  /* format.argv is the formatter command ONLY; the runner appends the safe staged-file list
+     internally. A `{files:<fileset>}` token here is forbidden: an unknown/empty fileset expands to
+     zero args, so the internally-appended staged path would slide into argv[0] and be EXECUTED as
+     the program instead of formatted (BUG-07). */
+  const argv = format['argv'];
+  if (isUnknownArray(argv)) {
+    argv.forEach((element, index) => {
+      if (typeof element === 'string' && FILES_TOKEN.test(element)) {
+        addError(
+          errors,
+          `format.argv[${index}]`,
+          'format-argv-token',
+          'format.argv must not contain a {files:<fileset>} token; the runner appends the staged file list itself',
+          element,
+        );
+      }
+    });
+  }
   const filesetName = format['fileset'];
   if (typeof filesetName !== 'string') return; // structural pass already flagged a bad fileset name
   const filesets = root['filesets'];
@@ -742,6 +785,19 @@ function validateGlobDialect(patterns: unknown, path: string, errors: Validation
         `${path}[${index}]`,
         'glob-dialect',
         'pattern uses unsupported glob syntax ("?", "[", or "{"); the restricted dialect allows "**", "*", and literal segments',
+        pattern,
+      );
+    }
+    // A `**` must be a WHOLE path segment. An embedded double-star (like "a**b" or "src**.ts") is
+    // ambiguous across the three matchers — the runner treated it as a globstar crossing "/", the
+    // policy tools as a within-segment "*". Rejecting the mixed form keeps runner/src/glob.ts and
+    // tools/*.mjs in exact agreement: `**` valid only as a whole segment.
+    if (pattern.split('/').some((segment) => segment !== '**' && segment.includes('**'))) {
+      addError(
+        errors,
+        `${path}[${index}]`,
+        'glob-globstar-segment',
+        'a "**" globstar must be a whole path segment; an embedded double-star (e.g. "a**b") is not allowed',
         pattern,
       );
     }
