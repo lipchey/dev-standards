@@ -41,6 +41,12 @@
       "name": "manifests_staged",
       "source": "git_staged",
       "include": ["package.json", "package-lock.json"]
+    },
+    {
+      "name": "placement_tree",
+      "source": "repo_all",
+      "include": ["tests/**", "runner/src/**", "tools/**", "scripts/**", "deep-review/src/**", "eslint/**"],
+      "exclude": []
     }
   ],
   "tiers": {
@@ -103,6 +109,38 @@
         "argv": ["npm", "run", "knip"],
         "mode": "report-only",
         "timeout_seconds": 60
+      },
+      {
+        "name": "check-test-placement",
+        "argv": [
+          "node", "tools/check-test-placement.mjs",
+          "--map", "tests/runner:runner/src:.ts",
+          "--map", "tests/tools:tools:.mjs",
+          "--map", "tests/tools:scripts:.sh",
+          "--map", "tests/tools:scripts:.mjs",
+          "--map", "tests/deep-review:deep-review/src:.ts",
+          "--map", "tests/eslint:eslint:.js",
+          "--ignore", "tests/deep-review-e2e/**",
+          "--ignore", "tests/fixtures/**",
+          "--ignore", "tests/eslint/fixtures/**",
+          "--ignore", "tests/deep-review/slug.test.ts",
+          "--ignore", "tests/deep-review/verify-state.test.ts",
+          "--ignore", "tests/eslint/presets.test.mjs",
+          "--ignore", "tests/eslint/presets-compose.test.mjs",
+          "--ignore", "tests/runner/build-freshness.test.ts",
+          "--ignore", "tests/runner/cli-scope-prototype.test.ts",
+          "--ignore", "tests/runner/fixtures.test.ts",
+          "--ignore", "tests/runner/manifest-conformance.bugfix.test.ts",
+          "--ignore", "tests/runner/review-guides-present.test.ts",
+          "--ignore", "tests/runner/skill-wrappers-static.test.ts",
+          "--ignore", "tests/runner/validate-cli.test.ts",
+          "--ignore", "tests/runner/validate-diff-filter.test.ts",
+          "--ignore", "tests/tools/glob-conformance.test.ts",
+          "--", "{files:placement_tree}"
+        ],
+        "mode": "report-only",
+        "operational_exit_codes": [2],
+        "timeout_seconds": 15
       }
     ],
     "audit": []
