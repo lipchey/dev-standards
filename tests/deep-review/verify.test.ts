@@ -230,6 +230,15 @@ function repoWithFixMode(verifyAfterFix?: '--fast' | '--full'): { repo: string; 
   const shimPath = path.join(repo, 'verify');
   fs.writeFileSync(shimPath, `#!/bin/sh\nprintf '%s' "$1" > ${JSON.stringify(recordPath)}\nexit 0\n`);
   fs.chmodSync(shimPath, 0o755);
+
+  // BUG-01 dirt gate: a green verification stamp now requires a clean worktree before AND after the
+  // shim. Commit the fix-mode scaffold (quality.json + the verify shim) and gitignore the transient
+  // run outputs so the shim's recorded-scope.txt and the reports/ tree do not read as uncommitted
+  // non-tooling dirt — mirroring a real consumer where config + shim are tracked and reports are
+  // ignored. Without this the gate refuses before the shim ever runs.
+  fs.writeFileSync(path.join(repo, '.gitignore'), '/reports/\n/recorded-scope.txt\n');
+  git(repo, ['add', 'quality.json', 'verify', '.gitignore']);
+  git(repo, ['commit', '-q', '-m', 'scaffold']);
   return { repo, fpath, recordPath };
 }
 

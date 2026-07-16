@@ -37,7 +37,9 @@ export function parseArgs(argv: string[]): CliInvocation {
       continue;
     }
 
-    const scopeFromFlag = SCOPE_FLAGS[arg];
+    // Object.hasOwn guards against args like `toString`/`constructor`/`__proto__`
+    // resolving through the prototype chain to an inherited (non-scope) value.
+    const scopeFromFlag = Object.hasOwn(SCOPE_FLAGS, arg) ? SCOPE_FLAGS[arg] : undefined;
     if (scopeFromFlag !== undefined) {
       if (scope !== undefined) {
         return {

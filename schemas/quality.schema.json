@@ -67,10 +67,10 @@
         "type": "object", "additionalProperties": false,
         "required": ["name", "source", "include"],
         "properties": {
-          "name": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$", "description": "Referenced via the `{files:<name>}` token, whose grammar is `[A-Za-z0-9_-]+`; the name must match it or it validates yet cannot be referenced." },
           "source": { "enum": ["git_staged", "repo_all"], "description": "git_staged = `git diff --cached --name-only -z`; repo_all = `git ls-files -z`." },
-          "include": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Restricted glob dialect: `**` (any depth), `*` (within one path segment), literal segments, `*.ext`. Other glob features (`?`, `[...]`, `{...}`) are rejected by the validator." },
-          "exclude": { "type": "array", "items": { "type": "string" } },
+          "include": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "description": "Restricted glob dialect: `**` (a WHOLE path segment only), `*` (within one path segment), literal segments, `*.ext`. An empty pattern and other glob features (`?`, `[...]`, `{...}`, a `**` embedded in a segment) are rejected by the validator." },
+          "exclude": { "type": "array", "items": { "type": "string", "minLength": 1 } },
           "diff_filter": { "type": "string", "pattern": "^[ACDMRTUXB]+$", "default": "ACMR", "description": "git --diff-filter letters; applies only to git_staged. Defaults to ACMR." }
         }
       }

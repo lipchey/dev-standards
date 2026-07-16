@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
+import { reapGroup } from './exec.ts';
 
 // Keep git IO isolated here; -z preserves paths with whitespace/newlines.
 // timeoutMs (remaining tier budget) bounds the probe; SIGKILL guarantees the reap even
@@ -24,20 +25,19 @@ function gitFileList(args: string[], cwd: string, timeoutMs?: number): string[] 
     ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
   } as SpawnSyncOptionsWithStringEncoding);
 
-  if (result.error) {
-    const code = (result.error as NodeJS.ErrnoException).code;
-    if (code === 'ETIMEDOUT') {
-      // Reap the whole group; the immediate child is already SIGKILLed by spawnSync.
-      if (result.pid) {
-        try {
-          process.kill(-result.pid, 'SIGKILL');
-        } catch (e) {
-          if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e;
-        }
-      }
+  const err = result.error as NodeJS.ErrnoException | undefined;
+  // Drain the detached group on EVERY abnormal outcome (a spawn fault incl. ETIMEDOUT, or a
+  // signal-kill with status null) via the SAME shared reap as exec.ts — not just on timeout, so a
+  // surviving git helper / PATH-wrapper in the group can't keep running after this throws. A clean
+  // nonzero exit (status is a number) leaves the group be: git exited normally, no lingering members.
+  if ((err !== undefined || result.status === null) && result.pid) {
+    reapGroup(result.pid);
+  }
+  if (err) {
+    if (err.code === 'ETIMEDOUT') {
       throw new Error(`${argv.join(' ')} timed out after ${timeoutMs}ms (cwd: ${cwd})`);
     }
-    throw new Error(`failed to run ${argv.join(' ')} (cwd: ${cwd}): ${result.error.message}`);
+    throw new Error(`failed to run ${argv.join(' ')} (cwd: ${cwd}): ${err.message}`);
   }
   if (result.status !== 0) {
     const stderr = (result.stderr ?? '').trim();

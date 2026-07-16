@@ -28,6 +28,13 @@ export interface RunDescriptor {
   base_ref: string; // full ref of the base, e.g. refs/heads/main
   base_sha: string; // base commit at creation time
   initial_head_sha: string; // worktree HEAD immediately after `worktree add`
+  // §F7/BUG-05: the whole-run budget, stamped by `stampRunBudget` right after select-worktree
+  // (worktree.ts) writes the base descriptor above — worktree.ts itself stays budget-agnostic.
+  // BOTH optional so a descriptor written before this fix (or one a caller never got to stamp)
+  // falls back to the full configured budget (cli.ts `verbDeadline`) instead of breaking a run
+  // mid-flight on an old/foreign descriptor.
+  budget_seconds?: number;
+  expires_at?: string; // ISO timestamp = created_at + budget_seconds
 }
 
 // The whole-run context cli.ts builds ONCE and threads to the verbs (§0 — no global state). The
@@ -181,6 +188,21 @@ function parseDescriptor(raw: string): RunDescriptor {
       throw new DescriptorError(`run descriptor field ${field} must be a non-empty string`);
     }
   }
+  // BUG-05 budget fields (stampRunBudget-written): narrow at this boundary so every reader can
+  // trust them. Accept only both-absent OR a valid pair — a finite positive budget_seconds and a
+  // parseable expires_at. Without this a corrupt/half-written pair reaches createDeadline as a NaN
+  // (BigInt(NaN) throws) or a tampered far-future expiry silently lifts the ceiling; readDescriptor
+  // propagates this throw, so a corrupt descriptor fails closed rather than misbudgeting.
+  if (record['budget_seconds'] !== undefined || record['expires_at'] !== undefined) {
+    const secs = record['budget_seconds'];
+    const expiresAt = record['expires_at'];
+    if (typeof secs !== 'number' || !Number.isFinite(secs) || secs <= 0) {
+      throw new DescriptorError(`run descriptor budget_seconds must be a positive number, got ${JSON.stringify(secs)}`);
+    }
+    if (typeof expiresAt !== 'string' || Number.isNaN(Date.parse(expiresAt))) {
+      throw new DescriptorError(`run descriptor expires_at must be an ISO timestamp, got ${JSON.stringify(expiresAt)}`);
+    }
+  }
   return value as RunDescriptor;
 }
 
@@ -195,6 +217,30 @@ export function writeDescriptor(descriptor: RunDescriptor, over?: Partial<Descri
   const tmp = `${target}.${process.pid}.tmp`;
   deps.writeFile(tmp, `${JSON.stringify(descriptor, null, 2)}\n`);
   deps.rename(tmp, target);
+}
+
+// ── budget stamp (§F7/BUG-05) ─────────────────────────────────────────────────────
+
+// Adds the whole-run budget to an ALREADY-WRITTEN descriptor. `select-worktree` (worktree.ts)
+// writes the base descriptor with no budget fields; cli.ts calls this right after, in the SAME
+// run-creation step, so every later verb — its OWN separate CLI process — can compute how much
+// of the whole-run budget is actually left instead of restarting a fresh `config.budget.seconds`
+// window each time (the bug: `created_at` was recorded but never consulted). `expires_at` is
+// derived from the descriptor's OWN `created_at`, NOT "now": re-stamping on an idempotent
+// select-worktree reuse (same created_at, same budget_seconds) reproduces the SAME expiry rather
+// than pushing the deadline out on every invocation. Throws if called on a cwd with no
+// already-written descriptor — this is only ever called immediately after `writeDescriptor`
+// succeeded for that same cwd, so a missing descriptor here is a programmer error, not an
+// expected runtime state.
+export function stampRunBudget(cwd: string, budgetSeconds: number, over?: Partial<DescriptorDeps>): void {
+  const deps = withDefaults(over);
+  const identity = readGitIdentity(deps, cwd);
+  if (identity === null) throw new DescriptorError('cannot stamp run budget: not inside a git worktree');
+  const target = descriptorPath(identity.gitDir);
+  if (!deps.exists(target)) throw new DescriptorError(`cannot stamp run budget: no run descriptor at ${target}`);
+  const descriptor = parseDescriptor(deps.readFile(target));
+  const expiresAt = new Date(Date.parse(descriptor.created_at) + budgetSeconds * 1000).toISOString();
+  writeDescriptor({ ...descriptor, budget_seconds: budgetSeconds, expires_at: expiresAt }, over);
 }
 
 // ── read (content only, no identity gate) ─────────────────────────────────────────

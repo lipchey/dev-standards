@@ -28,7 +28,7 @@ import { runPreflight } from './preflight.ts';
 import { createDeadline } from './deadline.ts';
 import type { Deadline } from './deadline.ts';
 import { createSecretScanner } from './secret-scan.ts';
-import { readDescriptor, verifyDescriptor } from './descriptor.ts';
+import { readDescriptor, verifyDescriptor, stampRunBudget } from './descriptor.ts';
 import type { DescriptorVerdict, RunDescriptor, DeepReviewContext } from './descriptor.ts';
 import { evaluateGuidesRead } from './guides-read.ts';
 import type { GuidesReadDecision } from './guides-read.ts';
@@ -102,6 +102,26 @@ function resolveEnv(deps: CliDeps): ResolvedEnv {
   return { cwd, readFile, warn, verifyDescriptor: verifyDescriptorFn, realpath };
 }
 
+// ── whole-run budget (§F7/BUG-05) ───────────────────────────────────────────────
+
+// The deadline for a fix verb — everything EXCEPT select-worktree, the run's OWN creation
+// point, which always gets the full configured budget for a brand-new run. select-worktree
+// stamps `budget_seconds`/`expires_at` onto the descriptor right after creating it
+// (`stampRunBudget`, called from selectWorktreeCmd below); every later verb is its OWN CLI
+// process, so recomputing `createDeadline(config.budget.seconds)` fresh here every time would
+// silently restart a full budget per verb instead of draining ONE whole-run ceiling — the bug.
+// When the descriptor carries no `expires_at` (written before this fix, or no run-worktree at
+// all — review-only, or the identity gate below is about to reject anyway), this falls back to
+// the full configured budget so an old/foreign descriptor never breaks a verb outright. Uses the
+// content-only `readDescriptor` (no identity check — identityGate re-verifies identity/binding
+// right after); a malformed descriptor propagates the same way `classify` already lets it
+// (uncaught -> runCli's §2.4 boundary).
+function verbDeadline(cwd: string, budgetSeconds: number): Deadline {
+  const descriptor = readDescriptor(cwd);
+  if (descriptor?.expires_at === undefined) return createDeadline(budgetSeconds);
+  return createDeadline((Date.parse(descriptor.expires_at) - Date.now()) / 1000);
+}
+
 // ── Fix-verb identity gate (Phase 5 §5.2) ──────────────────────────────────────
 
 // The verified-run handle a fix verb needs after the identity gate passes.
@@ -123,6 +143,12 @@ interface IdentityFail {
 // with nothing mutated. readFindings may throw on a malformed file -> the runCli
 // boundary turns it into a §2.4 machine error.
 function identityGate(env: ResolvedEnv, verb: string, findingsPath: string, deadline: Deadline): IdentityOk | IdentityFail {
+  // BUG-05: the whole-run budget may already be spent by the time a LATER verb's process
+  // starts (verbDeadline computed it from the descriptor's stamped expires_at) — check it
+  // BEFORE this gate's own git spawns, the ONE chokepoint every fix verb routes through, so an
+  // exhausted run aborts loudly here instead of quietly proceeding on whatever a degenerate
+  // near-zero spawn timeout happens to let through.
+  deadline.checkpoint(verb);
   const verdict = env.verifyDescriptor(env.cwd, deadline);
   if (!verdict.ok) {
     return {
@@ -319,6 +345,11 @@ function classify(rest: string[], deps: CliDeps): number {
   }
   const env = resolveEnv(deps);
   const config = loadConfig(resolve(env.cwd, 'quality.json'));
+  // §F7/BUG-05: classify is a whole-run verb (its own process) that MUTATES findings, so it must
+  // honour the REMAINING run budget too — a sequence of verbs cannot exceed the one whole-run
+  // ceiling (the doc's classifyAfterBudgetExpired repro). Review-only (no descriptor) falls back to
+  // the full budget, so the checkpoint is a no-op there.
+  verbDeadline(env.cwd, config.budget.seconds).checkpoint('classify');
   const set = buildSet(env, config);
   // Schema-v2 integration (W1 API): classify + bind in one CAS write through the sole mutator.
   // The unbound->bound transition needs the run descriptor when cwd is a run worktree (review-only
@@ -370,9 +401,11 @@ function commitSliceCmd(rest: string[], deps: CliDeps): number {
   // §5.0: fix-mode preflight AFTER argv/usage validation, BEFORE the engine. Refuses (EXIT_PREFLIGHT)
   // unless fix-mode is enabled + allowed + the guides are available.
   const config = loadConfig(resolve(env.cwd, 'quality.json'));
-  // §F7 the ONE run deadline, created right after argv/config validation (before preflight/identity)
-  // and reused by the engine context, so identity + engine git spawns share one bounded budget.
-  const deadline = createDeadline(config.budget.seconds);
+  // §F7/BUG-05 the ONE run deadline: the REMAINING whole-run budget (from the descriptor's
+  // stamped expires_at, falling back to the full config when absent), created right after
+  // argv/config validation (before preflight/identity) and reused by the engine context, so
+  // identity + engine git spawns share one bounded budget.
+  const deadline = verbDeadline(env.cwd, config.budget.seconds);
   const pfExit = preflightFail(config, env, 'commit-slice', deps);
   if (pfExit !== undefined) return pfExit;
   // §5.2 identity gate BEFORE any mutation: the worktree matches the run + findings are bound to it.
@@ -428,8 +461,15 @@ function report(rest: string[], deps: CliDeps): number {
   // writes only on `clean`). The scanner resolves its wrapper under this repo/worktree root.
   const body = renderReport(findingsFile);
   const scanResult = createSecretScanner({ cwd: () => env.cwd })(body);
+  // BUG-11: hand the writer the TRUE repo root + the STILL-relative reportsDir (config.ts now
+  // rejects an escaping `paths.reports` at load time too), exactly like runner/src/report.ts's
+  // own writeReport(root, reportsPath) call — never a pre-resolved absolute reports directory
+  // used as its OWN confinement root, which made the confinement check tautological (a
+  // directory is always "within itself") and let a `../` or symlinked-ancestor `paths.reports`
+  // write the report outside the repo.
   const result = writeReport(findingsFile, {
-    reportsDir: resolve(env.cwd, config.reportsDir),
+    repoRootAbs: env.realpath(env.cwd),
+    reportsDir: config.reportsDir,
     scanResult,
   });
   if (result.machineError !== undefined) {
@@ -469,13 +509,19 @@ function selectWorktreeCmd(rest: string[], deps: CliDeps): number {
   const config = loadConfig(resolve(env.cwd, 'quality.json'));
   const pfExit = preflightFail(config, env, 'select-worktree', deps);
   if (pfExit !== undefined) return pfExit;
-  // The ONE monotonic run deadline (§0) — bounds every git spawn inside the selector.
+  // The ONE monotonic run deadline (§0) — bounds every git spawn inside the selector. This is the
+  // run's CREATION point, so unlike every other verb (verbDeadline) it always gets the FULL
+  // configured budget, never a "remaining" fraction.
   const deadline = createDeadline(config.budget.seconds);
   // The slug was already sanitized above, so selectWorktree's re-sanitize cannot throw here.
   const result = selectWorktree(slug, { ...realWorktreeDeps(env.cwd), deadline });
   if (result.machineError !== undefined) {
     deps.stderr(`${JSON.stringify({ error: result.machineError })}\n`);
   } else if (result.mode !== undefined && result.worktree !== undefined) {
+    // §F7/BUG-05: stamp the whole-run budget onto the descriptor NOW, in the same run-creation
+    // step, so every later verb (its own separate CLI process) can compute how much is actually
+    // left instead of restarting a fresh `config.budget.seconds` window each time.
+    stampRunBudget(result.worktree, config.budget.seconds);
     const branch = result.branch !== undefined ? ` ${result.branch}` : '';
     deps.stdout(`${result.mode} ${result.worktree}${branch}\n`);
   }
@@ -500,8 +546,9 @@ function handoffCmd(rest: string[], deps: CliDeps): number {
   // §5.0 fix-mode preflight lives at the cli edge ONLY — handoff.ts itself still reads NO config
   // (that invariant is preserved by keeping this gate out of the module).
   const config = loadConfig(resolve(env.cwd, 'quality.json'));
-  // §F7 the ONE run deadline, bounding the identity gate + the read-only handoff git spawns.
-  const deadline = createDeadline(config.budget.seconds);
+  // §F7/BUG-05 the ONE run deadline (the REMAINING whole-run budget), bounding the identity gate
+  // + the read-only handoff git spawns.
+  const deadline = verbDeadline(env.cwd, config.budget.seconds);
   const pfExit = preflightFail(config, env, 'handoff', deps);
   if (pfExit !== undefined) return pfExit;
   // §5.2 identity gate BEFORE the completeness decision; the gate reads the findings once and hands
@@ -547,7 +594,8 @@ function selfReviewCmd(rest: string[], deps: CliDeps): number {
   }
   const env = resolveEnv(deps);
   const config = loadConfig(resolve(env.cwd, 'quality.json'));
-  const deadline = createDeadline(config.budget.seconds);
+  // §F7/BUG-05 the ONE run deadline — the REMAINING whole-run budget, not a fresh per-process one.
+  const deadline = verbDeadline(env.cwd, config.budget.seconds);
   const pfExit = preflightFail(config, env, 'self-review', deps);
   if (pfExit !== undefined) return pfExit;
   const identity = identityGate(env, 'self-review', findingsPath, deadline);
@@ -599,8 +647,9 @@ function verifyCmd(rest: string[], deps: CliDeps): number {
     );
     return EXIT_USAGE;
   }
-  // §F7 the ONE run deadline, created after all argv/usage validation, before preflight/identity.
-  const deadline = createDeadline(config.budget.seconds);
+  // §F7/BUG-05 the ONE run deadline (the REMAINING whole-run budget), created after all
+  // argv/usage validation, before preflight/identity.
+  const deadline = verbDeadline(env.cwd, config.budget.seconds);
   // §5.0 fix-mode preflight AFTER all argv/usage validation (valueless + invalid scope), BEFORE the
   // §5.2 identity gate and the spawn.
   const pfExit = preflightFail(config, env, 'verify', deps);
