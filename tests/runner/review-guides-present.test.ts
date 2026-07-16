@@ -73,3 +73,31 @@ test('the skill body enumerates every corpus file by name', () => {
   const missing = templateNames().filter((name) => !skillBody.includes(name));
   assert.deepEqual(missing, [], `corpus files the skill body never names: ${missing.join(', ')}`);
 });
+
+test('the skill body pins the mandatory/non-collapsible profile fan-out contract (ADR-018/016)', () => {
+  const skillBodyPath = fileURLToPath(
+    new URL('../../agents/skill-sources/deep-review-refactor.md', import.meta.url),
+  );
+  /* Collapse whitespace so prose line-wrapping never splits a phrase mid-match. */
+  const normalizedBody = readFileSync(skillBodyPath, 'utf8').replace(/\s+/g, ' ');
+  /* Each phrase is an invariant whose removal is a KNOWN silent-regression mode:
+     fan-out collapse, the per-profile-todo + coverage-matrix countermeasures, the
+     worker-route floor, the legacy-overlay broadcast, and the full-roster matrix.
+     The corpus-filenames-appear check above cannot catch these — those names also
+     live in the full-corpus cross-run roster, so the whole fan-out block could be
+     deleted and stay green without this test. */
+  const requiredPhrases = [
+    'MANDATORY and NON-COLLAPSIBLE',
+    'worker-route floor',
+    'one item per CORPUS profile route',
+    'broadcast into EVERY profile route',
+    'one row for EVERY corpus profile',
+  ];
+  const missing = requiredPhrases.filter((phrase) => !normalizedBody.includes(phrase));
+  assert.deepEqual(missing, [], `fan-out contract phrases missing from the skill body: ${missing.join(' | ')}`);
+  /* All three coverage-matrix states must be named so a 2-state or dropped-state
+     rewrite is caught. */
+  for (const matrixState of ['APPLIED', 'SKIPPED', 'GAP']) {
+    assert.ok(normalizedBody.includes(matrixState), `coverage-matrix state ${matrixState} missing from the skill body`);
+  }
+});

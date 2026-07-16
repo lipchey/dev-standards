@@ -68,66 +68,126 @@ decisions for itself.
   final report; the `classify` and `verify` gate calls, the fix-mode self-reviews
   (slice diff and whole fix-diff), and the `handoff` emit (landing itself stays a
   human's job, ADR-012).
-- **The one hard carve-out:** the mandated corpus READS stay in the main session
-  even when review work is fanned out - the ADR-016 gate is fail-closed on the
-  MAIN session's transcript (§Mandatory guide reads), so delegating them away
-  blocks the Stop hook. Worker briefs are narrower (one profile each, below),
-  but that never substitutes for the main session's own in-session reads.
+- **The anchor carve-out (ADR-016, amended 2026-07-16):** only the ANCHOR reads
+  stay gated on the main session - `review-contract.md` + the
+  `deep_review.required_reads` project docs - because the Stop hook is fail-closed
+  on the MAIN session's transcript for that set (§Mandatory guide reads). The
+  eight profile bodies are NOT main-gated: each is read by its profile route (a
+  worker route, or a main-session lens pass under the worker-route floor), and the
+  main session separately reads the profiles its OWN role needs - the fix-mode
+  self-reviews and any main-hosted route. Carrying all eight profile bodies in
+  every main session was context bloat once the fan-out became mandatory (owner
+  decision).
 
-**Profile fan-out (ADR-018) - the review's recall engine.** Scope permitting,
-dispatch ONE review worker per applicable lens profile, each briefed to read
-and apply exactly TWO corpus files - `review-contract.md` + its assigned
-`profile-<lens>.md` - plus the same-named consumer overlay if one exists.
-Narrow, self-contained briefs are the point: per-rule attention collapses when
-one worker carries the whole corpus. Rules:
+**Profile fan-out (ADR-018) - the review's recall engine. MANDATORY and
+NON-COLLAPSIBLE.** Every applicable lens profile gets its own **profile route** -
+either a dedicated review worker (the default host) OR, when no worker route is
+available, a main-session lens pass over that one profile. A route is briefed to
+read and apply its two corpus files - the contract `review-contract.md` and its
+assigned `profile-<lens>.md` - EACH with its same-named consumer overlay if one
+exists (the contract overlay carries any repo extension of the worker/route
+obligations; the profile overlay extends that lens). Narrow, self-contained routes are the point: per-rule attention collapses
+when one route carries the whole corpus. The Codex cross-run (§Run setup) is
+ADDITIONAL to the fan-out, never a substitute: one full-corpus pass, by any
+model, does NOT discharge the per-profile obligation. Rules:
 
-- A profile whose conditionality banner rules the scope out (e.g. security with
-  no trust boundary in scope) may be skipped - record the skip and its reason
-  in the report; it is part of the coverage accounting, not silent.
-- During the migration window, any consumer overlay whose name matches NO
-  profile (a legacy old-guide name) is broadcast into EVERY profile worker's
-  brief - an unmatched overlay has no owning worker until the consumer re-keys
-  it; the broadcast makes that safe and becomes a no-op once re-keyed.
+- The fan-out does not collapse. What is forbidden is an UNDIFFERENTIATED pass -
+  merging every profile into one worker, or letting the full-corpus Codex
+  cross-run or a single main-session sweep stand in for the per-lens routes.
+  Scope size changes only HOW you host the routes (a worker each, or a
+  main-session lens pass each under the worker-route floor), never WHETHER each
+  applicable profile is applied to saturation with its own coverage row. FIRST
+  action of the review phase, both modes: the pass's initial `TodoWrite`
+  (§Mandatory guide reads) additionally carries one item per CORPUS profile route
+  AND one for the coverage-matrix merge, each marked done only after that route
+  returns / the matrix is assembled - materializing the fan-out as tracked todos
+  is what stops it being silently collapsed under laziness or budget pressure, the
+  same failure the guide-read todos prevent.
+- A profile route is skipped ONLY when EVERY section of that profile is
+  inapplicable to the scope by the profile's own conditionality banner (e.g. the
+  security profile with no trust boundary anywhere in scope). A banner that rules
+  out only a SUBSECTION is not a skip: "no bounded contexts" drops the DDD
+  subsection, but the architecture profile still runs its unconditional baseline
+  structural checks. Record every skip and its banner reason as that profile's
+  matrix row. "Small scope", "looks clean", and budget pressure are NOT skip
+  reasons: a small scope means a fast fan-out, not a collapsed one.
+- Worker-route floor: when no external worker route is available (headless, no
+  delegation launcher, workers declined), each profile route becomes a
+  main-session lens pass - the main session applies that ONE profile to
+  saturation and records its coverage row, one profile at a time. That is still
+  the fan-out (per-profile, differentiated), never a single all-profiles sweep.
+  Delegation is the default HOST for a route; it is not what makes the fan-out
+  required.
+- During the migration window, any consumer overlay whose name matches NO profile
+  (a legacy old-guide name) is broadcast into EVERY profile route's brief - an
+  unmatched overlay has no owning route until the consumer re-keys it; the
+  broadcast makes that safe and becomes a no-op once re-keyed.
 - v1 fan-out runs on EXTERNAL workers (separate runtimes the Stop/SubagentStop
-  hooks never see - the same category as the Codex cross-run). In-session
-  Agent-tool fan-out under an attributed pass stays all-guides until a
-  worker-scoped required set is designed (deferred, ADR-018).
+  hooks never see - the same category as the Codex cross-run), or on main-session
+  routes under the worker-route floor. Either way the per-profile reads are NOT
+  gated by the ADR-016 Stop hook, which after the 2026-07-16 rescope anchors on
+  `review-contract.md` + the project reads only (§Mandatory guide reads); a
+  worker-scoped required set is deferred (ADR-018). That deferral is a gap in
+  ENFORCEMENT only, never a licence to skip the fan-out: v1 relies on the
+  tracked-todo countermeasure and the required coverage matrix below until the
+  in-session gate lands.
 - The main session MERGES per-profile findings with provenance labels,
   adversarially verifies them (same doctrine as the Codex cross-run: verdict +
-  evidence, never "the worker said so"), and assembles a **coverage matrix** -
-  in-scope files x profiles - from the workers' `COVERAGE` sections
-  (`review-contract.md` obligates them). Any hole is re-dispatched or recorded
-  as an explicit gap; the matrix (or its gaps) goes in the report.
+  evidence, never "the route said so"), and assembles the **coverage matrix** -
+  in-scope files x profiles - from the routes' `COVERAGE` sections (every profile
+  route - a worker or, under the floor, a main-session lens pass - owes a
+  `COVERAGE` section; the skill imposes this on ALL routes, mirroring
+  `review-contract.md`'s worker obligation so a main-hosted route is bound too). The coverage matrix is a REQUIRED report
+  section carrying one row for EVERY corpus profile (never only the "applicable"
+  ones), each in exactly one state: `APPLIED` + its route/provenance, `SKIPPED` +
+  the banner reason that ruled out every section, or `GAP` + the operational
+  blocker (a `NOT REVIEWED` budget/coverage hole). A report that omits the matrix,
+  or shows fewer than the full profile roster, is itself the visible evidence of a
+  collapsed fan-out. Any `GAP` is re-dispatched or recorded as an explicit,
+  risk-priced gap.
 
 A worker's output is INPUT to the main session's judgment, never the verdict: the
 merge, the verdicts, and the `handoff` are always the main session's own.
 
 ## Mandatory guide reads - enforced by a hard gate (ADR-016)
 
-Every pass MUST actually open (with the Read tool) each mandated guide before it
-concludes. This is not advisory: a `Stop`/`SubagentStop` hook parses the session
-transcript and BLOCKS the pass from ending until the transcript shows a
-successful Read of every required file. The mandated set:
+Every pass MUST actually open (with the Read tool) each mandated ANCHOR guide
+before it concludes. This is not advisory: a `Stop`/`SubagentStop` hook parses the
+session transcript and BLOCKS the pass from ending until the transcript shows a
+successful Read of every required file. The mandated ANCHOR set (amended
+2026-07-16 - the eight profile lens bodies moved to their profile routes,
+§Orchestration, so the main session is no longer forced to carry the whole corpus
+on every run):
 
-- the nine corpus files under
-  `vendor/dev-standards/agents/review-guide-templates/` - `review-contract.md`
-  plus the eight `profile-*.md` lens files (read in place - never seeded into the
-  consumer; `TRACEABILITY.md` in the same dir is the loader-excluded canary
-  registry, NOT a mandated read - do not quote it into worker briefs),
-- every `*.md` in the overlay dir (`deep_review.guides_dir`, default
-  `.claude/review-guides/`), and
+- the corpus CONTRACT `review-contract.md` under
+  `vendor/dev-standards/agents/review-guide-templates/` (read in place - never
+  seeded into the consumer). The eight `profile-*.md` lens files in the same dir
+  are NOT main-gated - each is read by its profile route; `TRACEABILITY.md` there
+  is the loader-excluded canary registry, never a mandated read,
+- the `review-contract.md` overlay in the overlay dir (`deep_review.guides_dir`,
+  default `.claude/review-guides/`) if present - a `profile-*` or other overlay is
+  profile-route material, NOT main-gated, but the AVAILABILITY of every listed
+  overlay stays fail-closed (an unreadable one blocks the pass), and
 - every `deep_review.required_reads` entry in `quality.json` (the project's
   must-read docs - typically `.claude/project-facts.md`,
   `.claude/code-conventions.md`, `.claude/CHECKLIST.md`).
 
-FIRST action of any pass, both modes: `TodoWrite` one item per mandated file
-above, and mark each done ONLY after you have Read it. Materializing the list as
-tracked todos is the countermeasure to the exact failure this gate exists to
-catch - judging the code "clean enough" and skipping the guides. Reading the
-generic bodies is the PRIMARY source of the review's substance; the overlays are
-thin repo deltas; the process is scope-invariant - you read the guides EVERY
-run, not only when the diff "looks" like it needs them. A partial read (one
-stack-routing section of a profile) satisfies the gate for that file.
+(The full nine-file corpus is still LOADED as a deployment-integrity check - a
+missing or blank profile still fails preflight - it is just no longer a
+main-session required READ.)
+
+FIRST action of any pass, both modes: `TodoWrite` one item per mandated anchor
+file above PLUS the per-CORPUS-profile route and the coverage-matrix items
+(§Orchestration), and mark each done ONLY after you have Read it / that route
+returns. Materializing the list as tracked todos is the countermeasure to the
+exact failure this gate exists to catch - concluding "clean enough" and skipping
+the reads or the fan-out. `review-contract.md` fixes the output contract; each
+profile body is read by its route, where per-lens attention is engineered; the
+process is scope-invariant - you run the anchor reads and the full fan-out EVERY
+run, not only when the diff "looks" like it needs them. Only the ANCHOR is gated
+(§Mandatory guide reads), so a partial read of `review-contract.md` satisfies the
+gate for that file; profile-route reads are NOT inspected by the Stop hook - they
+are discharged via the per-profile todos and the coverage matrix.
 
 **The guarantee, stated honestly.** Activation is model-independent: the harness
 stamps `attributionSkill` on the transcript, not the model. Once a pass is
@@ -146,13 +206,15 @@ consecutive Stop-blocks, so a determined skip becomes LOUD (8 recorded blocks)
 rather than impossible. The realistic failure - skipping a guide once - is caught
 on the first block, with the unread files named.
 
-**Delegated review still requires the MAIN session to read.** A profile
-fan-out worker is briefed with `review-contract.md` + its ONE profile
-(§Orchestration), and an external cross-run reads the full corpus in-band. But
-the guarantee rests on the STRICT main gate: the main session's own transcript
-must show the reads even when the reviewing was delegated, or the main `Stop`
-hook blocks. So read the whole corpus in the main session regardless of any
-fan-out.
+**Delegated review still requires the MAIN session to read the ANCHOR.** A
+profile route is briefed with `review-contract.md` + its ONE profile
+(§Orchestration), and an external cross-run reads the full corpus in-band. The
+guarantee rests on the STRICT main gate: the main session's own transcript must
+show the ANCHOR reads (`review-contract.md` + the project `required_reads`) even
+when the profile routes are delegated, or the main `Stop` hook blocks. Read the
+anchor in the main session regardless of any fan-out; the eight profile bodies
+are read by their routes (and by the main session for the fix-mode self-reviews
+or a main-hosted route), not gated on the main transcript.
 
 **Escape hatch.** `DEEP_REVIEW_GUARD_OFF=1` disables the gate unconditionally
 (the pressure valve for a gate bug that would otherwise brick sessions); ADOPTION
@@ -189,10 +251,13 @@ report-only), and say so in the report.
    The prompt file instructs Codex to run this skill's review-only pass
    independently. Codex is NOT reached by the ADR-016 Stop-gate (a separate
    runtime; its file reads never enter the Claude transcript), so the prompt
-   MUST carry the identical obligation in-band: enumerate EXPLICITLY, by path,
-   every mandated guide and require Codex to actually OPEN and read each (never
-   reason from memory) AND follow it. The mandated set is the SAME one the gate
-   binds the Claude side to:
+   MUST carry the full obligation in-band: enumerate EXPLICITLY, by path, every
+   corpus guide and require Codex to actually OPEN and read each (never reason
+   from memory) AND follow it. The Codex cross-run is an independent FULL review,
+   so it reads the WHOLE corpus below - deliberately MORE than the main-session
+   anchor gate (§Mandatory guide reads), which after the 2026-07-16 rescope binds
+   the Claude side to `review-contract.md` + the project reads only. The set
+   Codex reads:
    - **Project must-reads** — every `deep_review.required_reads` entry in
      `quality.json` (typically `.claude/project-facts.md`,
      `.claude/code-conventions.md`, `.claude/CHECKLIST.md`).
@@ -288,7 +353,10 @@ Produce findings; change nothing. The runtime is six steps, in order:
    adoption, safety, or behavior; P2 is concrete correctness or maintainability;
    P3 is improvement or clarity - each with file/line, impact, risk level, and a
    recommended smallest refactor slice. A finding that needs redesign is described
-   as a plan, not an edit.
+   as a plan, not an edit. The report also carries the REQUIRED coverage matrix
+   (§Orchestration profile fan-out) - one row for EVERY corpus profile, each
+   `APPLIED` + route/provenance, `SKIPPED` + banner reason, or `GAP` + blocker -
+   so a collapsed or silently-skipped fan-out is visible on the face of the report.
 6. Stop after findings. No edits, no commits. (One exception: Run setup
    captured explicit fix consent - then the run continues into
    `review-and-refactor` on the merged, verified set per §Run setup step 5.)
@@ -352,7 +420,14 @@ classification, status, sha) across the whole run.
 5. `report` writes `deep-review-<date>.md` under `paths.reports` (default
    `reports/quality/`), metadata-only and
    secret-scanned: the fixed slices with their SHAs, the rejected buckets
-   (no-touch, needs-plan, fix-failed), and the plan for the latter two.
+   (no-touch, needs-plan, fix-failed), and the plan for the latter two. This CLI
+   artifact is finding-lifecycle ONLY (`renderReport` over the findings file); it
+   does NOT carry the coverage matrix, which has no field in `FindingsFileV2`. The
+   phase-1 REQUIRED coverage matrix (§Orchestration profile fan-out - one row per
+   corpus profile, `APPLIED`/`SKIPPED`/`GAP`) ships in the MAIN session's merged
+   review output presented with the `handoff`, exactly as in review-only mode: the
+   review phase ran in fix mode too, so its per-profile accounting is delivered
+   with the run, not baked into this generated file.
 6. `handoff` emits the ADR-012 landing instruction once verify is green and no
    blocking findings remain - it lands nothing itself (see below); a human
    opens the PR from there.

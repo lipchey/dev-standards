@@ -57,7 +57,10 @@ export function runPreflight(
 
   const guideLoad = deps.loadGuides(overlayDirectory);
   if (!guideLoad.ok) {
-    return fail(verb, `canonical guide templates unavailable: ${guideLoad.templatesDir}`);
+    return fail(
+      verb,
+      guideLoad.reason ?? `canonical guide templates unavailable: ${guideLoad.templatesDir}`,
+    );
   }
   return { ok: true, guides: guideLoad.guides };
 }

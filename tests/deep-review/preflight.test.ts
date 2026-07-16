@@ -177,6 +177,24 @@ test('in-root overlay path spellings pass the lexical guard', () => {
   });
 });
 
+test('runPreflight surfaces the loader reason for a listed-but-unreadable overlay', () => {
+  /* preflight.ts must FORWARD guideLoad.reason, not fall back to the generic
+     "canonical guide templates unavailable" message — otherwise a reviewer
+     debugging an unreadable repo overlay is misdirected to the package dir.
+     Pins the shared fail-closed point through runPreflight, not loadReviewGuides
+     directly (a revert of the reason-forwarding leaves the earlier direct-load
+     test green). */
+  const overlayReason = 'repo overlay "profile-security.md" is listed but unreadable: EACCES';
+  const deps: Partial<PreflightDeps> = {
+    loadGuides: () => ({ ok: false, templatesDir: '/templates', reason: overlayReason }),
+  };
+  const outcome = runPreflight(config(), 'verify', '/overlay', deps);
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) return;
+  assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
+  assert.equal(outcome.machineError.message.includes(overlayReason), true, outcome.machineError.message);
+});
+
 test('all gated verbs fail closed when canonical guides are missing', () => {
   for (const verb of GATED_VERBS) {
     const outcome = runPreflight(config(), verb, '/missing-overlay', {
@@ -273,4 +291,20 @@ test('an overlay enumeration error other than ENOENT fails the guide load closed
     readFile: () => 'body',
   });
   assert.equal(enoent.ok, true);
+});
+
+test('a LISTED overlay whose read fails makes the guide load fail closed (shared preflight+gate point)', () => {
+  /* After the anchor rescope a non-anchor overlay is no longer a main-required read, so
+     the only thing keeping an unreadable one from silently vanishing is this load failing
+     closed — and preflight (which loads the same way) inherits it. */
+  const outcome = loadReviewGuides('/overlay', {
+    templatesDir: '/templates',
+    listMarkdownFiles: (directory) => (directory === '/templates' ? [...CORPUS_NAMES] : ['profile-security.md']),
+    readFile: (filePath) => {
+      if (filePath.startsWith('/overlay')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      return 'body';
+    },
+  });
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.match(outcome.reason ?? '', /listed but unreadable/);
 });

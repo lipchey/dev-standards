@@ -14,7 +14,12 @@
 
 import path from 'node:path';
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
-import { loadReviewGuides, NON_GUIDE_TEMPLATE_NAMES, REVIEW_GUIDE_TEMPLATES_DIR } from './guides.ts';
+import {
+  loadReviewGuides,
+  NON_GUIDE_TEMPLATE_NAMES,
+  REVIEW_CONTRACT_TEMPLATE_NAME,
+  REVIEW_GUIDE_TEMPLATES_DIR,
+} from './guides.ts';
 import type { ReviewGuideLoadOutcome } from './guides.ts';
 import type { DeepReviewConfig } from './config.ts';
 import { parseTranscript } from './transcript.ts';
@@ -23,6 +28,18 @@ import type { TranscriptReadEvent } from './transcript.ts';
 /* The harness stamps this exact value on assistant lines while the skill is active
    (transcript.ts reads it). It is the model-INDEPENDENT activation signal. */
 export const DEEP_REVIEW_ATTRIBUTION_SKILL = 'deep-review-refactor';
+
+/* The MAIN-session anchor read set (ADR-016, amended 2026-07-16): only the corpus
+   CONTRACT file is a main-session required read. The eight profile lens bodies are
+   profile-route reads (each fan-out worker reads its assigned profile; a main-hosted
+   fallback / fix-mode self-review reads the profiles its role needs) — the gate no
+   longer forces all eight into every main session, which was context bloat once the
+   fan-out became mandatory. Overlay AVAILABILITY stays fail-closed for ALL overlays
+   (guides.ts), and the full nine-file corpus stays a loadReviewGuides deployment check;
+   only the main-session READ-PROOF requirement shrinks to this anchor. */
+const MAIN_SESSION_REQUIRED_TEMPLATE_NAMES: ReadonlySet<string> = new Set([
+  REVIEW_CONTRACT_TEMPLATE_NAME,
+]);
 
 /* The required set could not be established: a broken deployment (guide templates
    missing/blank), an overlay directory that exists but is unreadable, or a configured
@@ -102,10 +119,14 @@ function repoRelativeTail(cwd: string, absolutePath: string): string {
   return path.relative(cwd, absolutePath).split(path.sep).join('/');
 }
 
-/* Every repo-relative anchor tail this pass must have READ: the package guide templates
-   (always required, strict — a missing/blank template fails closed), every markdown file
-   in the repo overlay (strict — a listed-but-unreadable overlay dir fails closed), and
-   every configured project read (fails closed when the file does not exist). */
+/* Every repo-relative anchor tail this pass must have READ (ADR-016, 2026-07-16 rescope):
+   ONLY the ANCHOR template `review-contract.md` and its same-named overlay, plus every
+   configured project read (fails closed when the file does not exist). The other eight
+   profile templates and non-anchor overlays are NOT required reads here — they are still
+   LOADED for the corpus-availability check (loadGuides below fails closed on a missing/blank
+   template or a listed-but-unreadable overlay), but read-proof for them is a profile-route
+   concern, not a main-session gate obligation. Availability is enforced for ALL; read-proof
+   only for the anchor. */
 export function requiredReadSet(
   cwd: string,
   config: DeepReviewConfig,
@@ -140,13 +161,21 @@ export function requiredReadSet(
 
   const outcome = loadGuides(overlayDirectory);
   if (!outcome.ok) {
-    throw new GuidesUnavailable(`canonical guide templates unavailable: ${outcome.templatesDir}`);
+    throw new GuidesUnavailable(
+      outcome.reason ?? `canonical guide templates unavailable: ${outcome.templatesDir}`,
+    );
   }
   const anchorPrefix = templateAnchorPrefix(templatesDir);
   const tails = new Set<string>();
   for (const guide of outcome.guides) {
     for (const source of guide.sources) {
-      if (source.kind === 'package-template') {
+      /* Only the anchor template (review-contract.md) is a main-session required read;
+         the profile bodies are profile-route reads, still LOADED above for the corpus
+         availability check but no longer gated on the main transcript. */
+      if (
+        source.kind === 'package-template' &&
+        MAIN_SESSION_REQUIRED_TEMPLATE_NAMES.has(path.basename(source.path))
+      ) {
         tails.add(path.posix.join(anchorPrefix, path.basename(source.path)));
       }
     }
@@ -158,6 +187,10 @@ export function requiredReadSet(
       /* Belt-and-braces vs injected listers: the reserved registry name is filtered
          at the source (realListOverlay) AND here. */
       if (NON_GUIDE_TEMPLATE_NAMES.has(name)) continue;
+      /* Only the anchor overlay (review-contract) is a main-session required read; a
+         profile or legacy overlay is profile-route material. Its AVAILABILITY is still
+         fail-closed — an unreadable one made loadGuides return !ok above. */
+      if (!MAIN_SESSION_REQUIRED_TEMPLATE_NAMES.has(name)) continue;
       tails.add(repoRelativeTail(cwd, path.join(overlayDirectory, name)));
     }
   }

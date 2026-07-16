@@ -59,10 +59,12 @@ export interface DeepReviewConfig {
   verifyEntry: string;
   reportsDir: string;
   /* Repo-relative project files the guides-read gate additionally requires the reviewer to
-     open (on top of the always-required package guide templates + overlay). Defaults to []:
-     a fresh consumer is only guaranteed the submodule guides, so a non-empty engine default
-     would demand reading files an adopter may not have yet. The consumer seed populates this
-     with files that repo actually ships (project-facts / code-conventions / CHECKLIST). */
+     open (on top of the ANCHOR: the review-contract template + its overlay; the profile
+     bodies are profile-route reads since the 2026-07-16 rescope, not main-gated). Defaults
+     to []: a fresh consumer is only guaranteed the submodule contract, so a non-empty engine
+     default would demand reading files an adopter may not have yet. The consumer seed
+     populates this with files the repo actually ships (project-facts / code-conventions /
+     CHECKLIST). */
   requiredReads: string[];
 }
 

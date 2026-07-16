@@ -291,7 +291,10 @@ A model-independent hard gate, shipped in dev-standards so every consumer inheri
    (a listed-but-unreadable overlay fails closed; ENOENT = no overlay is fine) ∪
    every `deep_review.required_reads` entry (a configured read that does not exist
    fails closed). Paths are matched by repo-relative TAIL so a worktree root and the
-   main checkout satisfy the same guide.
+   main checkout satisfy the same guide. [SUPERSEDED 2026-07-16, see Amendment
+   below: the required-READ set is now the ANCHOR only — `review-contract.md` + its
+   overlay + `required_reads`; the profile bodies are profile-route reads. Package
+   availability (all nine templates) and overlay availability stay fail-closed.]
 3. **Wired as `Stop` + `SubagentStop` hooks** calling `scripts/deep-review
    guides-read --hook-stdin`. The hook blocks (`{"decision":"block","reason":…}`)
    until every required file is proven read. STRICT main-session rule: the main
@@ -338,6 +341,39 @@ A model-independent hard gate, shipped in dev-standards so every consumer inheri
   (`scripts/merge-deep-review-hooks.mjs`, never copy-if-absent — a consumer's
   existing settings must survive) and sets `required_reads` in the starter manifest.
   `seed-consumer.sh --check` fails if the hooks are not wired.
+
+### Amendment 2026-07-16 — the main-session read set shrinks to the ANCHOR (owner decision)
+
+Once the profile fan-out became MANDATORY (ADR-018 amendment, same date), forcing
+the main session to ALSO Read all eight profile lens bodies on EVERY run was pure
+context bloat: the routes carry the profiles; the main session only orchestrates,
+merges, and renders verdicts. So the required-read set on the MAIN transcript is
+rescoped to the ANCHOR — `review-contract.md` (the corpus contract) + its overlay
+if present + the `deep_review.required_reads` project docs. The eight `profile-*`
+bodies and their overlays become profile-route reads (each fan-out worker reads its
+assigned profile; a main-hosted route or a fix-mode self-review reads the profiles
+that role needs), no longer gated on the main transcript.
+
+Precise tradeoff (what actually changes):
+
+- **Package availability stays fail-closed.** `loadReviewGuides` still loads all
+  nine templates (a missing/blank one fails preflight), and a LISTED overlay that
+  is unreadable now fails closed IN the loader (`guides.ts`) — the single point
+  covering both the gate and fix-mode preflight, since the rescope removed the
+  gate's separate per-overlay read requirement that used to catch it.
+- **Removed:** machine proof that the MAIN session Read each profile BODY. ADR-016
+  only ever proved successful main-session READS, never that a profile was APPLIED
+  to any file — profile application was ALWAYS convention (the fan-out). This
+  removes a read-proof, not an application guarantee.
+- **The application guarantee** (each profile applied to saturation) rests on the
+  mandatory fan-out's tracked-todo countermeasure + the REQUIRED coverage matrix,
+  and stays convention until the deferred worker-scoped gate (ADR-018) lands.
+
+Engine: `guides-read.ts` `MAIN_SESSION_REQUIRED_TEMPLATE_NAMES = {review-contract.md}`
+filters the required-read tails; `guides.ts` fails the load closed on an unreadable
+listed overlay; `preflight.ts` surfaces that reason. The consumer hook +
+`quality.json` need no change (the verb computes the set from the engine). Tests
+updated (`guides-read.test.ts`, `preflight.test.ts`).
 
 ---
 
@@ -451,10 +487,13 @@ which files; verification filters false positives while nothing measures recall.
    `TRACEABILITY.md` carries the migration table (every old normative section →
    its new home) and the BLINDED canary registry (canaries never appear in
    worker-facing profile bodies). The main session's ADR-016 obligations are
-   unchanged (it reads contract + all profiles); the skill's worker-briefing rule
-   changes to contract + assigned profile; v1 fan-out runs on external workers
-   (outside the Stop/SubagentStop gate, same category as the Codex cross-run) —
-   a worker-scoped required set for in-session subagents is deferred.
+   unchanged (it reads contract + all profiles [SUPERSEDED 2026-07-16: the main
+   session reads only the ANCHOR — contract + project reads; the profile bodies
+   become profile-route reads — see the ADR-016 Amendment 2026-07-16 and the
+   fan-out Amendment below]); the skill's worker-briefing rule changes to contract
+   + assigned profile; v1 fan-out runs on external workers (outside the
+   Stop/SubagentStop gate, same category as the Codex cross-run) — a worker-scoped
+   required set for in-session subagents is deferred.
 4. **Recall ratchet.** The gate-miss ledger (template + the canonical
    `effectiveness-plan.md` §5 definition) gains the `judgment-missed` class and
    `profile:<name>` fix route. Closing a judgment escape requires a canary entry
@@ -467,6 +506,38 @@ Amendment 2026-07-15 (owner decision): `profile-structure-and-dependencies.md`
 was split three ways so each worker owns one mandate with size and attention
 parity.
 
+Amendment 2026-07-16 (pilot evidence, ai-prompter apps/api run): the recall
+engine itself was skipped. A deep-review pass followed the ADR-016 guide-read
+gate to the letter (all guides read, materialized as todos) but COLLAPSED the
+profile fan-out into a single full-corpus Codex cross-run plus the main
+session's own pass - the enforced step held, the prose-only step decayed
+(exactly the ADR-018/ADR-019 failure mode, one level up). Root cause: the
+fan-out is unenforceable in v1 (external workers the Stop hook never sees) AND
+the skill body's soft wording ("scope permitting", a profile "may be skipped")
+gave a rationalization foothold for a small scope. Fix (skill body, this pin),
+refined by a Codex doc-review + Gate-P plan-critique:
+the fan-out is now MANDATORY and NON-COLLAPSIBLE; every applicable profile gets a
+**profile route** — a dedicated worker (default) OR a main-session lens pass over
+that one profile when no worker route exists (the worker-route floor is a route,
+so the headless case is literally compliant, not a contradiction). The Codex
+cross-run is explicitly ADDITIONAL, never a substitute. A profile route is
+skippable ONLY when EVERY section of that profile is inapplicable by its own
+conditionality banner ("no bounded contexts" drops the DDD subsection, NOT the
+architecture profile, which keeps its unconditional baseline checks; "small
+scope" / "looks clean" / budget are never skip reasons). The pass's FIRST-action
+`TodoWrite` carries one item per CORPUS profile route plus the coverage-matrix
+merge (the ADR-016 guide-read countermeasure, extended). The coverage matrix
+becomes a REQUIRED report section with one row for EVERY corpus profile in exactly
+one state — `APPLIED`+route, `SKIPPED`+banner reason, or `GAP`+operational blocker
+(`NOT REVIEWED`) — so a collapse or a missing profile is visible on the report's
+face. This lands together with the ADR-016 anchor rescope (same date): the main
+session no longer reads all profiles, so the fan-out is now the SOLE reader of the
+per-lens corpus — which makes its mandatory, tracked, matrix-accounted shape the
+load-bearing guarantee. The real in-session enforcement gate (a Stop hook parsing
+the coverage matrix) stays deferred — same register as the worker-scoped read set
+— so this amendment tightens the honest-limit reliance on prose until that gate
+lands.
+
 ### Consequences
 
 - The 20-comment miss class becomes 18 deterministic lint errors + 2 named
@@ -474,9 +545,11 @@ parity.
 - Review workers stop re-checking what gates own (the skill's
   deterministic-first rule already forbids duplicating a gate) and spend recall
   on judgment rules, one lens each, with coverage accounted per file × profile.
-- Legacy consumer overlays keep being read but lack a worker owner until
-  re-keyed — the skill broadcasts unmatched overlays to every profile worker
-  during the migration window.
+- Legacy consumer overlays lack a profile-route owner until re-keyed — the skill
+  broadcasts each unmatched overlay into every profile route's brief during the
+  migration window. A route is a worker or, under the worker-route floor, a
+  main-session lens pass (ADR-016 2026-07-16 rescope: profile bodies/overlays are
+  profile-route reads, no longer main-session-gated).
 
 ---
 

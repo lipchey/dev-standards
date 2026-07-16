@@ -88,7 +88,8 @@ platform-managed protections and signals that complement the repo-owned gates
 ## Per-project tuning — three legal surfaces
 
 1. **`quality.json`** — tiers, checks, budgets, filesets, `deep_review`.
-2. **`.claude/review-guides/`** — the seven canonical guides are read in place
+2. **`.claude/review-guides/`** — the nine-file corpus (`review-contract.md` +
+   eight `profile-*.md`) is read in place
    from the package; a same-named overlay may only **add/extend** a guide, and
    an extra `.md` adds a project-only guide. Overlays never override or delete a
    canonical rule. When a project rule genuinely diverges from a core guide,
@@ -115,10 +116,14 @@ explicit user consent** — never automatically.
 Adoption wires a hard gate: a `Stop` + `SubagentStop` hook in
 `.claude/settings.json` runs `scripts/deep-review guides-read --hook-stdin`, which
 BLOCKS a deep-review pass from concluding until the session transcript proves every
-mandated review guide was actually opened with a `Read` (the seven package
-templates, every `.claude/review-guides/` overlay, and every
-`deep_review.required_reads` entry). The starter sets `required_reads` to the three
-seeded instance docs. `seed-consumer.sh --check` fails if the hooks are not wired.
+mandated ANCHOR guide was actually opened with a `Read`. Since the 2026-07-16
+rescope (ADR-016 Amendment) the main-session anchor set is: the corpus contract
+`review-contract.md`, its `.claude/review-guides/` overlay if present, and every
+`deep_review.required_reads` entry — the eight `profile-*` lens bodies are read by
+the mandatory fan-out's profile routes, not gated on the main transcript (though
+the AVAILABILITY of every listed overlay stays fail-closed, and the full nine-file
+corpus still loads as a deployment check). The starter sets `required_reads` to the
+three seeded instance docs. `seed-consumer.sh --check` fails if the hooks are not wired.
 
 - The gate only fires for real deep-review sessions (the harness stamps the skill
   attribution); ordinary coding sessions are never blocked. Detection in v1 relies
@@ -186,5 +191,6 @@ never worked around in consumer code. Shared rules/guides are proposed via
   submodule SHA. The shims refuse to run a stale or mismatched bundle.
 - **Order is fixed:** submodule update → build → seed. The seeder runs after the
   build so the fast-tier `seed-review-guides.sh . --check` gate has real docs.
-- The **seven generic guides** are read in place from the package; the consumer
-  owns only additive overlays, and `.claude/review-guides/` may be empty.
+- The **nine corpus files** (`review-contract.md` + eight `profile-*.md`) are read
+  in place from the package; the consumer owns only additive overlays, and
+  `.claude/review-guides/` may be empty.

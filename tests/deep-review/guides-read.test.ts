@@ -17,7 +17,7 @@ import {
   DEEP_REVIEW_ATTRIBUTION_SKILL,
 } from '../../deep-review/src/guides-read.ts';
 import type { RequiredReadSetDeps } from '../../deep-review/src/guides-read.ts';
-import { REVIEW_GUIDE_TEMPLATES_DIR } from '../../deep-review/src/guides.ts';
+import { loadReviewGuides, REVIEW_GUIDE_TEMPLATES_DIR } from '../../deep-review/src/guides.ts';
 import type { DeepReviewConfig } from '../../deep-review/src/config.ts';
 import { runCli } from '../../deep-review/src/cli.ts';
 import type { CliDeps } from '../../deep-review/src/cli.ts';
@@ -158,10 +158,16 @@ test('parseTranscript on empty input yields no reads and no attribution', () => 
 
 // ── requiredReadSet (strict, fail-closed) ─────────────────────────────────────────
 
-test('requiredReadSet requires every package template as an anchored tail', () => {
+test('requiredReadSet requires ONLY the review-contract anchor template, not the profile bodies (ADR-016 2026-07-16 rescope)', () => {
   const tails = requiredReadSet('/repo', config(), isolatedDeps());
+  assert.equal(tails.includes(`${TEMPLATE_ANCHOR}/review-contract.md`), true, 'anchor must be main-required');
   for (const name of TEMPLATE_NAMES) {
-    assert.equal(tails.includes(`${TEMPLATE_ANCHOR}/${name}`), true, `missing tail for ${name}`);
+    if (name === 'review-contract.md') continue;
+    assert.equal(
+      tails.includes(`${TEMPLATE_ANCHOR}/${name}`),
+      false,
+      `${name} is a profile-route read, must NOT be main-required`,
+    );
   }
 });
 
@@ -174,6 +180,46 @@ test('requiredReadSet fails closed (GuidesUnavailable) when the templates are un
   assert.throws(
     () => requiredReadSet('/repo', config(), { loadGuides: () => ({ ok: false, templatesDir: '/broken' }), listOverlay: () => undefined, exists: () => true }),
     GuidesUnavailable,
+  );
+});
+
+test('loadReviewGuides fails closed (ok:false + reason) when a LISTED overlay is unreadable', () => {
+  /* The single fail-closed point for overlay AVAILABILITY (P1, 2026-07-16): after the
+     anchor rescope a non-anchor overlay is no longer a main-required read, so an
+     unreadable one must still be caught HERE or it vanishes silently from the corpus. */
+  const overlayDir = '/repo/.claude/review-guides';
+  const outcome = loadReviewGuides(overlayDir, {
+    templatesDir: REVIEW_GUIDE_TEMPLATES_DIR,
+    listMarkdownFiles: (dir) =>
+      dir === overlayDir
+        ? ['profile-security.md']
+        : fs
+            .readdirSync(dir, { withFileTypes: true })
+            .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+            .map((entry) => entry.name)
+            .sort(),
+    readFile: (filePath) => {
+      if (filePath.startsWith(overlayDir)) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      return fs.readFileSync(filePath, 'utf8');
+    },
+  });
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.match(outcome.reason ?? '', /listed but unreadable/);
+});
+
+test('requiredReadSet surfaces the overlay-unreadable reason, not the generic templates message', () => {
+  assert.throws(
+    () =>
+      requiredReadSet('/repo', config(), {
+        loadGuides: () => ({
+          ok: false,
+          templatesDir: '/x',
+          reason: 'repo overlay "profile-security.md" is listed but unreadable: EACCES',
+        }),
+        listOverlay: () => undefined,
+        exists: () => true,
+      }),
+    /overlay .* unreadable/,
   );
 });
 
@@ -196,21 +242,25 @@ test('requiredReadSet treats a missing overlay directory as no overlay (ENOENT i
   assert.equal(tails.some((tail) => tail.startsWith('.claude/review-guides/')), false);
 });
 
-test('requiredReadSet requires each existing overlay file and each configured required_read', () => {
+test('requiredReadSet requires the review-contract overlay + configured required_read, NOT a profile/extra overlay', () => {
   const tails = requiredReadSet('/repo', config({ requiredReads: ['.claude/CHECKLIST.md'] }), {
-    listOverlay: () => ['repo-extra.md'],
+    listOverlay: () => ['review-contract.md', 'profile-security.md', 'repo-extra.md'],
     exists: () => true,
   });
-  assert.equal(tails.includes('.claude/review-guides/repo-extra.md'), true);
+  /* Only the anchor overlay is a main-session read; profile/legacy overlays are
+     profile-route material (their availability is fail-closed in loadReviewGuides). */
+  assert.equal(tails.includes('.claude/review-guides/review-contract.md'), true);
   assert.equal(tails.includes('.claude/CHECKLIST.md'), true);
+  assert.equal(tails.includes('.claude/review-guides/profile-security.md'), false);
+  assert.equal(tails.includes('.claude/review-guides/repo-extra.md'), false);
 });
 
 test('requiredReadSet never requires a reserved-name overlay (TRACEABILITY.md)', () => {
   const tails = requiredReadSet('/repo', config(), {
-    listOverlay: () => ['TRACEABILITY.md', 'repo-extra.md'],
+    listOverlay: () => ['TRACEABILITY.md', 'review-contract.md'],
     exists: () => true,
   });
-  assert.equal(tails.includes('.claude/review-guides/repo-extra.md'), true);
+  assert.equal(tails.includes('.claude/review-guides/review-contract.md'), true);
   assert.equal(tails.includes('.claude/review-guides/TRACEABILITY.md'), false);
 });
 
@@ -336,6 +386,42 @@ test('an active pass that read every guide is ALLOWED', () => {
     deps: isolatedDeps(),
   });
   assert.equal(decision.kind, 'allow');
+});
+
+test('an active pass that read the anchor but NOT the profile bodies is ALLOWED (anchor rescope)', () => {
+  /* The core 2026-07-16 behavior change: reading review-contract.md (the anchor) satisfies
+     the main gate; the eight profile bodies are profile-route reads, not main-required. */
+  const id = 'anchor';
+  const text = [
+    assistantLine([{ id, filePath: guideRead('/repo', 'review-contract.md') }], DEEP_REVIEW_ATTRIBUTION_SKILL),
+    resultLine([{ id }]),
+  ].join('\n');
+  const decision = evaluateGuidesRead({
+    transcriptText: text,
+    markerPresent: false,
+    cwd: '/repo',
+    loadConfig: () => config(),
+    deps: isolatedDeps(),
+  });
+  assert.equal(decision.kind, 'allow');
+});
+
+test('an active pass that read the profile bodies but SKIPPED the review-contract anchor is BLOCKED', () => {
+  const lines: string[] = [];
+  TEMPLATE_NAMES.filter((name) => name !== 'review-contract.md').forEach((name, index) => {
+    const id = `p-${index}`;
+    lines.push(assistantLine([{ id, filePath: guideRead('/repo', name) }], DEEP_REVIEW_ATTRIBUTION_SKILL));
+    lines.push(resultLine([{ id }]));
+  });
+  const decision = evaluateGuidesRead({
+    transcriptText: lines.join('\n'),
+    markerPresent: false,
+    cwd: '/repo',
+    loadConfig: () => config(),
+    deps: isolatedDeps(),
+  });
+  assert.equal(decision.kind, 'block');
+  if (decision.kind === 'block') assert.match(decision.reason, /review-contract\.md/);
 });
 
 test('an active pass that skipped a guide is BLOCKED, naming the unread guide', () => {

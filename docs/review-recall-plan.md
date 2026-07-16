@@ -180,20 +180,27 @@ contradictions, rule loopholes/over-reach) as a MANDATORY pass, not optional;
   typecheck, build), not just deep-review tests.
 - **ADR-016 amendment (Gate P F2, explicit — not "untouched"):** the MAIN
   session's obligation is unchanged (reads contract + ALL profiles — same
-  content, reorganized). What changes is the WORKER briefing rule in the
-  skill body (today: "brief each delegated worker to read every mandated
-  guide") — it becomes "brief each worker with `review-contract.md` + its
-  assigned profile (+ same-named overlay)". v1 fan-out runs on EXTERNAL
-  workers (separate runtimes the Stop/SubagentStop hook never sees — same
-  category as the Codex cross-run); in-session Agent-tool fan-out under an
-  attributed pass stays all-guides until a worker-scoped required set is
-  designed (deferred, recorded in ADR-018).
-- Overlay mechanism: same-named consumer overlays now extend profile files.
-  Old-named overlays keep being READ by the main session (unmatched name =
-  repo-only extra guide) but have no owning WORKER (Gate P F5) — so during
-  the migration window the skill broadcasts unmatched legacy overlays to
-  EVERY profile worker's brief; re-keying them is a named consumer-adoption
-  step, after which the broadcast naturally becomes a no-op.
+  content, reorganized). [SUPERSEDED 2026-07-16, ADR-016/018 Amendments: the
+  main session now reads only the ANCHOR — contract + project reads; the profile
+  bodies became profile-route reads once the fan-out became mandatory. This plan
+  records the C1/C2 recall build as executed; the anchor rescope is the later
+  layer on top.] What changed: the skill body's per-route briefing rule became
+  "brief each profile route (a worker, or under the worker-route floor a
+  main-session lens pass) with `review-contract.md` (+ its overlay) + its
+  assigned profile (+ same-named overlay)". v1 fan-out runs on EXTERNAL workers
+  or main-session routes — neither seen by the Stop/SubagentStop hook (same
+  category as the Codex cross-run); the ADR-016 gate anchors on
+  `review-contract.md` + project reads only. A worker-scoped required set is
+  still deferred (ADR-018); until it lands the fan-out is held to the tracked-todo
+  countermeasure and the REQUIRED coverage matrix, not the Stop hook.
+- Overlay mechanism: same-named consumer overlays extend their matched profile
+  (or contract) file. An unmatched old-named overlay has no owning route until
+  re-keyed (Gate P F5) — so during the migration window the skill broadcasts each
+  unmatched legacy overlay into EVERY profile route's brief; re-keying it is a
+  named consumer-adoption step, after which the broadcast becomes a no-op. After
+  the 2026-07-16 rescope a non-anchor overlay is NOT a main-session read — only
+  the `review-contract.md` overlay is main-gated; its availability stays
+  fail-closed for all listed overlays.
 - Skill body (`agents/skill-sources/deep-review-refactor.md`): §Mandatory
   guide reads and §review-only step 4 re-reference the new corpus (read
   order: contract → baseline-bearing profiles per their conditionality);

@@ -7,6 +7,11 @@ import { join } from 'node:path';
 const PACKAGE_ROOT_URL = new URL('../../', import.meta.url);
 const BODY_SEPARATOR = '\n\n';
 
+/* The shared corpus contract file. It is the ADR-016 main-session ANCHOR read
+   (guides-read.ts): the eight profile lens bodies are profile-route reads, this
+   one is always main-required, so its name is a named constant reused by both. */
+export const REVIEW_CONTRACT_TEMPLATE_NAME = 'review-contract.md';
+
 /* The nine-file corpus contract (ADR-018 profile rewrite): a partial or
    blank-body checkout must fail preflight, not silently review with a thinner
    rulebook. */
@@ -19,14 +24,14 @@ const REQUIRED_TEMPLATE_NAMES = [
   'profile-security.md',
   'profile-tests-quality.md',
   'profile-types-and-contracts.md',
-  'review-contract.md',
+  REVIEW_CONTRACT_TEMPLATE_NAME,
 ] as const;
 
 /* TRACEABILITY.md shares the templates dir but is the migration/canary registry,
    not review corpus: loading it would leak BLINDED canaries into the merged guide
-   bodies and force it into the ADR-016 required-read set. The name is reserved in
-   BOTH source kinds (package templates and consumer overlays) — guides-read.ts
-   filters its overlay enumeration with the same set. */
+   bodies (and, for the anchor overlay, into the ADR-016 required-read set). The
+   name is reserved in BOTH source kinds (package templates and consumer overlays)
+   — guides-read.ts filters its overlay enumeration with the same set. */
 export const NON_GUIDE_TEMPLATE_NAMES: ReadonlySet<string> = new Set(['TRACEABILITY.md']);
 
 export const REVIEW_GUIDE_TEMPLATES_DIR = join(
@@ -51,7 +56,7 @@ export interface LoadedReviewGuide {
 
 export type ReviewGuideLoadOutcome =
   | { ok: true; guides: LoadedReviewGuide[] }
-  | { ok: false; templatesDir: string };
+  | { ok: false; templatesDir: string; reason?: string };
 
 export interface ReviewGuideLoadDeps {
   templatesDir?: string;
@@ -136,15 +141,29 @@ export function loadReviewGuides(
   }
   for (const overlayName of overlayNames) {
     const overlayPath = join(overlayDirectory, overlayName);
+    let overlayBody: string;
     try {
-      mergeSource(guidesByName, overlayName, {
-        kind: 'repo-overlay',
-        path: overlayPath,
-        body: readFile(overlayPath),
-      });
-    } catch {
-      /* Optional overlay data cannot make the package guide set unavailable. */
+      overlayBody = readFile(overlayPath);
+    } catch (error) {
+      /* A LISTED overlay that cannot be read fails closed (ADR-016): the enumeration
+         above proved the file exists, so an unreadable one is a real misconfiguration,
+         not an absent optional. Silently dropping it would let a profile or legacy
+         overlay vanish from the worker corpus AND — after the 2026-07-16 anchor rescope,
+         where non-anchor overlays are no longer a main-session required read — escape
+         the read gate entirely. This is the single fail-closed point for both the
+         guides-read gate and fix-mode preflight. */
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        templatesDir: templatesDirectory,
+        reason: `repo overlay "${overlayName}" is listed but unreadable: ${detail}`,
+      };
     }
+    mergeSource(guidesByName, overlayName, {
+      kind: 'repo-overlay',
+      path: overlayPath,
+      body: overlayBody,
+    });
   }
 
   return {
