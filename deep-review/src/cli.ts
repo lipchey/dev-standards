@@ -254,8 +254,7 @@ function preflightFail(
   verb: string,
   deps: CliDeps,
 ): number | undefined {
-  const overlayDirectory = resolve(env.cwd, config.guidesDir);
-  const outcome = runPreflight(config, verb, overlayDirectory);
+  const outcome = runPreflight(config, verb, env.cwd);
   if (outcome.ok) return undefined;
   deps.stderr(`${JSON.stringify({ error: outcome.machineError })}\n`);
   return outcome.exitCode;

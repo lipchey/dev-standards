@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { runPreflight } from '../../deep-review/src/preflight.ts';
 import { loadReviewGuides } from '../../deep-review/src/guides.ts';
 import type { PreflightDeps } from '../../deep-review/src/preflight.ts';
@@ -69,7 +70,7 @@ test('all gated verbs load the nine real package templates without a consumer gu
     const missingOverlay = path.join(root, '.claude', 'review-guides');
     assert.equal(fs.existsSync(missingOverlay), false);
     for (const verb of GATED_VERBS) {
-      const outcome = runPreflight(config(), verb, missingOverlay);
+      const outcome = runPreflight(config(), verb, root);
       assert.equal(outcome.ok, true, outcome.ok ? verb : outcome.machineError.message);
       if (!outcome.ok) continue;
       assert.equal(outcome.guides.length, EXPECTED_TEMPLATE_GUIDE_COUNT);
@@ -100,7 +101,7 @@ test('a same-named overlay body is loaded additively alongside its package templ
     if (templateName === undefined) return;
     fs.writeFileSync(path.join(overlayDirectory, templateName), OVERLAY_BODY);
 
-    const outcome = runPreflight(config(), 'verify', overlayDirectory);
+    const outcome = runPreflight(config(), 'verify', root);
     assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.machineError.message);
     if (!outcome.ok) return;
     const mergedGuide = outcome.guides.find((guide) => guide.name === templateName);
@@ -124,7 +125,7 @@ test('an overlay-only markdown file is included without replacing package guides
     fs.mkdirSync(overlayDirectory, { recursive: true });
     fs.writeFileSync(path.join(overlayDirectory, 'repo-specific.md'), OVERLAY_BODY);
 
-    const outcome = runPreflight(config(), 'commit-slice', overlayDirectory);
+    const outcome = runPreflight(config(), 'commit-slice', root);
     assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.machineError.message);
     if (!outcome.ok) return;
     assert.equal(outcome.guides.length, EXPECTED_TEMPLATE_GUIDE_COUNT + 1);
@@ -158,20 +159,23 @@ test('all gated verbs fail when review-and-refactor mode is disallowed', () => {
   }
 });
 
-test('overlay paths that escape the repo fail the lexical guard', () => {
+test('guides_dir spellings that escape the repo fail the shared confinement guard', () => {
+  /* Lexical escapes are caught before realpath(cwd), so a fake cwd is fine — the point is
+     the SAME message the Stop-gate produces (assertGuidesDirConfined), not the old
+     preflight-only "repo-relative" wording. */
   for (const directory of ['/abs/guides', '..', '../outside', 'a/../../outside']) {
-    const outcome = runPreflight(config({ guidesDir: directory }), 'handoff', '/resolved/guides');
+    const outcome = runPreflight(config({ guidesDir: directory }), 'handoff', '/resolved');
     assert.equal(outcome.ok, false, directory);
     if (outcome.ok) return;
     assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
-    assert.match(outcome.machineError.message, /repo-relative/);
+    assert.match(outcome.machineError.message, /resolves outside the repo root/);
   }
 });
 
-test('in-root overlay path spellings pass the lexical guard', () => {
+test('in-root guides_dir spellings pass the confinement guard', () => {
   withRoot((root) => {
     for (const directory of ['custom/../guides', './guides', 'a/..']) {
-      const outcome = runPreflight(config({ guidesDir: directory }), 'handoff', path.join(root, 'guides'));
+      const outcome = runPreflight(config({ guidesDir: directory }), 'handoff', root);
       assert.equal(outcome.ok, true, outcome.ok ? directory : `${directory}: ${outcome.machineError.message}`);
     }
   });
@@ -232,8 +236,8 @@ test('guide load fails when a canonical template is missing or has a blank body'
 
   /* The registry is excluded BEFORE the blank-body check: a TRACEABILITY.md listed
      in the TEMPLATES dir never becomes a loaded guide and cannot fail the corpus as
-     blank. The lister must be directory-aware — the loader reuses it for the overlay
-     dir, and an overlay hit here would sneak the name back in as a repo-overlay. */
+     blank. (The overlay dir has its own separate loader, loadOverlaySources, which
+     excludes the same name; the template listMarkdownFiles seam here is templates-only.) */
   const withRegistry = loadReviewGuides('/no-overlay', {
     templatesDir: '/templates',
     listMarkdownFiles: (directory) =>
@@ -255,7 +259,7 @@ test('a consumer overlay named TRACEABILITY.md is reserved and never merges', ()
     fs.writeFileSync(path.join(overlayDirectory, 'TRACEABILITY.md'), OVERLAY_BODY);
     fs.writeFileSync(path.join(overlayDirectory, 'repo-extra.md'), OVERLAY_BODY);
 
-    const outcome = runPreflight(config(), 'verify', overlayDirectory);
+    const outcome = runPreflight(config(), 'verify', root);
     assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.machineError.message);
     if (!outcome.ok) return;
     assert.equal(
@@ -267,44 +271,144 @@ test('a consumer overlay named TRACEABILITY.md is reserved and never merges', ()
   });
 });
 
-test('an overlay enumeration error other than ENOENT fails the guide load closed', () => {
-  const enotdir = loadReviewGuides('/overlay-is-a-file', {
+test('a non-ENOENT overlay load error fails the guide load closed; an absent overlay passes', () => {
+  const base = {
     templatesDir: '/templates',
-    listMarkdownFiles: (directory) => {
-      if (directory === '/templates') return [...CORPUS_NAMES];
-      const error = new Error('ENOTDIR: not a directory') as NodeJS.ErrnoException;
-      error.code = 'ENOTDIR';
-      throw error;
-    },
+    listMarkdownFiles: (directory: string) => (directory === '/templates' ? [...CORPUS_NAMES] : []),
     readFile: () => 'body',
+  };
+  const enotdir = loadReviewGuides('/overlay-is-a-file', {
+    ...base,
+    loadOverlaySources: () => {
+      throw Object.assign(new Error('ENOTDIR: not a directory'), { code: 'ENOTDIR' });
+    },
   });
   assert.equal(enotdir.ok, false);
 
-  const enoent = loadReviewGuides('/no-overlay', {
-    templatesDir: '/templates',
-    listMarkdownFiles: (directory) => {
-      if (directory === '/templates') return [...CORPUS_NAMES];
-      const error = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
-      error.code = 'ENOENT';
-      throw error;
-    },
-    readFile: () => 'body',
-  });
-  assert.equal(enoent.ok, true);
+  const absent = loadReviewGuides('/no-overlay', { ...base, loadOverlaySources: () => undefined });
+  assert.equal(absent.ok, true);
 });
 
-test('a LISTED overlay whose read fails makes the guide load fail closed (shared preflight+gate point)', () => {
+test('an overlay whose load throws makes the guide load fail closed (shared preflight+gate point)', () => {
   /* After the anchor rescope a non-anchor overlay is no longer a main-required read, so
      the only thing keeping an unreadable one from silently vanishing is this load failing
      closed — and preflight (which loads the same way) inherits it. */
   const outcome = loadReviewGuides('/overlay', {
     templatesDir: '/templates',
-    listMarkdownFiles: (directory) => (directory === '/templates' ? [...CORPUS_NAMES] : ['profile-security.md']),
-    readFile: (filePath) => {
-      if (filePath.startsWith('/overlay')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
-      return 'body';
+    listMarkdownFiles: (directory) => (directory === '/templates' ? [...CORPUS_NAMES] : []),
+    readFile: () => 'body',
+    loadOverlaySources: () => {
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
     },
   });
   assert.equal(outcome.ok, false);
-  if (!outcome.ok) assert.match(outcome.reason ?? '', /listed but unreadable/);
+  if (!outcome.ok) assert.match(outcome.reason ?? '', /unavailable: EACCES/);
+});
+
+test('an overlay .md stored as a symlink is rejected fail-closed, never silently dropped', () => {
+  /* Pre-hardening the `entry.isFile()` filter dropped a symlinked leaf silently, so the rule
+     vanished from the corpus AND the read gate. A leaf symlink is now rejected regardless of
+     its target (even in-repo) — the no-follow open refuses to follow it. */
+  withRoot((root) => {
+    const overlayDirectory = path.join(root, '.claude', 'review-guides');
+    fs.mkdirSync(overlayDirectory, { recursive: true });
+    const target = path.join(root, 'real-guide.md');
+    fs.writeFileSync(target, OVERLAY_BODY);
+    fs.symlinkSync(target, path.join(overlayDirectory, 'linked.md'));
+    assert.equal(loadReviewGuides(overlayDirectory).ok, false);
+  });
+});
+
+test('an overlay entry named *.md that is a symlink to a directory is rejected', () => {
+  withRoot((root) => {
+    const overlayDirectory = path.join(root, '.claude', 'review-guides');
+    fs.mkdirSync(overlayDirectory, { recursive: true });
+    const dirTarget = path.join(root, 'a-dir');
+    fs.mkdirSync(dirTarget);
+    fs.symlinkSync(dirTarget, path.join(overlayDirectory, 'linkdir.md'));
+    assert.equal(loadReviewGuides(overlayDirectory).ok, false);
+  });
+});
+
+test('an overlay entry named *.md that is a real directory is rejected (non-regular)', () => {
+  withRoot((root) => {
+    const overlayDirectory = path.join(root, '.claude', 'review-guides');
+    fs.mkdirSync(path.join(overlayDirectory, 'notaguide.md'), { recursive: true });
+    assert.equal(loadReviewGuides(overlayDirectory).ok, false);
+  });
+});
+
+test('a *.md FIFO overlay entry fails closed WITHOUT hanging (O_NONBLOCK anti-hang)', (t) => {
+  /* Without O_NONBLOCK, openSync(O_RDONLY) on a writer-less FIFO blocks forever — this test
+     would time out (RED) rather than fail-close. With it, fstat rejects the non-regular entry. */
+  if (process.platform === 'win32') return t.skip('mkfifo is POSIX-only');
+  withRoot((root) => {
+    const overlayDirectory = path.join(root, '.claude', 'review-guides');
+    fs.mkdirSync(overlayDirectory, { recursive: true });
+    try {
+      execFileSync('mkfifo', [path.join(overlayDirectory, 'pipe.md')]);
+    } catch {
+      t.skip('mkfifo unavailable');
+      return;
+    }
+    assert.equal(loadReviewGuides(overlayDirectory).ok, false);
+  });
+});
+
+test('a guides_dir that IS a symlink (even to an in-repo dir) is rejected fail-closed', () => {
+  /* An in-repo symlinked guides_dir would make the anchor overlay unprovable: requiredReadSet
+     records the lexical tail while computeMissing realpaths the reviewer's Read to the target,
+     so the Stop-gate could never be satisfied. The confinement refuses any symlink component. */
+  withRoot((root) => {
+    const realGuides = path.join(root, 'actual-guides');
+    fs.mkdirSync(realGuides, { recursive: true });
+    fs.writeFileSync(path.join(realGuides, 'repo-specific.md'), OVERLAY_BODY);
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.symlinkSync(realGuides, path.join(root, '.claude', 'review-guides'));
+    const outcome = runPreflight(config(), 'verify', root);
+    assert.equal(outcome.ok, false);
+    if (outcome.ok) return;
+    assert.equal(outcome.exitCode, EXIT_PREFLIGHT);
+    assert.match(outcome.machineError.message, /must be a real directory, not a symlink/);
+  });
+});
+
+test('a DANGLING guides_dir leaf symlink fails closed (not read as an absent overlay)', () => {
+  withRoot((root) => {
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.symlinkSync(path.join(root, 'gone'), path.join(root, '.claude', 'review-guides'));
+    const outcome = runPreflight(config(), 'verify', root);
+    assert.equal(outcome.ok, false);
+    if (outcome.ok) return;
+    assert.match(outcome.machineError.message, /must be a real directory, not a symlink/);
+  });
+});
+
+test('a DANGLING ANCESTOR symlink in the guides_dir path fails closed (was silently absent)', () => {
+  /* .claude → missing, guides_dir=.claude/review-guides. The whole path ENOENTs, so the
+     pre-hardening loader read it as an absent optional overlay (a fail-open); the component
+     walk catches the symlinked ancestor before it can vanish. */
+  withRoot((root) => {
+    fs.symlinkSync(path.join(root, 'gone'), path.join(root, '.claude'));
+    const outcome = runPreflight(config(), 'verify', root);
+    assert.equal(outcome.ok, false);
+    if (outcome.ok) return;
+    assert.match(outcome.machineError.message, /must be a real directory, not a symlink/);
+  });
+});
+
+test('a reserved TRACEABILITY.md overlay symlink is skipped as reserved, never a fail-closed error', () => {
+  /* Reserved-name exclusion runs BEFORE the type check, so a broken/symlinked TRACEABILITY is
+     ignored (not merged, not a hard failure); a normal overlay beside it still loads. */
+  withRoot((root) => {
+    const overlayDirectory = path.join(root, '.claude', 'review-guides');
+    fs.mkdirSync(overlayDirectory, { recursive: true });
+    fs.writeFileSync(path.join(overlayDirectory, 'repo-extra.md'), OVERLAY_BODY);
+    fs.symlinkSync(path.join(root, 'whatever'), path.join(overlayDirectory, 'TRACEABILITY.md'));
+    const outcome = runPreflight(config(), 'verify', root);
+    assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.machineError.message);
+    if (!outcome.ok) return;
+    assert.equal(outcome.guides.some((guide) => guide.name === 'TRACEABILITY.md'), false);
+    assert.equal(outcome.guides.some((guide) => guide.name === 'repo-extra.md'), true);
+  });
 });

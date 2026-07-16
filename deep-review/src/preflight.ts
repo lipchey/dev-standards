@@ -1,8 +1,8 @@
 /* Fix-mode verbs require an enabled mode and an available package guide set. */
 
-import { isAbsolute, normalize, sep } from 'node:path';
 import { loadReviewGuides } from './guides.ts';
 import type { LoadedReviewGuide, ReviewGuideLoadOutcome } from './guides.ts';
+import { assertGuidesDirConfined, GuidesUnavailable } from './guides-read.ts';
 import { EXIT_PREFLIGHT } from './types.ts';
 import type { MachineError } from './types.ts';
 import type { DeepReviewConfig } from './config.ts';
@@ -32,7 +32,7 @@ function fail(verb: string, message: string): PreflightOutcome {
 export function runPreflight(
   config: DeepReviewConfig,
   verb: string,
-  overlayDirectory: string,
+  cwd: string,
   overrides?: Partial<PreflightDeps>,
 ): PreflightOutcome {
   if (!GATED_VERBS.has(verb)) return { ok: true, guides: [] };
@@ -44,15 +44,17 @@ export function runPreflight(
   if (!config.modes.includes('review-and-refactor')) {
     return fail(verb, 'fix mode is not allowed: add "review-and-refactor" to deep_review.modes in quality.json');
   }
-  if (
-    isAbsolute(config.guidesDir) ||
-    normalize(config.guidesDir) === '..' ||
-    normalize(config.guidesDir).startsWith(`..${sep}`)
-  ) {
-    return fail(
-      verb,
-      `deep_review.guides_dir must be repo-relative and stay inside the repo root, got: ${config.guidesDir}`,
-    );
+
+  /* The SAME confinement the Stop-gate applies (assertGuidesDirConfined) — lexical + reject any
+     symlink component, fail-closed — computed from cwd so this file-editing verb is never weaker
+     than the gate (the pre-hardening lexical-only check let an in-repo symlink escaping the repo
+     through). */
+  let overlayDirectory: string;
+  try {
+    overlayDirectory = assertGuidesDirConfined(cwd, config.guidesDir);
+  } catch (error) {
+    if (error instanceof GuidesUnavailable) return fail(verb, error.message);
+    throw error;
   }
 
   const guideLoad = deps.loadGuides(overlayDirectory);

@@ -375,6 +375,50 @@ listed overlay; `preflight.ts` surfaces that reason. The consumer hook +
 `quality.json` need no change (the verb computes the set from the engine). Tests
 updated (`guides-read.test.ts`, `preflight.test.ts`).
 
+### Amendment 2026-07-16 — overlay entry-type contract + one shared confinement boundary
+
+Three pre-existing fail-opens in the overlay loader (Codex Gate-C on the deep-review
+hardening diff) are closed together, since they share one boundary. The consumer-visible
+contract for `deep_review.guides_dir` is now explicit:
+
+- **An overlay is loaded ONLY from a plain regular `*.md` file.** A leaf that is a
+  symlink (regardless of target — even in-repo), a directory named `*.md`, or any other
+  non-regular entry is REJECTED fail-closed, never silently dropped. Before, an
+  `entry.isFile()` filter dropped a symlinked/non-regular `*.md` silently, so a review
+  rule vanished from the corpus AND escaped the read gate. Each leaf is read through one
+  no-follow descriptor (`openSync(O_RDONLY|O_NOFOLLOW)` → `fstat` isFile → read fd), so
+  the type check and the read are the same operation (no check→read TOCTOU). The reserved
+  `TRACEABILITY.md` is skipped BEFORE the type check (a broken reserved entry is ignored,
+  not a hard failure).
+- **One confinement boundary, shared by fix-mode preflight AND the Stop-gate**
+  (`assertGuidesDirConfined`). Previously preflight confined `guides_dir` LEXICALLY only
+  while the gate also realpath-confined it, so an in-repo `guides_dir` symlinked OUTSIDE
+  the repo passed the file-EDITING verb (the weaker side) yet the gate rejected it. Now
+  both apply the same confinement: a lexical escape (`../`, absolute) OR **any symlink
+  component in the `guides_dir` path** (leaf or ancestor, dangling or not) is rejected
+  fail-closed — `guides_dir` must be a real directory. A symlinked `guides_dir` is refused
+  rather than followed for two reasons: (a) the required-read tail is computed lexically
+  while read-proof is realpath-matched, so a symlinked dir makes the anchor overlay
+  unprovable and the Stop-gate would block forever; (b) a dangling ancestor symlink would
+  otherwise ENOENT the whole path and hide the overlay as "absent" (a fail-open). A
+  non-ENOENT `lstat` fault on any component fails closed (never "absent").
+- **The required overlay tail is derived from the loader's OWN returned sources** (one
+  authoritative snapshot), not a second directory listing that could disagree under a
+  filesystem race.
+
+Ceiling (`ponytail:` in `guides.ts`): Node has no `openat`, so ANCESTOR directory
+components of an overlay leaf stay path-based — an ancestor-swap race survives; the
+no-follow open closes the LEAF check→read race only. A native addon is the upgrade path if
+that ever matters.
+
+Engine: `guides.ts` (`loadOverlaySources` — the hardened overlay seam, separate from the
+trusted template name-lister), `guides-read.ts` (`assertGuidesDirConfined` +
+`assertNoSymlinkComponent`; source-derived anchor tail; `realListOverlay` removed),
+`preflight.ts` (`runPreflight(config, verb, cwd, overrides?)` — shares the confinement),
+`cli.ts` (wires `env.cwd` into it). No consumer `quality.json`/hook change (behavior for a
+normal in-repo regular-file overlay is unchanged). Tests: `guides-read.test.ts`,
+`preflight.test.ts`, `cli.test.ts`.
+
 ---
 
 ## ADR-017 — check-new-deps flags a source SWAP on an existing dependency

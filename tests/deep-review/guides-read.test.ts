@@ -18,6 +18,7 @@ import {
 } from '../../deep-review/src/guides-read.ts';
 import type { RequiredReadSetDeps } from '../../deep-review/src/guides-read.ts';
 import { loadReviewGuides, REVIEW_GUIDE_TEMPLATES_DIR } from '../../deep-review/src/guides.ts';
+import type { LoadedReviewGuide, ReviewGuideLoadOutcome } from '../../deep-review/src/guides.ts';
 import type { DeepReviewConfig } from '../../deep-review/src/config.ts';
 import { runCli } from '../../deep-review/src/cli.ts';
 import type { CliDeps } from '../../deep-review/src/cli.ts';
@@ -97,10 +98,33 @@ function config(overrides: Partial<DeepReviewConfig> = {}): DeepReviewConfig {
   };
 }
 
-/* Deps that isolate requiredReadSet from the repo fs: real templates, no overlay, no
-   required_reads-on-disk, identity realpath. */
+/* Deps that isolate requiredReadSet from the repo fs: real templates, no overlay (the real
+   loader finds none under the fake root), no required_reads-on-disk, identity realpath so the
+   strict confinement resolves the fake cwd without touching the disk. */
 function isolatedDeps(): RequiredReadSetDeps & { realpath: (absolutePath: string) => string } {
-  return { listOverlay: () => undefined, exists: () => true, realpath: (value) => value };
+  return { exists: () => true, realpath: (value) => value };
+}
+
+/* A loadGuides outcome shaped like the real loader's for `overlayNames` present in the repo
+   overlay dir — the anchor always carries its package-template source, and each overlay name
+   adds a repo-overlay source. requiredReadSet derives its required tails from THIS metadata
+   (one authoritative snapshot), so the tests inject an outcome rather than a second listing. */
+function overlayLoadOutcome(root: string, overlayNames: string[]): ReviewGuideLoadOutcome {
+  const overlayDir = path.join(root, '.claude', 'review-guides');
+  const guides = new Map<string, LoadedReviewGuide>();
+  const anchorTemplate = {
+    kind: 'package-template' as const,
+    path: path.join(REVIEW_GUIDE_TEMPLATES_DIR, 'review-contract.md'),
+    body: 'x',
+  };
+  guides.set('review-contract.md', { name: 'review-contract.md', sources: [anchorTemplate], body: 'x' });
+  for (const name of overlayNames) {
+    const source = { kind: 'repo-overlay' as const, path: path.join(overlayDir, name), body: 'y' };
+    const existing = guides.get(name);
+    if (existing !== undefined) existing.sources.push(source);
+    else guides.set(name, { name, sources: [source], body: 'y' });
+  }
+  return { ok: true, guides: [...guides.values()] };
 }
 
 // ── transcript.ts ────────────────────────────────────────────────────────────────
@@ -178,33 +202,23 @@ test('requiredReadSet excludes TRACEABILITY.md — the canary registry is not co
 
 test('requiredReadSet fails closed (GuidesUnavailable) when the templates are unavailable', () => {
   assert.throws(
-    () => requiredReadSet('/repo', config(), { loadGuides: () => ({ ok: false, templatesDir: '/broken' }), listOverlay: () => undefined, exists: () => true }),
+    () => requiredReadSet('/repo', config(), { loadGuides: () => ({ ok: false, templatesDir: '/broken' }), exists: () => true, realpath: (value) => value }),
     GuidesUnavailable,
   );
 });
 
-test('loadReviewGuides fails closed (ok:false + reason) when a LISTED overlay is unreadable', () => {
+test('loadReviewGuides fails closed (ok:false + reason) when the overlay load throws', () => {
   /* The single fail-closed point for overlay AVAILABILITY (P1, 2026-07-16): after the
      anchor rescope a non-anchor overlay is no longer a main-required read, so an
      unreadable one must still be caught HERE or it vanishes silently from the corpus. */
-  const overlayDir = '/repo/.claude/review-guides';
-  const outcome = loadReviewGuides(overlayDir, {
+  const outcome = loadReviewGuides('/repo/.claude/review-guides', {
     templatesDir: REVIEW_GUIDE_TEMPLATES_DIR,
-    listMarkdownFiles: (dir) =>
-      dir === overlayDir
-        ? ['profile-security.md']
-        : fs
-            .readdirSync(dir, { withFileTypes: true })
-            .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
-            .map((entry) => entry.name)
-            .sort(),
-    readFile: (filePath) => {
-      if (filePath.startsWith(overlayDir)) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
-      return fs.readFileSync(filePath, 'utf8');
+    loadOverlaySources: () => {
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
     },
   });
   assert.equal(outcome.ok, false);
-  if (!outcome.ok) assert.match(outcome.reason ?? '', /listed but unreadable/);
+  if (!outcome.ok) assert.match(outcome.reason ?? '', /unavailable: EACCES/);
 });
 
 test('requiredReadSet surfaces the overlay-unreadable reason, not the generic templates message', () => {
@@ -216,8 +230,8 @@ test('requiredReadSet surfaces the overlay-unreadable reason, not the generic te
           templatesDir: '/x',
           reason: 'repo overlay "profile-security.md" is listed but unreadable: EACCES',
         }),
-        listOverlay: () => undefined,
         exists: () => true,
+        realpath: (value) => value,
       }),
     /overlay .* unreadable/,
   );
@@ -237,6 +251,7 @@ test('requiredReadSet fails closed when the overlay directory is unreadable for 
 test('requiredReadSet treats a missing overlay directory as no overlay (ENOENT is optional)', () => {
   const tails = requiredReadSet('/repo', config({ guidesDir: '.claude/review-guides' }), {
     exists: () => true,
+    realpath: (value) => value,
   });
   // No overlay tails contributed; only templates.
   assert.equal(tails.some((tail) => tail.startsWith('.claude/review-guides/')), false);
@@ -244,8 +259,9 @@ test('requiredReadSet treats a missing overlay directory as no overlay (ENOENT i
 
 test('requiredReadSet requires the review-contract overlay + configured required_read, NOT a profile/extra overlay', () => {
   const tails = requiredReadSet('/repo', config({ requiredReads: ['.claude/CHECKLIST.md'] }), {
-    listOverlay: () => ['review-contract.md', 'profile-security.md', 'repo-extra.md'],
+    loadGuides: () => overlayLoadOutcome('/repo', ['review-contract.md', 'profile-security.md', 'repo-extra.md']),
     exists: () => true,
+    realpath: (value) => value,
   });
   /* Only the anchor overlay is a main-session read; profile/legacy overlays are
      profile-route material (their availability is fail-closed in loadReviewGuides). */
@@ -256,9 +272,13 @@ test('requiredReadSet requires the review-contract overlay + configured required
 });
 
 test('requiredReadSet never requires a reserved-name overlay (TRACEABILITY.md)', () => {
+  /* Even if a TRACEABILITY overlay source reached the derivation (the loader excludes it, so
+     it never does), its basename is not in the main-required set — the anchor derivation must
+     still skip it. */
   const tails = requiredReadSet('/repo', config(), {
-    listOverlay: () => ['TRACEABILITY.md', 'review-contract.md'],
+    loadGuides: () => overlayLoadOutcome('/repo', ['TRACEABILITY.md', 'review-contract.md']),
     exists: () => true,
+    realpath: (value) => value,
   });
   assert.equal(tails.includes('.claude/review-guides/review-contract.md'), true);
   assert.equal(tails.includes('.claude/review-guides/TRACEABILITY.md'), false);
@@ -266,7 +286,7 @@ test('requiredReadSet never requires a reserved-name overlay (TRACEABILITY.md)',
 
 test('requiredReadSet fails closed when a configured required_read does not exist', () => {
   assert.throws(
-    () => requiredReadSet('/repo', config({ requiredReads: ['.claude/GONE.md'] }), { listOverlay: () => undefined, exists: () => false }),
+    () => requiredReadSet('/repo', config({ requiredReads: ['.claude/GONE.md'] }), { exists: () => false, realpath: (value) => value }),
     /required_read .* does not exist/,
   );
 });
@@ -274,26 +294,43 @@ test('requiredReadSet fails closed when a configured required_read does not exis
 test('requiredReadSet fails closed when guides_dir escapes the repo root, even if empty (P1-2)', () => {
   // An escaping overlay with NO files would otherwise fall through to allow; confine up front.
   assert.throws(
-    () => requiredReadSet('/repo', config({ guidesDir: '../evil' }), { listOverlay: () => [], exists: () => true }),
+    () => requiredReadSet('/repo', config({ guidesDir: '../evil' }), { exists: () => true }),
     /resolves outside the repo root/,
   );
 });
 
-test('requiredReadSet fails closed when guides_dir is an in-repo SYMLINK escaping the repo (R2-3)', () => {
+test('requiredReadSet fails closed when guides_dir is an in-repo SYMLINK (target outside OR in-repo)', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'dr-repo-'));
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'dr-outside-'));
   try {
     fs.mkdirSync(path.join(repo, '.claude'), { recursive: true });
-    // A lexically-in-repo overlay path whose symlink target is outside must fail closed — the
-    // lexical check passes, so only the realpath confinement catches it.
+    /* A lexically-in-repo overlay path that IS a symlink must fail closed regardless of target:
+       the lexical check passes, so the symlink-component rejection is what catches it. */
     fs.symlinkSync(outside, path.join(repo, '.claude', 'review-guides'));
     assert.throws(
       () => requiredReadSet(fs.realpathSync(repo), config({ guidesDir: '.claude/review-guides' }), { exists: () => true }),
-      /via a symlink/,
+      /must be a real directory, not a symlink/,
     );
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('requiredReadSet requires BOTH the package-template AND the overlay copy of the anchor (real fs, one snapshot)', () => {
+  /* The anchor tail is derived from the loader's OWN returned sources — a package-template
+     source AND, when the consumer overlays review-contract.md, its repo-overlay source. No
+     second directory listing that could disagree under a filesystem race. */
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'dr-anchor-'));
+  try {
+    const overlayDir = path.join(repo, '.claude', 'review-guides');
+    fs.mkdirSync(overlayDir, { recursive: true });
+    fs.writeFileSync(path.join(overlayDir, 'review-contract.md'), 'consumer contract overlay\n');
+    const tails = requiredReadSet(fs.realpathSync(repo), config());
+    assert.equal(tails.includes(`${TEMPLATE_ANCHOR}/review-contract.md`), true, 'package anchor tail');
+    assert.equal(tails.includes('.claude/review-guides/review-contract.md'), true, 'overlay anchor tail');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
   }
 });
 
@@ -478,7 +515,7 @@ test('an active pass with an unread configured required_read is BLOCKED via Guid
     markerPresent: false,
     cwd: '/repo',
     loadConfig: () => config({ requiredReads: ['.claude/GONE.md'] }),
-    deps: { listOverlay: () => undefined, exists: () => false, realpath: (value) => value },
+    deps: { exists: () => false, realpath: (value) => value },
   });
   assert.equal(decision.kind, 'block');
 });
