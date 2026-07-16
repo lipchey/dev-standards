@@ -1,8 +1,9 @@
 # Tests Quality Review Profile
 
 You review ONLY through this lens: whether tests detect real behavioral
-regressions, use independent oracles, cover failure and boundary cases, and
-remain useful through refactors. Do not turn production correctness,
+regressions, use independent oracles, cover failure and boundary cases, remain
+useful through refactors, and stay discoverable from the source they exercise
+(the placement/traceability lens below). Do not turn production correctness,
 architecture, typing, naming, or security concerns into findings from this
 profile except where they make a test vacuous or coupled to implementation.
 
@@ -93,6 +94,52 @@ This profile owns whether tests exercise those boundaries.
 Fixture/helper duplication → see `profile-refactoring-and-smells.md`
 §Duplication, dead code, and speculative flexibility.
 
+## Test-to-source traceability and placement
+
+Weighting: full where the repo keeps a settled test layout; lighter for one-off
+scripts; none where no convention exists.
+
+A reader must be able to go from any source file to the test that exercises it,
+and back, without searching. The repo picks the convention - a parallel test
+tree that mirrors the source tree (`tests/<path>/foo.test.ts` for
+`<path>/foo.ts`) or a test co-located beside its subject (`foo.test.ts` next to
+`foo.ts`). This lens does not pick the convention; it judges whether the code
+under review follows the one the repo already has.
+
+Conditionality: apply only where a test-layout convention is visible in the
+existing layout or declared in `.claude/code-conventions.md` §Tests ("how source
+areas map to their tests"). A repo with no settled layout, or a documented
+exception, is out of scope - do not invent a mirror tree a repo does not keep.
+Files with no behavior to exercise (type-only modules, barrels, generated code)
+need no companion test and no mirrored location; the companion-tests gate
+already exempts `.d.ts`.
+
+Judgment prompts:
+
+- Does each new or moved test sit at the location its subject's path dictates
+  under the repo's convention, replicating every intermediate subfolder? A test
+  dropped in a flat `tests/` root, or under the wrong subfolder, when the
+  convention nests by source path is a finding - its subject is no longer
+  locatable from the path. The fix is to move the file to the mirrored path, not
+  to add a comment pointing at its subject.
+- Can the test's subject be identified from its location and name alone? An
+  orphan-looking test with no discoverable subject, or a name that maps to
+  several source files ambiguously, is a finding.
+- Is one subject's coverage kept together rather than scattered across unrelated
+  locations without a stated reason? Fragmenting a file's tests across the tree
+  defeats the mapping as surely as misplacing one.
+
+Whether a changed source file ships with any test at all is owned by the
+`check-companion-tests` gate, not this lens - do not re-report a missing test as
+a placement finding. This lens owns only whether the test that DOES exist sits
+in the right, mirrored, discoverable place. Where a repo wires the report-only
+`check-test-placement` gate, that gate mechanically catches a test under a mapped
+root whose mirrored source path (every subfolder included) is absent; this lens
+still owns what a path-map cannot resolve - an ambiguous or descriptively-named
+subject, coverage fragmented across the tree, and whether the chosen convention
+is right at all. The wording of a test's title or description is out of this
+section's scope; it owns only file location and the path-to-subject mapping.
+
 ## Behavior-first tests at boundaries
 
 Weighting: strong where ports exist; light for pipelines; none for glue.
@@ -161,5 +208,8 @@ or security profiles; do not restate them here as invented test mandates.
 
 Follow `review-contract.md` exactly. For each finding, name the mutation or
 plausible regression the test fails to catch and the smallest test change that
-would catch it. Report every applicable instance and include the required
-per-file `COVERAGE`/`CLEAN` claims. When tests are clean, say so explicitly.
+would catch it. A placement/traceability finding is the exception to that shape:
+a misplaced-but-working test catches no less than before, so cite the expected
+mirrored path and the actual path, and give the remedy as the file move (not a
+test change). Report every applicable instance and include the required per-file
+`COVERAGE`/`CLEAN` claims. When tests are clean, say so explicitly.

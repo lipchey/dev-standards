@@ -681,3 +681,75 @@ parallel structure.
   per-route `-o`/log paths (the /tmp-collision hazard).
 - `docs/review-recall-plan.md`'s "the independent Codex cross-run stays as-is"
   bullet is superseded.
+
+---
+
+## ADR-021 — Test-to-source placement: a review-owned lens plus a report-only mechanical assist, not a blocking gate
+
+- **Status:** Accepted
+- **Date:** 2026-07-16
+- **Owner decision** (repo owner, 2026-07-16)
+- **Uses:** ADR-018 §Decision.1 — a mechanically-checkable rule class gets a gate
+  OR a note recording why a blocking gate is too noisy, plus a named review
+  owner. This is that branch: report-only assist + named profile owner.
+
+### Context
+
+Where a repo has a settled test-layout convention, a test should mirror its
+subject's source path — replicating every intermediate subfolder — so a reader
+can map any test to its source and back without searching. The convention itself
+is the repo's to choose (a parallel tree or co-location); a repo without a
+settled convention is out of scope. The judgment rule was added as a lens in
+`profile-tests-quality.md` §Test-to-source traceability and placement (it reaches
+consumers read-in-place, like the rest of the profile corpus). The open question
+was whether to ALSO enforce placement mechanically. Research plus a Gate-P plan
+critique agreed: mechanically buildable (a runner check may do the needed
+whole-tree lookup — precedent `check-new-deps`/`diff-cover` do I/O; the runner
+also hands a check the tracked tree via a `{files:repo_all}` token), but this
+repo's test↔source mapping is irregular — cross-root subjects (a `tests/tools`
+test whose subject is a `scripts/*.sh`), cross-extension, many-to-one via
+dot-qualifier variants (`exec.bypass.test.ts` → `exec.ts`), and cross-cutting /
+e2e / aspect tests with no 1:1 subject. A faithful blocking gate would reject
+legitimate commits and carry an exemption set that rots. The owner chose the
+report-only assist knowingly, over the guide-only option.
+
+### Decision
+
+1. **Review-owned.** Placement is owned by `profile-tests-quality.md`
+   §Test-to-source traceability and placement — the judgment cases a path-map
+   cannot express (ambiguous subject, fragmented coverage, whether the convention
+   itself is right).
+2. **A report-only mechanical assist ships:** `tools/check-test-placement.mjs`
+   (pure list-processor, no I/O — it receives the tracked tree via a single
+   `{files:placement_tree}` token; per-`(testRoot, sourceRoot, sourceExt)` maps,
+   several rows may share a testRoot; subject resolution is dot-strip only, never
+   hyphen-strip; exact-path `--ignore` for tests with no 1:1 subject). Wired into
+   THIS repo's `full` tier, `mode: report-only`.
+3. **Not a blocking gate.** Placement findings (exit 1) are non-blocking;
+   operational failures (exit 2, bad args/glob) remain fail-closed via
+   `operational_exit_codes`. The assist surfaces NEW drift (a test added under a
+   mapped root whose mirrored source — including subfolder — is absent); it does
+   not relitigate the current tree. A clean 0-finding baseline is held by
+   exact-path exemptions for aspect/cross-cutting tests plus the e2e/fixtures
+   directory globs.
+4. **Opt-in for consumers, like `check-companion-tests`.** The tool ships in the
+   submodule (`vendor/dev-standards/tools/check-test-placement.mjs`); it is NOT
+   seeded as an active check because the map/exemption config is per-repo and
+   cannot be a generic default (the strict-JSON starter has no disabled/example
+   check form). A consumer opts in by adding a `full`-tier report-only check with
+   its own `--map`/`--ignore`, e.g.:
+   `["node", "vendor/dev-standards/tools/check-test-placement.mjs", "--map", "tests/<area>:<srcRoot>:.ts", "--", "{files:<tree>}"]`.
+
+### Consequences
+
+- Exemption maintenance is the accepted cost: each new aspect/cross-cutting test
+  whose name has no 1:1 subject needs one `--ignore` line, else the report-only
+  output gains a benign false positive. Recorded as a known limitation, not a bug.
+- Dot-strip only: because hyphens are part of real source basenames
+  (`feature-slug.ts`), `slug.test.ts` does NOT resolve to `feature-slug.ts` — such
+  descriptively-named tests are exempted, not auto-aliased.
+- No `quality.schema.json` change — argv is opaque and the `{files:}` token
+  grammar already admits the new fileset.
+- If real placement-drift evidence later shows the report-only signal is worth
+  hardening, promoting a scoped subset to blocking is a follow-up decision, not a
+  reversal of this one.
