@@ -86,6 +86,19 @@ Judgment prompts:
   test). "Never failed" alone is not that evidence - a test can guard a
   regression that simply has not happened yet. Once that mutation evidence
   exists, deletion is legitimate cleanup, not lost coverage.
+- Does every async assertion sit on an awaited path - an `await`, a returned
+  promise, or `await expect(...).resolves`? A test whose assertions run after an
+  unawaited promise, or inside a `.then`/async callback the runner never awaits,
+  passes regardless of behavior: the assertion may run after the test is already
+  reported green, or never run at all. The code-side floating-promise and
+  missing-`await` rules do not cover the test body itself. Would this test still
+  pass if the assertion never ran?
+- Does a test that pins an ORDER (guard-before-config, validate-before-mutate)
+  use a fixture where the step the guard must PRECEDE would produce a DIFFERENT
+  observable outcome - a missing or throwing config yielding a distinct exit
+  code - so that reordering the guard past it turns the test RED? A happy-path
+  fixture pins the guard's EXISTENCE, not its ordering, and survives the reorder
+  silently. If the two steps were swapped, would this test fail?
 
 Inclusive/exclusive boundary behavior is defined by
 → see `profile-correctness-and-lifecycle.md` §Cross-cutting correctness checks.
