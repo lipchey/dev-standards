@@ -288,3 +288,19 @@ From the full disposition of `DEEP_REVIEW_FINDINGS.md` (58 findings; see its
   rerun), and installer failure cases abort before instance-doc seeding, so a
   marker left by a late bootstrap failure is untested. Extend
   `e2e-adoption-kit.sh` with a post-seed failure injection. (Gate C 2026-07-16)
+- **The custom-rule preset factories repeat one entry-builder (Rule of Three
+  crossed at 4).** `constants-home.js`, `types-home.js`, `property-naming.js`,
+  and now `comparison-literals.js` each restate the same `{plugins:{"dev-standards":…},
+  rules:{…}, files, ignores}` block, distributing the critical same-plugin-object
+  invariant. Fix: one internal `buildPresetEntry(ruleId, setting, {files, ignores})`
+  behind the named public factories. Deferred from the comparison-literals batch
+  as an orthogonal refactor of 3 already-shipped rules (would balloon that ADR's
+  blast radius); `presets-compose.test.mjs` already guards all four. (Gate C 2026-07-16)
+- **Seeded consumer-template gate blocks are behaviorally untested.** All five
+  gate blocks (`constantsHome`/`inlineLiterals`/`comparisonLiterals`/`typesHome`/
+  `propertyNaming`) are proven only at the FACTORY level (`presets-compose`) plus
+  the template's self-lint (presence + wiring); no test lints a source fixture
+  THROUGH the seeded config, so silently deleting a block or downgrading its
+  severity leaves the suite green. Fix: one smoke-test that runs a violating
+  fixture against the seeded template and asserts each gate reports at severity 2.
+  Systemic (not comparison-literals-specific). (Gate C 2026-07-16)

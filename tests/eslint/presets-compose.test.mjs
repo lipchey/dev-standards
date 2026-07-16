@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Linter } from "eslint";
 import tseslint from "typescript-eslint";
 import {
+  comparisonLiterals,
   constantsHome,
   devStandardsPlugin,
   inlineLiterals,
@@ -19,6 +20,7 @@ test("all Tier 1 presets compose on one TypeScript file", () => {
     ...typesHome({ files: FILES }),
     ...propertyNaming({ files: FILES }),
     ...inlineLiterals({ files: FILES }),
+    ...comparisonLiterals({ files: FILES }),
     ...naming({ files: FILES }),
   ];
 
@@ -30,6 +32,7 @@ test("all Tier 1 presets compose on one TypeScript file", () => {
   const code = `
     export type RootType = { t: number };
     export const LIMIT = 2;
+    export const flag = mode === "on";
     export function assess(ab: number) { return ab > 3; }
   `;
   const messages = new Linter({ configType: "flat" }).verify(code, config, { filename: "src/logic.ts" });
@@ -46,6 +49,10 @@ test("all Tier 1 presets compose on one TypeScript file", () => {
   assert.equal(countByRule.get("dev-standards/constants-home"), 1);
   assert.equal(countByRule.get("dev-standards/types-home"), 1);
   assert.equal(countByRule.get("dev-standards/property-naming"), 1);
+  /* One magic-string hit: `mode === "on"`. The `LIMIT`/`RootType` lines carry no
+     comparison, so the count proves comparison-literals composed on the same file
+     without clobbering (or being clobbered by) the other custom rules. */
+  assert.equal(countByRule.get("dev-standards/comparison-literals"), 1);
   /* Exactly one numeric hit: `3` in the comparison. `LIMIT = 2` is a const
      declaration, which no-magic-numbers deliberately allows (a NAMED value) —
      that is constants-home's hit instead. */

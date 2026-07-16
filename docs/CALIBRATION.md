@@ -114,3 +114,37 @@ candidate (exclude browser-only paths), not a flip.
   appetite) + read the pilot `.claude/gate-misses.md` — deferred.
 - check-new-deps & diff-coverage flips stay coupled to their parked CI-bridge
   items (`BACKLOG.md` 2026-07-14) — decide together with, not before, blocking.
+
+### 2026-07-16 — `comparisonLiterals` warn-ramp baseline (ADR-022)
+
+**What shipped.** New gate `dev-standards/comparison-literals` (magic strings in
+equality comparisons + `switch` cases). Seed + composition at error; the pilot
+adopts it at `severity: "warn"` to measure before flipping.
+
+**Measured baseline (pilot, live probe over the exact planned src globs/ignores,
+ai-prompter SHA `00ccbedc`).** 71 in-scope src files → **40 hits across 15 files**.
+Of 78 raw string comparisons (72 equality operands + 6 `switch` cases) the rule's
+built-in exemptions removed 31 `typeof` and 7 empty strings, leaving 40 (34
+equality + 6 switch — matches the Gate-P AST inventory). No `typeof`/empty/type-
+declaration leaked through. Split:
+- **~30 real magic strings** — engine state machine (`tracker.ts` ×10,
+  `display-model.ts`, `jsonl.ts`), route/sink `case` discriminants
+  (`stt-token.ts`, `console-sink.ts`), `logger` record kind, harness scenarios,
+  locale (`seo.ts`/`site.ts`). Fix = a named const / union member.
+- **~10 framework-canonical borderlines** — DOM `event.key` keybindings
+  (`Annotator.tsx` ×4), `readyState === "ended"`, `protocol === "https:"`, Node
+  `code === "ENOENT"`, vite build modes. Owner-decides in the flip pass: name
+  them or add a `.key`/framework exemption if chronically noisy.
+
+**Why warn, not error.** ~40 findings is real cleanup; the pilot's eslint check
+carries no `--max-warnings`, so warn surfaces them without turning `verify` red.
+
+**Flip-to-error exit criteria (a later calibration pass, owner-run).** Capture
+the full warn list → classify EACH hit fix / rule-exemption / confirmed ceiling →
+zero unexplained warnings → decide test-file scope (tests currently out of scope,
+mirroring constants-home) → drop `severity: "warn"` from the pilot block → confirm
+error severity + `verify --full` green.
+
+**Rollback.** If adoption is operationally broken: revert the pilot preset block +
+its pin. An upstream rule defect gets a corrective commit + a NEW tag — never a
+retag of a published one.

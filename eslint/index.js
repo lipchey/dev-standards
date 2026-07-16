@@ -4,6 +4,7 @@ export { test } from "./test.js";
 export { frontend, frontendVite, frontendNext } from "./frontend.js";
 export { devStandardsPlugin } from "./plugin.js";
 export { constantsHome } from "./constants-home.js";
+export { comparisonLiterals } from "./comparison-literals.js";
 export { inlineLiterals } from "./inline-literals.js";
 export { typesHome } from "./types-home.js";
 export { propertyNaming } from "./property-naming.js";

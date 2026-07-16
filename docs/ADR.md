@@ -819,3 +819,70 @@ report-only assist knowingly, over the guide-only option.
 - If real placement-drift evidence later shows the report-only signal is worth
   hardening, promoting a scoped subset to blocking is a follow-up decision, not a
   reversal of this one.
+
+---
+
+## ADR-022 — Magic strings in comparisons become a machine gate (`comparisonLiterals`)
+
+- **Status:** Accepted
+- **Date:** 2026-07-16
+- **Owner decision** (repo owner, 2026-07-16)
+- **Amends:** ADR-015 (constant/type placement become always-on review judgments) —
+  for the specific shape of a bare string literal in an equality comparison or a
+  `switch` case, ownership moves from review to a deterministic gate. Every other
+  string position stays review-owned per ADR-015.
+
+### Context
+
+`isEditableTarget` in the pilot compared `element.tagName === "INPUT" | "SELECT" |
+"TEXTAREA"` with inline string literals. A full deep-review fan-out (8 profiles ×
+Opus+Codex) marked the file clean on naming — no machine gate covers magic strings:
+`inlineLiterals` wraps `@typescript-eslint/no-magic-numbers` (numbers only) and
+`constants-home` fires only on a module-scope `const` bound to a bare literal. A
+`x === "lit"` comparison is invisible to both, so the class was left to review recall,
+which missed it. Strings are noisier than numbers (error messages, discriminant tag
+DECLARATIONS, DOM/aria names, CSS classes, import specifiers, i18n keys, log scopes are
+all legitimate), so a blanket "no string literals" rule is unusable — the gate had to be
+scoped to the high-signal, low-noise shape. Measured on the pilot (SHA `00ccbedc`): of
+78 raw string comparisons (72 equality operands + 6 `switch` cases), 31 are
+`typeof x === "…"` (a fixed language return, not a magic value) and 7 are empty strings;
+the remaining 40 (34 equality + 6 switch) are the real candidates.
+
+### Decision
+
+1. **A new custom plugin rule `dev-standards/comparison-literals`** (factory
+   `comparisonLiterals({files, ignores, severity})`), NOT a `no-restricted-syntax`
+   selector: flat config REPLACES same-rule options, so a shared `no-restricted-syntax`
+   entry would clobber the `naming` floor (or be clobbered). A distinct rule id cannot
+   collide, carries a hint message, and expresses precise exemptions.
+2. **Scope (MVP):** a static string operand of an equality `BinaryExpression`
+   (`===`/`!==`/`==`/`!=`) and a `SwitchCase` test. Reports ONCE per node. A
+   `staticStringValue` helper unwraps a transparent `TSAsExpression`/`TSSatisfiesExpression`
+   and accepts an expressionless template, so a cast or backtick spelling cannot bypass it.
+3. **Exempt in the rule (universal):** the empty string, and a string whose sibling
+   operand is a `typeof` unary (either yoda order). **Exempt by construction:** a
+   comparison with no string literal, and union/enum type DECLARATIONS (the rule matches
+   only value-position comparison nodes, never `TSLiteralType`).
+4. **`severity` is a factory param (default `"error"`).** Siblings hard-code error; this
+   one is parameterized because it ships to existing consumers on a WARN-first ramp, and a
+   consumer must pass `"warn"` on the SAME block that registers the plugin — a separate
+   override block would leave `dev-standards` unregistered on any preset-ignored file and
+   crash ESLint with "Could not find plugin". Seeds and `presets-compose` keep the default
+   error, so a NEW consumer inherits the gate at error from day one.
+5. **Review guide amended** (`profile-naming-and-constants.md` §Constants): the
+   comparison/switch string shape is now gate-owned, so the reviewer no longer reports it
+   (review-contract.md: do not duplicate a deterministic gate). Other string positions stay
+   review-owned.
+
+### Consequences
+
+- **Ceilings (documented, review-owned or opt-in):** `.has`/`.includes` membership
+  (needs a known-set type; noisy — 0 pilot hits, opt in per repo on demonstrated need);
+  interpolated/tagged templates and ternary-valued operands (dynamic); and every string
+  position outside a comparison/switch.
+- **Rollout is a WARN ramp on the pilot**, flip-to-error deferred to a later calibration
+  pass with recorded exit criteria + rollback (docs/CALIBRATION.md). The pilot's eslint
+  check carries no `--max-warnings`, so the ramp does not turn `verify` red.
+- **Seed parity in the same batch:** `eslint/consumer-template.eslint.config.js` ships the
+  active block at error.
+- No `quality.schema.json` change — a new preset export, not a manifest shape change.

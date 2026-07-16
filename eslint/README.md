@@ -16,6 +16,7 @@ import {
   frontendNext,
   constantsHome,
   inlineLiterals,
+  comparisonLiterals,
   typesHome,
   propertyNaming,
   naming,
@@ -39,6 +40,10 @@ export default tseslint.config(
   ...inlineLiterals({
     files: ["packages/**/*.ts", "apps/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
     ignores: ["**/*.d.ts"],
+  }),
+  ...comparisonLiterals({
+    files: ["packages/*/src/**/*.ts", "apps/*/src/**/*.{ts,tsx}"],
+    ignores: ["**/src/constants/**", "**/constants.ts", "**/*.d.ts"],
   }),
   ...typesHome({
     files: ["packages/*/src/**/*.ts", "apps/*/src/**/*.{ts,tsx}"],
@@ -87,10 +92,11 @@ export default tseslint.config(
 | `frontendNext({files})` | frontend-web (Next) | `@next/eslint-plugin-next` core-web-vitals. Next site only |
 | `constantsHome({files, ignores})` | all | custom `dev-standards/constants-home` (error): a module-scope `const` bound to a bare primitive literal must move to a constants home. A custom rule in the shared plugin — **not** `no-restricted-syntax` — so it never clobbers a consumer's own naming gate (see below) |
 | `inlineLiterals({files, ignores, ignore})` | all | `@typescript-eslint/no-magic-numbers` (error), with `0`, `1`, `-1`, array indexes, enums, numeric literal types, readonly class properties, and type indexes ignored. Consumer `ignore` values extend the pinned numeric list |
+| `comparisonLiterals({files, ignores, severity})` | all | custom `dev-standards/comparison-literals` (default error): a bare string literal in an equality comparison (`tag === "INPUT"`) or a `switch` case is a magic value — compare against a named constant/union member. `typeof` operands, empty string, and union type declarations exempt. `severity` (default `"error"`) exists for the WARN-first ramp — see below |
 | `typesHome({files, ignores, allowNamePattern})` | all | custom `dev-standards/types-home` (error): exported top-level interfaces and type aliases belong in the consumer's types home. `allowNamePattern` defaults to `"Props$"` |
 | `propertyNaming({files, ignores})` | all | custom `dev-standards/property-naming` (error): non-computed identifier keys on TypeScript property signatures must be at least three characters; `_` remains the discard convention |
 | `naming({files, ignores, exemptNamedImports, extraRestrictedSyntax})` | all | the identifier floor: `no-restricted-syntax` min-3-chars over every name the repo's authors choose (vars, functions, classes, params, catch/destructured bindings, class members, ALL import locals incl. aliases) + `id-match` ASCII-only. `_` discard and object PROPERTY keys exempt. **Owns `no-restricted-syntax` in its scope** (see below) |
-| `devStandardsPlugin` | advanced composition | the single plugin object containing `constants-home`, `types-home`, and `property-naming`; preset factories already register it |
+| `devStandardsPlugin` | advanced composition | the single plugin object containing `constants-home`, `types-home`, `property-naming`, and `comparison-literals`; preset factories already register it |
 
 The factory presets (`node`, `frontend*`, `constantsHome`, `inlineLiterals`,
 `typesHome`, `propertyNaming`, `naming`) take `{ files }` (and, where relevant,
@@ -170,7 +176,53 @@ the pinned list:
 
 The preset intentionally does not register `@typescript-eslint`: the consumer's
 `typescript-eslint` base must precede it and supplies the exact plugin object already in
-the flat config. Inline strings remain review-owned; this preset is numeric-only.
+the flat config. This preset is numeric-only; magic STRINGS in comparisons are `comparisonLiterals`'
+job, and strings elsewhere stay review-owned.
+
+## `comparisonLiterals` — magic strings out of comparisons
+
+The string counterpart to `inlineLiterals`: a bare string literal compared for equality
+(`x === "lit"`, `!==`, `==`, `!=`) or matched in a `switch` case (`case "lit":`) is a
+magic value the numeric gates never see — the `tag === "INPUT"` shape a full deep-review
+fan-out once marked clean. Compare against a named constant or the union/enum member the
+value already declares (`x === INPUT_TAG`, `event.type === EVENT_TYPES.VAD`).
+
+Like `constantsHome` it is a custom rule with a distinct id (`dev-standards/comparison-literals`),
+**not** `no-restricted-syntax` — flat config REPLACES same-rule options, so a shared
+`no-restricted-syntax` entry would clobber the `naming` floor. The rule reports once per
+comparison and unwraps a transparent TS cast (`x === ("INPUT" as Tag)`) and an
+expressionless backtick (`` x === `INPUT` ``) so a spelling trick cannot bypass it.
+
+```js
+...comparisonLiterals({
+  files: ["src/**/*.ts", "src/**/*.tsx"],
+  ignores: ["**/src/constants/**", "**/constants.ts", "**/*.test.ts", "**/*.d.ts"],
+}),
+```
+
+An existing consumer adopting the gate passes `severity: "warn"` on this same block
+to ramp it in, triages the hit list, then drops the param to reach error.
+
+**Exempt in the rule (universal):** the empty string; a `typeof` operand
+(`typeof x === "string"` is a language-level return, not a magic value, in either yoda
+order). **Exempt by construction:** a comparison with no string literal (`x === CONST`),
+and a union/enum type DECLARATION (`type Tag = "INPUT" | ...`) — the rule matches only
+value-position comparison nodes, never the type's `TSLiteralType`s, so the type is the
+home, not a magic use.
+
+**The `severity` param and the WARN ramp.** Siblings hard-code `error`; this factory takes
+`severity` (default `error`) so an existing consumer can adopt it at `"warn"` and triage
+the hit list before flipping to error. It is a param — not a separate warn-override block —
+on purpose: a second block that set the rule to warn without re-registering the plugin
+would crash ESLint (`Could not find plugin "dev-standards"`) on any file the preset's own
+`ignores` drop. New consumers and the seed keep the default `error`.
+
+**Ceilings — deliberately NOT caught (review-owned or opt-in):** `.has("lit")` /
+`.includes("lit")` membership checks (needs a known-set type; noisy — opt in per repo if a
+demonstrated need appears); interpolated and tagged templates and ternary-valued operands
+(dynamic, not a fixed magic value); and every string position outside a comparison or
+switch (object values, call arguments, JSX props) — those stay with the naming-and-constants
+review profile.
 
 ## `typesHome` — exported declarations in the types home
 

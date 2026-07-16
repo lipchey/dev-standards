@@ -17,6 +17,7 @@ import {
   naming,
   constantsHome,
   inlineLiterals,
+  comparisonLiterals,
   typesHome,
   propertyNaming,
 } from "dev-standards/eslint";
@@ -63,6 +64,18 @@ export default tseslint.config(
   ...inlineLiterals({
     files: ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"],
     ignores: ["**/*.d.ts"],
+  }),
+  /* Comparison-literals gate — ACTIVE at error from day one: a bare string
+     literal in an equality comparison (`tag === "INPUT"`) or a `switch` case is a
+     magic value the numeric gates never see; compare against a named constant or
+     union member instead. `typeof`, empty string, and union type DECLARATIONS are
+     exempt in the rule. Existing consumers ramp it in at `severity: "warn"` (the
+     factory param) while triaging the hit list, then drop the param to reach
+     error. Same homes as constants-home; tests start out of scope like
+     constants-home — widen once the src churn is understood: */
+  ...comparisonLiterals({
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: ["**/src/constants/**", "**/constants.ts", "**/*.test.ts", "**/*.d.ts"],
   }),
   /* Props$ is a name-based exemption: a non-component FooProps in a .ts file also
      escapes — review-owned. For a mechanical split, use two entries (tsx with

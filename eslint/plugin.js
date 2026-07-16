@@ -62,6 +62,87 @@ const constantsHomeRule = {
   },
 };
 
+const COMPARISON_LITERALS_MESSAGE =
+  "magic string in a comparison — compare against a named constant (the workspace " +
+  "constants home, e.g. src/constants/, or the union/enum member it belongs to), not an " +
+  "inline string literal; the numeric gates never see this shape";
+
+const COMPARISON_OPERATORS = new Set(["===", "!==", "==", "!="]);
+
+/* TS wrappers that do not change the runtime value: a cast (`x as T`, the legacy
+   `<T>x`), `satisfies`, and a non-null assertion (`x!`). Stripped on BOTH sides
+   of the comparison so none can smuggle a magic string past the gate
+   (`tag === ("INPUT" as Tag)`, `<string>"INPUT"`) nor hide a `typeof` from its
+   exemption (`(typeof x as string) === "string"`). */
+const TRANSPARENT_WRAPPERS = new Set([
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSTypeAssertion",
+  "TSNonNullExpression",
+]);
+
+function unwrapTransparent(node) {
+  let current = node;
+  while (current && TRANSPARENT_WRAPPERS.has(current.type)) current = current.expression;
+  return current;
+}
+
+/* The static string VALUE of a comparison operand, or undefined when the operand
+   is not a bare string. Accepts a plain string literal and an expressionless
+   template (`` `INPUT` ``) — the forms constants-home treats as primitive, so a
+   backtick spelling cannot bypass the gate. Interpolated/tagged templates carry
+   an expression and are dynamic (a computed value, not a magic constant) — left
+   out (documented ceiling). Empty string is exempt (returns undefined). */
+function staticStringValue(node) {
+  const inner = unwrapTransparent(node);
+  if (!inner) return undefined;
+  if (inner.type === "Literal" && typeof inner.value === "string") {
+    return inner.value === "" ? undefined : inner.value;
+  }
+  if (inner.type === "TemplateLiteral" && inner.expressions.length === 0) {
+    const cooked = inner.quasis[0]?.value.cooked;
+    return cooked ? cooked : undefined;
+  }
+  return undefined;
+}
+
+/* `typeof x === "string"` (and its yoda form) is a language-level return value,
+   not a magic constant — a string operand whose SIBLING is a typeof unary is exempt. */
+function isTypeofOperand(node) {
+  const inner = unwrapTransparent(node);
+  return inner?.type === "UnaryExpression" && inner.operator === "typeof";
+}
+
+const comparisonLiteralsRule = {
+  meta: {
+    type: "suggestion",
+    docs: {
+      description:
+        "magic string literals in equality comparisons and switch cases belong in a constants home, not inline in logic",
+    },
+    schema: [],
+    messages: { magic: COMPARISON_LITERALS_MESSAGE },
+  },
+  create(context) {
+    return {
+      /* One report per comparison node — so `"a" === "b"` (both operands literal)
+         flags once, never twice. */
+      BinaryExpression(node) {
+        if (!COMPARISON_OPERATORS.has(node.operator)) return;
+        const leftIsMagic = staticStringValue(node.left) !== undefined && !isTypeofOperand(node.right);
+        const rightIsMagic = staticStringValue(node.right) !== undefined && !isTypeofOperand(node.left);
+        if (leftIsMagic || rightIsMagic) context.report({ node, messageId: "magic" });
+      },
+      SwitchCase(node) {
+        /* `default:` has a null test. */
+        if (node.test && staticStringValue(node.test) !== undefined) {
+          context.report({ node: node.test, messageId: "magic" });
+        }
+      },
+    };
+  },
+};
+
 function isTypeDeclaration(node) {
   return node?.type === "TSInterfaceDeclaration" || node?.type === "TSTypeAliasDeclaration";
 }
@@ -188,5 +269,6 @@ export const devStandardsPlugin = {
     "constants-home": constantsHomeRule,
     "types-home": typesHomeRule,
     "property-naming": propertyNamingRule,
+    "comparison-literals": comparisonLiteralsRule,
   },
 };
