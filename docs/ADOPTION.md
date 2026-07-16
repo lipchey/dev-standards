@@ -165,22 +165,25 @@ can't express goes upstream (fix-upstream loop below).
 
 ## Wiring checklist for a new app / package / workspace
 
-Every quality gate is scoped by an explicit path list, so a newly-added workspace
-is invisible to all of them — silently unlinted, unchecked, uncovered — until each
-list names it. When a diff adds a workspace, extend **every** scoped list in the
-same change:
+SOME quality gates are scoped by an explicit path list, so a newly-added workspace
+can be invisible to them — silently unlinted, unchecked, uncovered — while OTHERS
+(an unscoped eslint config, a broad glob, a whole-tree command) already cover it.
+When a diff adds a workspace, AUDIT each gate and extend only the scopes whose
+existing globs/commands do not already reach it:
 
-- **eslint** — add the workspace's files to the preset `files` globs (and any
-  boundary/import-zone blocks that must cover it).
-- **`quality.json` filesets** — add it to the `staged` and `full` filesets its
-  tiers expand (a `git_staged` fileset plus the full-tree one).
-- **typecheck chain** — add its `tsconfig`/project reference so it is type-checked.
-- **any deep-review / contract gate** — name the new zone in the relevant
-  `quality.json` check args so it is not skipped.
+- **eslint** — if the preset's `files` globs or import-zone blocks are scoped, add
+  the workspace; an unscoped or broad-glob config already covers it.
+- **`quality.json` filesets** — a fileset is a gate only where a check references
+  it (`{files:…}`, `skip_if_empty`, formatting); add the workspace to the filesets
+  it must feed, not to every one.
+- **typecheck chain** — add its `tsconfig`/project reference if typecheck is
+  per-project rather than whole-tree.
+- **any deep-review / contract gate** — name the new zone in the relevant check
+  args if that gate is path-scoped.
 
-The structure-and-boundaries review lens now prompts for this on any diff that
-adds a workspace (`profile-architecture-and-boundaries.md` §Baseline structural
-checks).
+The structure-and-boundaries review lens prompts for the boundary/import-zone part
+on any workspace-adding diff (`profile-architecture-and-boundaries.md` §Baseline
+structural checks).
 
 ## Deep review is opt-in
 

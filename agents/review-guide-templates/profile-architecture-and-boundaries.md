@@ -33,16 +33,17 @@ This profile carries the architecture-and-boundaries share of the repo-owned
 - Is there needless duplication that will drift out of sync, or needless
   indirection that adds a name but no behavior? Weigh both directions - do not
   manufacture an abstraction a single caller will ever use.
-- **A new workspace/package must be named in every scoped gate list.** Quality
-  gates are scoped by explicit path lists (eslint preset `files` globs, boundary
-  blocks, `quality.json` filesets, typecheck chains), so a NEWLY-added workspace
-  is invisible to all of them - silently unlinted, unchecked, uncovered - until
-  each list names it by hand. **Check:** does this diff add an app / package /
-  workspace? If so, is every scoped gate list (eslint, staged/full filesets,
-  boundary rules, typecheck chain) extended to include it, or is the new zone a
-  gate blind spot? (2026-07-15, dev-standards / ai-prompter adoption - two pilot
-  ledger escapes: a `site/` zone blind to eslint+staged, a missing deep contract
-  in a second zone)
+- **A new workspace/package must be covered by the boundary/import-zone rules.**
+  Import-zone and layer-boundary gates are scoped by explicit path lists, so a
+  NEWLY-added workspace is outside every zone rule until named - its imports go
+  ungoverned against the declared DAG. **Check:** does this diff add an app /
+  package / workspace? If so, is it named in the boundary/import-zone
+  configuration (eslint import-zone blocks, dependency-cruiser scope) so its
+  dependency direction is checked? The full cross-gate wiring checklist (eslint
+  `files` globs, `quality.json` filesets, typecheck chain) is a config concern
+  owned by `ADOPTION.md` §Wiring checklist, not this lens. (2026-07-15,
+  dev-standards / ai-prompter adoption - a `site/` zone blind to its boundary +
+  staged gates)
 
 ## Clean-architecture conditionality banner
 
