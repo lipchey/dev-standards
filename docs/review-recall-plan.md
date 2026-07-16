@@ -211,8 +211,11 @@ contradictions, rule loopholes/over-reach) as a MANDATORY pass, not optional;
   Codex cross-run), and assembles a **coverage matrix** (in-scope files ×
   profiles) from the workers' COVERAGE sections — any hole is re-dispatched
   or recorded as an explicit gap (orchestrator-runtime, no CLI verb).
-- The independent Codex cross-run stays as-is — it is the recall-diversity
-  backstop, not replaced by profiles.
+- ~~The independent Codex cross-run stays as-is — it is the recall-diversity
+  backstop, not replaced by profiles.~~ **Superseded by ADR-020 (2026-07-16):**
+  the standalone full-corpus cross-run is removed; cross-model recall diversity
+  is now delivered by staffing the per-profile fan-out with Codex (Run-setup Q1
+  mode b/c).
 
 ## Two-stage development doctrine (owner decision 2026-07-15 → ADR-019)
 

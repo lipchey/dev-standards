@@ -84,8 +84,8 @@ test('the skill body pins the mandatory/non-collapsible profile fan-out contract
      fan-out collapse, the per-profile-todo + coverage-matrix countermeasures, the
      worker-route floor, the legacy-overlay broadcast, and the full-roster matrix.
      The corpus-filenames-appear check above cannot catch these — those names also
-     live in the full-corpus cross-run roster, so the whole fan-out block could be
-     deleted and stay green without this test. */
+     live in §review-only step 4's corpus roster, so the whole fan-out block could
+     be deleted and stay green without this test. */
   const requiredPhrases = [
     'MANDATORY and NON-COLLAPSIBLE',
     'worker-route floor',

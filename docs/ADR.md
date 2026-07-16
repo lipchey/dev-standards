@@ -446,6 +446,9 @@ Gate P/C: `docs/source-swap-detection-plan.md`.
 - **Status:** Accepted
 - **Date:** 2026-07-15
 - **Plan:** `docs/review-recall-plan.md` (Gate-P-reviewed)
+- **Amended by:** ADR-020 (2026-07-16) — the standalone full-corpus Codex
+  cross-run this ADR paired with the fan-out is removed; Codex is folded into the
+  fan-out as a per-profile staffing mode.
 
 ### Context
 
@@ -602,3 +605,65 @@ entries, which is where an unrecorded decline surfaces.
 - A declined Stage 2 lowers the bar VISIBLY when the convention is followed —
   the debt entry survives session boundaries; making that impossible to skip
   (receipt + gate) is the deferred hardening above.
+
+## ADR-020 — Codex joins the review as a per-profile fan-out staffing mode, replacing the standalone full-corpus cross-run
+
+- **Status:** Accepted
+- **Date:** 2026-07-16
+- **Amends:** ADR-018 (profile fan-out) — retires its "the Codex cross-run is
+  ADDITIONAL to the fan-out" clause.
+
+### Context
+
+ADR-018 established the mandatory per-profile fan-out (the recall engine) AND, on
+top of it, a SEPARATE standalone Codex cross-run: one independent full-corpus
+review by Codex, effort chosen per run (`xhigh`/`ultra`). Two structures, two
+runtimes. The full-corpus cross-run gave one model the whole corpus at once —
+cross-model recall diversity — but at the cost of the very dilution the fan-out
+exists to fix (one route carrying ~3k lines of guide text), and the per-run
+`ultra` ask was an extra prompt whose only job was to set effort.
+
+Owner decision (2026-07-16): fold Codex INTO the fan-out. The fan-out is the
+recall engine; the MODEL that staffs it should be a per-run choice, not a second
+parallel structure.
+
+### Decision
+
+1. **The standalone full-corpus Codex cross-run is removed.** Codex no longer
+   runs as one independent full-corpus pass. Cross-model recall diversity is now
+   delivered by STAFFING the per-profile fan-out with Codex (below), where
+   per-lens attention is already engineered.
+2. **The §Run-setup first ask changes** from "Codex cross-run effort
+   xhigh/ultra" to a **profile-worker mode**: (a) N Opus workers over the N
+   profiles, (b) N Codex workers over them, or (c) BOTH fleets in parallel with
+   the main session consolidating per profile. Default `c` — it preserves the
+   cross-model diversity the standalone cross-run provided by default, and the
+   Codex half is flat-rate. The second ask (report-only / fix) is unchanged.
+3. **Codex effort is fixed at `xhigh`, read-only, per profile.** A Codex route
+   reads only its two corpus files in-band (`review-contract.md` + its one
+   `profile-*.md`, plus overlays and the project must-reads), NOT the full
+   corpus. `ultra` is never auto-selected; it is reached only on an explicit
+   in-the-moment user request — the per-run ultra confirmation the global Codex
+   gates require.
+4. **The fan-out invariant is unchanged** (ADR-018): MANDATORY, NON-COLLAPSIBLE,
+   one differentiated route + coverage row per applicable profile. The
+   worker-mode choice governs only the staffing MODEL; a single full-corpus pass
+   by ANY model still does not discharge the per-profile obligation. Adversarial
+   verification, provenance labels (`opus`/`codex`/`both`), the independence
+   guard, and the required coverage matrix carry over from the old cross-run
+   merge to the new per-profile consolidation.
+
+### Consequences
+
+- One structure instead of two: the fan-out is the single recall engine, staffed
+  by the chosen model(s). No separate full-corpus cross-run to launch, watch, or
+  merge.
+- Cross-model recall becomes opt-out (pick mode a) rather than always-on; the
+  default (c) keeps it on. Headless/delegated runs, which never call external
+  agents, fall to main-session lens passes under the worker-route floor —
+  single-model, as before.
+- Per-profile Codex routes each read only their one profile, ending the
+  full-corpus dilution the fan-out exists to prevent; concurrency requires unique
+  per-route `-o`/log paths (the /tmp-collision hazard).
+- `docs/review-recall-plan.md`'s "the independent Codex cross-run stays as-is"
+  bullet is superseded.
