@@ -148,3 +148,39 @@ error severity + `verify --full` green.
 **Rollback.** If adoption is operationally broken: revert the pilot preset block +
 its pin. An upstream rule defect gets a corrective commit + a NEW tag — never a
 retag of a published one.
+
+### 2026-07-17 — `comparisonLiterals` flip-to-error executed (ai-prompter pilot, ADR-022)
+
+**What happened.** The warn-ramp exit criteria (2026-07-16 entry above) are all
+met; the pilot dropped `severity: "warn"` from its `comparisonLiterals({...})`
+block, so the gate now runs at the seed/composition default (error). No seed or
+composition change — those already ship at error.
+
+**Exit criteria, each satisfied.**
+- *Every hit triaged to zero.* All 40 baseline hits (plus 1 the warn list missed —
+  `located !== "ambiguous"` in `tracker.ts`, a real magic string) were resolved by
+  naming: each `===`/`!==`/`switch` literal became a named constant in a
+  `src/constants/**` home (or a dedicated dep-free home, see caveat) or a union
+  member. None needed a rule-exemption or a confirmed-ceiling waiver — including
+  the ~10 "framework-canonical borderlines" (DOM `event.key`, `readyState`,
+  `protocol`, Node `code`, vite modes): all read cleaner as named constants, so
+  no `.key`/framework carve-out was added to the rule.
+- *Test-file scope.* Tests stay OUT of scope (unchanged), mirroring
+  `constants-home`. Extracting ~10 throwaway test-scaffold comparison strings adds
+  no safety and churns fixtures; the flip covers `src` only.
+- *Severity + green.* `severity: "warn"` param removed → default error; `./scripts/verify --full` green (13/13 blocking gates), eslint reports 0 `comparison-literals` and 0 warnings.
+
+**One non-mechanical wrinkle (consumer-shaped, not a rule concern).** In
+ai-prompter, `browser-adapters/src/stt/endpoint.ts` is deliberately dependency-
+free and DOM-free (a Node Vite config imports it), so it can pull neither the
+engine barrel nor a constants home that references DOM lib types. The
+`protocol === "https:"` literal therefore went into a new dedicated
+`browser-adapters/src/constants/url.ts` (no engine import, no DOM types) rather
+than the package's main `constants/index.ts` (which uses `MediaStreamTrackState`
+etc.). This is a placement decision inside the consumer's import graph — the rule
+just asks for a named constant and is agnostic to which home; recorded so the next
+adopter isn't surprised that "put it in the obvious constants file" can violate a
+package's own dependency boundary.
+
+**Net.** ADR-022's warn→error ramp is complete on the pilot. The rule ships at
+error everywhere; the pilot is now aligned with the seed/composition default.
