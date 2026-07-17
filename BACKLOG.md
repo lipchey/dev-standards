@@ -2,6 +2,17 @@
 
 Non-blocking, dated. Newest first.
 
+## 2026-07-17 — guide cross-refs are not mechanically validated (Gate C, check-missing)
+
+The `→ see \`profile-<x>.md\` §<Section>` cross-ref grammar in
+`agents/review-guide-templates/` resolves nothing mechanically: Gate C on the
+hexagonal-depth batch (2026-07-17) caught a cross-ref written without its
+`§Section`, and a section RENAME in any profile would silently orphan every
+inbound ref. Candidate: a small core test beside
+`tests/runner/review-guides-present.test.ts` that parses each `→ see` ref in
+the corpus and asserts the target file contains the named `##`/`###` heading.
+Class: check-missing.
+
 ## 2026-07-16 — clean-worktree gate: narrow the blanket submodule exemption (Gate C r2 P1, PARTIAL)
 
 `nonToolingDirtyPaths` (`deep-review/src/worktree.ts`, shared by handoff §5.5 and

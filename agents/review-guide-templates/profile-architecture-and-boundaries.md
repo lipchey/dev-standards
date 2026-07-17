@@ -6,7 +6,7 @@ isolation. Do not turn naming, test-oracle, type-contract, runtime, module-depth
 refactoring, or security concerns into findings from this profile except where
 the full rule is explicitly owned here.
 
-Template-Version: 3 (review-recall 2026-07-15)
+Template-Version: 4 (hexagonal-depth 2026-07-17)
 
 Guide filenames in the provenance notes below refer to the RETIRED pre-profile
 corpus (deleted in the profile rewrite, alive in git history); `TRACEABILITY.md`
@@ -25,6 +25,11 @@ This profile carries the architecture-and-boundaries share of the repo-owned
   guides, `code-quality-universal.md`, `common-bugs-checklist.md`, and
   cross-cutting async/error notes. The Node lens was written from universal
   material plus repo experience because upstream has no dedicated lens for it.
+- Hexagonal driving/driven and ports/adapters depth is paraphrased from
+  "Hexagonal Architecture (Ports & Adapters)" by plusiv (dev.to, 2026-02-26,
+  https://dev.to/plusiv/hexagonal-architecture-ports-adapters-3adn) plus
+  Cockburn's original driving/driven model; concepts paraphrased, no verbatim
+  copies.
 
 ## Baseline structural checks
 
@@ -77,6 +82,16 @@ Weighting: strong for layered code, light for pipelines.
   an ORM entity, raw DB row) instead of a plain DTO or domain type? Finding.
   DTO/domain type ownership is also described in
   → see `profile-types-and-contracts.md` §Layer-boundary data contracts.
+- **Infrastructure error types do not cross inward.** Catching or branching on
+  an infra-specific error type inside domain/use-case code (`AxiosError`, an
+  ORM's `UniqueConstraintViolation`, a driver timeout class) imports the outer
+  layer in disguise - the port's error contract belongs to the core, and driven
+  adapters translate their tech's failures into it. **Check:** grep inner-layer
+  catch/instanceof for infra error types; each is a finding. Non-security error
+  SEMANTICS (retries, propagation, swallowing) stay owned by
+  → see `profile-correctness-and-lifecycle.md` §Error handling; fail-open and
+  error-exposure handling by → see `profile-security.md` §Fail closed - this
+  lens owns only the dependency direction of the error TYPE.
 - **No cycles between layered modules.** A cycle means neither module can be
   read, tested, or released without the other. **Check:** trace imports (or read
   the dependency-cruiser report - do not re-report a cycle the gate already
@@ -90,6 +105,14 @@ Weighting: strong for layered code, light for pipelines.
 
 Weighting: strong for class-heavy TS; light for pipelines, subject to the
 one-adapter caution.
+
+Classify each adapter before judging its edges (Cockburn's driving/driven
+split): **driving** (primary) adapters initiate interactions INTO the core
+through its ports - HTTP handlers, CLI, schedulers, queue/event consumers,
+test scripts; **driven** (secondary) adapters implement ports the core CALLS
+OUT through - databases, queue publishers, external API clients. The criterion
+is who triggers the interaction, not the technology: the same broker is a
+driving adapter on its consumer side and a driven one on its publisher side.
 
 - **The core owns the port interface.** If the adapter's package defines the
   interface, the dependency still points outward. **Check:** locate each port
@@ -113,6 +136,42 @@ one-adapter caution.
   another outbound adapter and bypassing the use case is a finding. Legal flows
   are inbound adapter -> port -> use case and use case -> port with an outbound
   adapter implementing it; never adapter -> adapter directly.
+- **Port contracts stay technology-neutral.** A port whose SIGNATURE leaks its
+  technology re-couples the core even when the dependency arrow is formally
+  correct: methods mirroring HTTP verbs/routes, parameters taking SQL/query
+  fragments, names like `...FromPostgres`. **Check:** read each port's method
+  signatures - could a second, technologically different adapter implement it
+  without changing the interface? A signature only one technology can satisfy
+  is a finding. Parameter/return data shapes (ORM entities, raw rows) and
+  their mapping are owned by
+  → see `profile-types-and-contracts.md` §Layer-boundary data contracts.
+- **Hidden driven dependencies - clock, randomness, environment.**
+  Nondeterminism or environment read directly in core code (`Date.now()`,
+  `new Date()`, `Math.random()`, `crypto.randomUUID()`, `process.env`) is an
+  undeclared driven port - invisible in the import graph but coupling all the
+  same. The §Layer separation use-case bullet already covers env/framework
+  globals for use cases; this bullet owns clock/randomness across the core and
+  environment reads at domain level. **Check:** where the repo declares a
+  layered core, does core code read wall-clock time or randomness inline, or
+  domain code read the environment? Finding. **When NOT:** script-style code,
+  or a leaf function where threading a clock parameter is pure ceremony - do
+  not manufacture a ClockPort for a one-off timestamp. Without a declared
+  layered core, hidden global reads are owned by
+  → see `profile-module-depth.md` §Information hiding and leakage; a missing
+  test seam by → see `profile-refactoring-and-smells.md` §Seams and dependency
+  injection.
+- **Transaction ownership sits behind a port.** The domain defines what must
+  stay consistent (aggregate invariants); the use case coordinates the atomic
+  operation; the concrete transaction technology stays behind a port - never
+  at the edge. **Check:** two shapes are findings when the repo declares a
+  persistence layer: (a) an inbound adapter (controller/handler)
+  opening/committing the transaction that spans a business operation - the
+  edge now owns business consistency; (b) SQL transaction control
+  (`BEGIN`/`COMMIT`/ORM transaction API) inside entities or use cases via a
+  concrete client - push demarcation behind a unit-of-work/transaction port.
+  **When NOT:** single writes with no explicit transaction demarcation, where
+  the driver's default atomicity suffices; script-style pipelines without a
+  declared layered core.
 
 ## Layer separation
 
@@ -128,6 +187,13 @@ Weighting: strong for layered domains; light for pipelines.
   make business decisions (pricing, domain-invariant validation, state
   transitions) rather than translate protocol <-> use-case shapes? Finding -
   move the decision inward.
+- **Outbound adapters translate only, too.** The driven-side symmetry of the
+  rule above: a repository filtering records by business policy beyond its
+  port's contract, a gateway computing derived business values, or retry/
+  fallback logic encoding business policy rather than transport recovery is the
+  same finding on the driven side. **Check:** does an outbound adapter decide
+  anything the use case should own? Finding - move the decision into the use
+  case.
 - Domain-type/transport-DTO separation and one-time mapping are owned by
   → see `profile-types-and-contracts.md` §Layer-boundary data contracts.
 
