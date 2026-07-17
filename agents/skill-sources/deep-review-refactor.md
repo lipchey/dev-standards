@@ -62,7 +62,18 @@ decisions for itself.
 - **Delegated, to keep context lean:** per-finding code exploration and
   evidence-gathering (the CodeGraph/read fan-out), the profile fan-out below
   (Opus- and/or Codex-staffed per §Run setup), and - in fix mode - the mechanical
-  slice implementation (the worker produces the diff).
+  slice implementation. Wherever a worker route exists the main session does NOT
+  write the fix code inline: once the findings are validated it dispatches a FIXER
+  SUBAGENT PER `fixable-now` finding (per the session's delegation protocol), fanning
+  SEVERAL out in parallel across findings with disjoint file sets. Each worker AUTHORS
+  its slice IN ISOLATION (its own worktree/branch or a produce-only patch, never
+  concurrently mutating the shared review worktree) and returns the diff; the main
+  session then applies, self-reviews and commits them ONE AT A TIME (§commit-slice
+  below), so the diff-writing lives in the workers and the main context carries only
+  the verdicts while the atomic per-slice sequence stays race-free. Under the
+  worker-route floor - fix mode is active but no worker route exists (headless `--fix`,
+  no delegation launcher, or workers declined) - the main session authors the slices
+  itself, one finding at a time; the same floor the profile fan-out falls back to.
 - **Never delegated, owned by the main session:** the Run-setup asks; every
   adversarial VALID/INVALID/PARTIAL verdict, the provenance-labeled merge, and the
   final report; the `classify` and `verify` gate calls, the fix-mode self-reviews
@@ -317,8 +328,11 @@ no external Codex), report-only - and say so in the report.
    (§Orchestration), note it; if Opus workers are also unavailable the whole
    fan-out runs on main-session lens passes, single-model.
 
-One fan-out per request - it shares the run's §Budget; no second staffing round
-inside the same deep-review invocation.
+One PROFILE-REVIEW fan-out per request - it shares the run's §Budget; no second
+staffing round of review routes inside the same deep-review invocation. (The
+fix-phase fixer workers of §commit-slice are a DISTINCT, later fan-out - they
+produce slice diffs, not review findings - and are not the "staffing round" barred
+here; they likewise draw on the run's §Budget.)
 
 ## Mode: review-only (default)
 
@@ -423,14 +437,30 @@ classification, status, sha) across the whole run.
      no-touch: never silently fix such a finding, and never silently drop it. A
      developer who later approves it re-enters it as a fresh `fixable-now` finding.
 3. `commit-slice <finding-id>` runs the atomic fix loop, `fixable-now` findings
-   only. **Brief fidelity (orchestrator-runtime, no CLI change):** a finding whose
+   only. **Delegated authoring, serialized apply + commit (§Orchestration).** The main
+   session does not author these slices (worker-route floor aside): it dispatches ONE
+   fixer subagent per `fixable-now` finding - several in parallel across disjoint-file
+   findings - each briefed with the finding, its rule-compliant destination, and the
+   merged guide lens. A worker AUTHORS its slice IN ISOLATION (its own worktree/branch
+   or a produce-only patch) with a PREFLIGHT focused-test run, then returns the diff; it
+   NEVER commits and never edits the shared `deep-review/<slug>` worktree concurrently -
+   `commit-slice`'s scope gate refuses when any out-of-slice path is dirty, so a second
+   worker's edits sitting in that worktree would make the first slice's commit fail. The
+   main session then processes the returned diffs ONE AT A TIME: apply the diff to the
+   review worktree, self-review it, and invoke the serialized `commit-slice` (which runs
+   the BINDING focused tests, stages exactly the slice, and commits) - never committing
+   directly. Findings whose files overlap are ordered and re-based on the updated HEAD,
+   so the atomic per-slice history and its `Deep-Review-Slice` trailers stay intact.
+   **Brief fidelity (orchestrator-runtime, no CLI change):** a finding whose
    fix has a placement component (moves or introduces code) must carry the exact
    rule-compliant destination path, validated against `.claude/code-conventions.md`
    - never a destination the finding→slice translation guessed or hard-coded; the
    implementer re-checks each slice's placement against `code-conventions.md`
    before this loop.
-   - Make one smallest behavior-preserving slice.
-   - Run focused tests for the touched area.
+   - Make one smallest behavior-preserving slice (authored by the fixer worker in
+     isolation, with a preflight focused-test run there).
+   - Run focused tests for the touched area (the BINDING run, inside the
+     main-invoked serialized `commit-slice`).
    - **Self-review the slice diff (orchestrator-runtime, no CLI verb):** before
      committing, judge the slice against the SAME merged guide set from the
      review-only pass (§review-only step 4), explicitly INCLUDING the repo's
