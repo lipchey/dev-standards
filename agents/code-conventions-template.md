@@ -70,5 +70,10 @@ which test level owns each kind of behavior.
 
 ## When to add a package or module
 
-Define the evidence required for a new boundary, such as multiple real callers
-or an independent runtime or release contract.
+Define what justifies a new boundary. The trigger is the LAYER, not the caller
+count: a new layer of logic worth isolating for its own sake — to sharpen the
+architecture and give AI sessions a stronger, compiler-enforced boundary to work
+within — is reason enough, even at a single consumer. Speculative runtime
+abstractions still wait for a real caller (YAGNI). List the concrete triggers
+this repo honors (e.g. a portable/platform-free concern, an independent runtime
+or release contract, a shared wire boundary).

@@ -886,3 +886,45 @@ the remaining 40 (34 equality + 6 switch) are the real candidates.
 - **Seed parity in the same batch:** `eslint/consumer-template.eslint.config.js` ships the
   active block at error.
 - No `quality.schema.json` change — a new preset export, not a manifest shape change.
+
+## ADR-023 — Package/module boundaries are gated by "a layer worth isolating", not consumer count
+
+- **Status:** Accepted
+- **Date:** 2026-07-17
+- **Owner decision** (repo owner, 2026-07-17)
+
+### Context
+
+`code-conventions-template.md` §"When to add a package or module" primed the
+evidence for a new boundary as "multiple real callers or an independent runtime
+or release contract" — i.e. it seeded a caller-COUNT bar as the default trigger.
+In an AI-written repo the dominant value of a package is structural: an explicit,
+compiler-enforced boundary tells each session where code belongs and hardens the
+repo against drift. That value lands at the FIRST consumer, not the second;
+gating on caller count delays the boundary until retrofitting it costs multiples.
+The pilot (`ai-prompter`) hit this directly — its `browser-adapters` package was
+lifted out on a single consumer purely for the guardrail, an "override" of the
+old ≥2-consumer rule that has now recurred enough to BE the rule.
+
+### Decision
+
+1. The template guidance reframes the trigger as **a new layer of logic worth
+   isolating for its own sake** — to sharpen architecture and give AI sessions a
+   stronger compiler-enforced boundary — which qualifies even at a single
+   consumer. Caller count is no longer the default evidence.
+2. **YAGNI is unchanged for runtime abstractions:** a second-vendor adapter, DI
+   container, or publish pipeline still waits for a real caller. The shift is
+   scoped to STRUCTURAL package/module boundaries, consistent with the
+   AI-first-structure principle.
+3. The template stays a fill-in: each consumer lists the concrete triggers it
+   honors (portable/platform-free concern, independent runtime/release contract,
+   shared wire boundary, …).
+
+### Consequences
+
+- Consumers filling `code-conventions.md` from the template no longer inherit a
+  caller-count default; a single-consumer structural package is a first-class,
+  expected outcome, not an exception needing an owner override.
+- No gate/preset/schema change — this is authoring/review guidance. The pilot's
+  own `.claude/code-conventions.md` already carries the concrete rule (its four
+  packages are canonical instances).
