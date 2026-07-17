@@ -251,7 +251,9 @@ no external Codex), report-only - and say so in the report.
      worker MODEL; it NEVER collapses the fan-out (§Orchestration): every
      applicable profile still gets its own differentiated route and coverage row.
    - **After findings**: `report only` (default) or `fix all confirmed
-     fixable findings` - consent here continues straight into
+     fixable findings` - "all" means every severity, not only P1 (see `classify`,
+     ADR-024); high-effort/low-benefit findings are escalated to you for a go/no-go,
+     never auto-fixed. Consent here continues straight into
      `review-and-refactor` after the merged report, with no second ask. An
      explicit `--fix` invocation already answers this question - ask only
      the mode one.
@@ -397,6 +399,29 @@ classification, status, sha) across the whole run.
    instead of silently classifying against the baseline floor alone - a false
    "editable" verdict here would risk auto-editing a path the repo meant to
    protect.
+   **Fix scope - every VALID finding whose fix is a behavior-preserving refactor,
+   not only the critical ones (ADR-024).** Severity ORDERS the work, it does not
+   GATE it: a VALID finding at ANY priority (P1, P2, P3) whose fix is a
+   behavior-preserving refactor is in scope, so `classify` routes it to `fixable-now`
+   regardless of severity. A run that fixes only P1s and leaves confirmed P2/P3
+   refactors untouched is a collapsed fix phase, not a lean one. Two things stay OUT
+   of auto-fix at every severity:
+   - A finding whose fix would CHANGE observable behavior (a correctness bug fix, a
+     feature) is never auto-committed here - the fix phase makes only
+     behavior-preserving slices (step 3 `commit-slice`;
+     `profile-correctness-and-lifecycle.md` §Behavior preservation during refactors).
+     It is reported/planned as a feature-or-fix, not churned in as a refactor. This
+     exclusion is PRIOR to and larger than the cost/benefit one below.
+   - **Cost/benefit carve-out.** Among the behavior-preserving-fixable set, a fix
+     that is disproportionately large or invasive for a dubious or marginal benefit
+     is NOT auto-applied - the orchestrator sets `needs_plan = true` (routing it to
+     `needs-plan`) with a one-line effort-vs-benefit rationale in the finding's
+     `impact`, so `report` surfaces it and the developer makes the go/no-go. This is
+     the SAME disposition the refactoring profile already names "leave it / principal
+     exceeds interest" (`profile-refactoring-and-smells.md`) - surfaced to the
+     developer, never churned. Escalation is the third path between auto-fix and
+     no-touch: never silently fix such a finding, and never silently drop it. A
+     developer who later approves it re-enters it as a fresh `fixable-now` finding.
 3. `commit-slice <finding-id>` runs the atomic fix loop, `fixable-now` findings
    only. **Brief fidelity (orchestrator-runtime, no CLI change):** a finding whose
    fix has a placement component (moves or introduces code) must carry the exact

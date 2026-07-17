@@ -928,3 +928,55 @@ old ≥2-consumer rule that has now recurred enough to BE the rule.
 - No gate/preset/schema change — this is authoring/review guidance. The pilot's
   own `.claude/code-conventions.md` already carries the concrete rule (its four
   packages are canonical instances).
+
+---
+
+## ADR-024 — Fix scope is every VALID finding, not only the critical ones; cost/benefit findings escalate to the developer
+
+- **Status:** Accepted
+- **Date:** 2026-07-17
+- **Owner decision** (repo owner, 2026-07-17)
+- **Amends:** the `deep-review-refactor` review-and-refactor fix phase (ADR-013's
+  verified fix loop) — it pins WHICH findings the loop is obligated to fix.
+
+### Context
+
+The skill body never limited fixes to P1, but it never stated the opposite either,
+so a run could plausibly fix the criticals and stop. The owner wants the fix phase
+to close every VALID finding it can — a confirmed P3 left unfixed is unfinished
+work, not restraint. The one real exception is economic: some mechanically-fixable
+findings cost far more to fix (large, invasive, risky churn) than the benefit
+justifies, and that go/no-go is the developer's call, not the skill's.
+
+### Decision
+
+1. **All severities are in fix scope, within the behavior-preserving-fixable set.**
+   Severity ORDERS the work; it does not GATE it. `classify` routes every
+   non-no-touch, non-needs-plan VALID finding whose fix is a behavior-preserving
+   refactor to `fixable-now` regardless of P1/P2/P3. Fixing only P1s and leaving
+   confirmed P2/P3 refactors is a collapsed fix phase. A finding whose fix would
+   change observable behavior (a bug fix, a feature) is OUT of auto-fix at every
+   severity — the fix phase makes only behavior-preserving slices, so such a finding
+   is reported/planned, not churned in as a refactor. That behavior-preservation
+   exclusion is prior to and larger than the cost/benefit carve-out below.
+2. **Cost/benefit is the one ADDED carve-out, and it escalates — it does not
+   auto-decide.** Among behavior-preserving-fixable findings, one whose fix is
+   disproportionately large/invasive for a dubious/marginal benefit is NOT
+   auto-fixed: the orchestrator sets `needs_plan = true` (→ `needs-plan`) with a
+   one-line effort-vs-benefit rationale in the finding's `impact`, so `report`
+   surfaces it and the developer makes the go/no-go. This is the SAME disposition
+   `profile-refactoring-and-smells.md` already names "leave it / principal exceeds
+   interest" — surfaced, never churned. Escalation is a third path between auto-fix
+   and no-touch — never a silent fix, never a silent drop.
+3. **No engine change.** The existing `classify` precedence
+   (no-touch → needs-plan → fixable-now) and the non-blocking `needs-plan` handoff
+   bucket already carry this; only the skill body's doctrine is new.
+
+### Consequences
+
+- A developer who approves an escalated finding re-enters it as a fresh
+  `fixable-now` finding in a later run; a decline leaves it as a recorded plan.
+- The report's `needs-plan` bucket now mixes redesign-scope findings and
+  cost/benefit escalations; `FindingsFileV2` has no structured decision state (v1),
+  so the per-finding effort-vs-benefit rationale in `impact` — rendered by `report`
+  — is what distinguishes them and carries the developer's out-of-band go/no-go.
