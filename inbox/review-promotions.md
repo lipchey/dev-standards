@@ -40,6 +40,8 @@ deleted - the history is the second-use evidence.
 
 ## Pending
 
+- [ ] 2026-07-22 ai-prompter RR3-T13 stage-2 - naming: bless `p50`/`p95`/`pNN` percentile notation as an accepted statistics idiom exempt from the meaningful-name / min-length identifier gate (the `p` prefix is the universal percentile convention; spelling it `percentile50` reduces readability for a domain reader) (addition).
+- [ ] 2026-07-22 ai-prompter RR3-T13 stage-2 - naming: bless `stdout`/`stderr`/`cli` as standard abbreviations in the blessed-identifier allowlist (universal shell/tooling idioms; NC-18) (addition).
 - [ ] 2026-07-16 dev-standards deep-review CLI gate-C (Codex GC-3) - correctness/parser: a named-flag parser returning the token immediately after `--flag` unconditionally SWALLOWS a following flag (`--note --findings f` → note="--findings") for flags whose value is FREE TEXT / an operand. Check: for a separated `--flag <value>` whose value grammar excludes options, treat a `--`-prefixed or empty next token as a MISSING value (inline `--flag=<value>` is unambiguous). **[DEFERRED 2026-07-16 by this batch's Gate C: the first draft over-reached — `deep-review --scope <--fast|--full>` LEGITIMATELY takes a `--`-prefixed value (cli.ts:288, verify.test.ts tests `--scope --full`), so "reject any `--`-prefixed next token" is wrong; must narrow to flags whose value grammar excludes options. Also a PLACEMENT question: argv/input validation is owned by profile-security.md (§argv), so this may belong there as parser-state correctness, not in the correctness cross-cutting list. Needs its own careful pass.]**
 
 ## Promoted
