@@ -189,7 +189,7 @@ test('blocked: a dirty worktree (git status --porcelain non-empty) -> EXIT_WRONG
   assert.match(result.machineError?.message ?? '', /dirty/);
 });
 
-test('tooling-only dirt does NOT block handoff (engine-created node_modules/.tools/submodule symlinks)', () => {
+test('tooling-only dirt does NOT block handoff (the engine-created node_modules mirror, .tools symlink, submodule)', () => {
   const { deps } = spyDeps({ status: '?? node_modules\n?? .tools\n M vendor/dev-standards\n' });
   const result = decideHandoff(mkFile([mkFinding()]), deps);
   assert.equal(result.exitCode, EXIT_OK, "the engine's own worktree-tooling footprint is not user dirt");

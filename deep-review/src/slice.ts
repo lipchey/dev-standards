@@ -97,9 +97,8 @@ export interface SliceDeps {
     options: { cwd: string; input?: string; timeout?: number },
   ) => SpawnResult;
   runProcess: (input: { argv: string[]; cwd: string; timeoutMs: number }) => RunProcessResult;
-  // Wire the throwaway worktree's tooling so `<tmp>/<entry>` resolves (a consumer
-  // worktree symlinks the main checkout's built dist / node_modules / .tools; a core
-  // repo is a no-op).
+  /* Consumer validation needs copied dist, shallow dependency mirrors, and .tools before verify;
+     core-repo validation remains a no-op at this boundary. */
   setupTooling: (wtPath: string) => void;
   // A fresh, non-existent path for the throwaway validation worktree.
   tmpWorktreePath: () => string;
@@ -238,13 +237,19 @@ function machineErrorOf(error: GitStepError): MachineError {
 // every untracked file INDIVIDUALLY (a file in a brand-new directory shows as
 // `dir/file`, never the collapsing `dir/` entry), so the scope gate compares real
 // file paths against the slice and a new-dir slice file is not false-refused.
-function parseDirtyPaths(out: string): string[] {
-  const paths: string[] = [];
+interface DirtyPath {
+  path: string;
+  untracked: boolean;
+}
+
+function parseDirtyPaths(out: string): DirtyPath[] {
+  const paths: DirtyPath[] = [];
   const NUL = String.fromCharCode(0);
   for (const record of out.split(NUL)) {
     if (record === '') continue;
+    const untracked = record.slice(0, 2) === '??'; /* the 2 status chars; `??` == untracked */
     const p = record.slice(3); // skip the 2 status chars + the separating space
-    if (p !== '') paths.push(p);
+    if (p !== '') paths.push({ path: p, untracked });
   }
   return paths;
 }
@@ -509,17 +514,20 @@ export function commitSlice(findingId: string, findingsPath: string, deps: Slice
     const scope = finding.test_ref === 'verify:full' ? '--full' : '--fast';
     const sliceSet = new Set(slice);
 
-    // Step 3 — deterministic scope gate. The live worktree's dirty set (staged +
-    // unstaged) MUST be a subset of the slice; any out-of-slice dirt means the change
-    // is not isolated, so refuse with NO test run and NO mutation. The engine's OWN
-    // worktree-tooling footprint (isWorktreeTooling: the node_modules/.tools symlinks +
-    // the wired submodule) is excluded — it is engine-created, never user work, and the
-    // scoped stage/commit below can never sweep it in.
+    /*
+     * Step 3 — deterministic scope gate. The live worktree's dirty set (staged + unstaged) MUST be
+     * a subset of the slice; any out-of-slice dirt means the change is not isolated, so refuse with
+     * NO test run and NO mutation. The engine's own worktree-tooling footprint is excluded
+     * (isWorktreeTooling): the .tools symlink + the wired submodule always, and a node_modules path
+     * ONLY when git reports it UNTRACKED — mirror content is always untracked, whereas a TRACKED
+     * node_modules edit is real user work and must still refuse. The scoped stage/commit below can
+     * never sweep the exempted footprint in.
+     */
     const dirty = parseDirtyPaths(
       runGit(deps, ['status', '--porcelain', '-z', '--no-renames', '--untracked-files=all'], 'status', deps.cwd),
     );
-    for (const p of dirty) {
-      if (!sliceSet.has(p) && !isWorktreeTooling(p)) return { exitCode: EXIT_WRONG_STATE };
+    for (const { path: p, untracked } of dirty) {
+      if (!sliceSet.has(p) && !isWorktreeTooling(p, untracked)) return { exitCode: EXIT_WRONG_STATE };
     }
 
     // Step 4 — snapshot the slice index (§F6), then stage EXACTLY the slice (never

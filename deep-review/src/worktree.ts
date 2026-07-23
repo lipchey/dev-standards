@@ -8,9 +8,10 @@
 //   1. capture the base as ref + SHA and `worktree add` FROM the captured SHA (not the branch
 //      name, which could move between resolve and add);
 //   2. assert the new worktree's HEAD == the captured base SHA;
-//   3. set up tooling (consumer repos: submodule init, then COPY the main checkout's built dist as
-//      an immutable snapshot + symlink node_modules / .tools, when the build stamp matches the
-//      pinned submodule SHA);
+/*
+ *   3. set up consumer tooling (submodule init + the copied-dist / dependency-mirror / .tools
+ *      wiring the constants below define), gated on the build stamp matching the pinned SHA;
+ */
 //   4. write the run descriptor LAST — its presence is the "worktree ready" marker.
 // Any failure AFTER `worktree add` rolls back exactly what THIS call created (branch + worktree);
 // a pre-existing worktree is reused ONLY when it carries a valid descriptor AND live tooling.
@@ -68,33 +69,69 @@ const COPY_TARGETS = [
   { rel: 'vendor/dev-standards/runner/dist', entrypoint: 'verify-runner.mjs' },
   { rel: 'vendor/dev-standards/deep-review/dist', entrypoint: 'deep-review-runner.mjs' },
 ] as const;
-// node_modules / .tools stay symlinks to the main checkout: they are usually stable across pins
-// (package-lock rarely moves between them), unlike the dists a re-bootstrap always rewrites. A
-// concurrent root `npm ci` IS still a shared-mutation window through these links — accepted
-// trade-off; per-worktree install is the upgrade path if it ever bites.
-const SYMLINK_TARGETS = ['node_modules', '.tools'] as const;
+/*
+ * Dependencies still share the main checkout's installed package contents because package-lock
+ * rarely moves between pins, unlike the dists a re-bootstrap always rewrites. Each node_modules is
+ * a shallow real-directory mirror so npm workspace links resolve into the worktree and nested
+ * non-hoisted installs remain visible without a per-slice npm install. A concurrent root `npm ci`
+ * is still a shared-mutation window through the entry links — the accepted trade-off that keeps
+ * slice validation fast and network-independent.
+ */
+const NODE_MODULES_DIR = 'node_modules';
+const NODE_MODULES_CONTAINER_BIN = '.bin';
+const NODE_MODULES_SCOPE_PREFIX = '@';
+/*
+ * Nested-install scan bound: a directory is read only while `depth < this` (the scan starts at
+ * depth 0 = the checkout root's children). At 4 the deepest INCLUDED install is
+ * `<a>/<b>/<c>/node_modules` (read at depth 3); the first EXCLUDED is `<a>/<b>/<c>/<d>/node_modules`
+ * (needs a depth-4 read, refused). Changing this by one shifts exactly one layout across that line.
+ */
+const NODE_MODULES_SCAN_MAX_DEPTH = 4;
+const NODE_MODULES_SCAN_EXCLUDED_DIRS = new Set(['.git', 'vendor']);
+const SYMLINK_TARGETS = ['.tools'] as const;
 
-// The engine's OWN worktree-tooling footprint as it appears in `git status` at the
-// SUPERPROJECT level: the symlinked `node_modules` / `.tools`, plus the submodule root.
-// setupWorktreeTooling creates these, so the slice scope gate must not count them as
-// out-of-slice user work — a consumer whose .gitignore lists node_modules as a DIRECTORY
-// (`node_modules/`) does not ignore the SYMLINK (a trailing-slash pattern matches only
-// directories), so it surfaces as dirty and would block every slice. The two in-submodule
-// dist dirs are now COPIED real dirs (gitignored inside dev-standards), so the submodule no
-// longer shows dirty via them — but SUBMODULE_PATH stays listed DEFENSIVELY (its own
-// `submodule update --init` checkout, or an unignored stray, can still surface it).
-// Derived from the tooling rels (drop the in-submodule dist entries, which never appear as
-// superproject paths) unioned with the submodule root.
+/*
+ * The engine's OWN worktree-tooling footprint as it appears in `git status` at the SUPERPROJECT
+ * level: the `.tools` symlink plus the submodule root. node_modules is NOT a static entry — setup
+ * mirrors it AND every discovered nested install at relative paths only known at runtime, so its
+ * exemption is dynamic (isWorktreeTooling), not listed here.
+ *
+ * WHY the node_modules exemption exists: the OLD design symlinked root node_modules, and a consumer
+ * .gitignore listing `node_modules/` (trailing slash = directories only) did NOT ignore that
+ * symlink, so it surfaced dirty and blocked every slice. Today's mirror is a real DIRECTORY, so a
+ * `node_modules/` rule ignores it again — the residual the dynamic exemption still covers is a
+ * consumer whose rule is ANCHORED (`/node_modules/`, root only) and therefore misses the NESTED
+ * mirrors under a package dir (e.g. `apps/<pkg>/node_modules/…`).
+ *
+ * The in-submodule dist dirs are COPIED real dirs (gitignored inside dev-standards) and never appear
+ * as superproject paths, so they are dropped here. SUBMODULE_PATH stays listed DEFENSIVELY: its own
+ * `submodule update --init` checkout, or an unignored stray, can still surface it dirty even though
+ * the copied dist no longer does.
+ */
 const WORKTREE_TOOLING_PATHS: readonly string[] = [
-  ...[...COPY_TARGETS.map((t) => t.rel), ...SYMLINK_TARGETS].filter((rel) => !rel.startsWith(`${SUBMODULE_PATH}/`)),
+  ...[...COPY_TARGETS.map((target) => target.rel), ...SYMLINK_TARGETS].filter(
+    (relativePath) => !relativePath.startsWith(`${SUBMODULE_PATH}/`),
+  ),
   SUBMODULE_PATH,
 ];
 
 // True if a repo-relative dirty path IS (or is under) the engine's own worktree-tooling
 // footprint. Shared by the slice scope gate and the handoff clean-worktree gate so both
-// ignore engine-created artifacts identically (see WORKTREE_TOOLING_PATHS).
-export function isWorktreeTooling(p: string): boolean {
-  return WORKTREE_TOOLING_PATHS.some((t) => p === t || p.startsWith(`${t}/`));
+/*
+ * ignore engine-created artifacts identically (see WORKTREE_TOOLING_PATHS). `untracked` is the
+ * porcelain status: a node_modules path is exempt ONLY when git reports it untracked (mirror
+ * content is always untracked), so a TRACKED node_modules edit stays real user work and fails.
+ * ponytail: the untracked-node_modules exemption is BLANKET — an untracked USER file under a
+ * node_modules segment is exempted too (the residual), matching the SUBMODULE_PATH blanket below.
+ */
+export function isWorktreeTooling(repoPath: string, untracked: boolean): boolean {
+  const untrackedNodeModules = untracked && repoPath.split(/[\\/]/).includes(NODE_MODULES_DIR);
+  return (
+    untrackedNodeModules ||
+    WORKTREE_TOOLING_PATHS.some(
+      (toolingPath) => repoPath === toolingPath || repoPath.startsWith(`${toolingPath}/`),
+    )
+  );
 }
 
 /*
@@ -112,8 +149,10 @@ export function nonToolingDirtyPaths(status: string): string[] {
     .split('\n')
     .map((line) => line.replace(/\s+$/, ''))
     .filter((line) => line !== '')
-    .map((line) => line.slice(3).replace(/^.* -> /, ''))
-    .filter((p) => p !== '' && !isWorktreeTooling(p));
+    /* Columns 1-2 are the porcelain status code (`??` = untracked); the path starts at column 3. */
+    .map((line) => ({ untracked: line.slice(0, 2) === '??', path: line.slice(3).replace(/^.* -> /, '') }))
+    .filter(({ path: p, untracked }) => p !== '' && !isWorktreeTooling(p, untracked))
+    .map(({ path: p }) => p);
 }
 
 // ── Effects seam ───────────────────────────────────────────────────────────────
@@ -146,6 +185,12 @@ export interface WorktreeDeps {
   // §W1 lstat-based symlink test through the seam: the reuse gate treats a SYMLINKED dist (left by
   // the pre-copy engine) as stale tooling. Defaults to real `fs.lstatSync(p).isSymbolicLink()`.
   isSymlink?: (p: string) => boolean;
+  /*
+   * §W1 lstat-based directory test through the seam: the reuse gate requires the node_modules mirror
+   * to be a real DIRECTORY (a regular file or symlink named node_modules is stale tooling).
+   * Defaults to real `fs.lstatSync(p).isDirectory()`.
+   */
+  isDirectory?: (p: string) => boolean;
   readFileMaybe?: (p: string) => string | null;
   writeDescriptorFn?: (descriptor: RunDescriptor) => void;
   setupTooling?: (deps: WorktreeDeps, wtPath: string) => void;
@@ -303,6 +348,184 @@ function makeSymlink(deps: WorktreeDeps, target: string, linkPath: string): void
   fs.symlinkSync(target, linkPath);
 }
 
+function isInsideOrEqual(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+}
+
+function isNodeModulesContainer(entryName: string): boolean {
+  return entryName === NODE_MODULES_CONTAINER_BIN || entryName.startsWith(NODE_MODULES_SCOPE_PREFIX);
+}
+
+/*
+ * A no-follow lstat that never throws: a per-package EACCES, or an entry removed in the
+ * concurrent-`npm ci` window the module comment admits, must not abort the whole mirror.
+ * Return type is inferred (`Stats | null`) so no fs type must be named through the default import.
+ */
+function lstatMaybe(p: string) {
+  try {
+    return fs.lstatSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/* The readdir counterpart of lstatMaybe, for the same admitted race. */
+function readdirMaybe(p: string): string[] | null {
+  try {
+    return fs.readdirSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/*
+ * The realpath of the nearest EXISTING ancestor of `p` — the point `mkdir -p` starts creating from.
+ * A4 uses it to prove a mirror directory cannot land OUTSIDE the worktree through an existing
+ * symlinked ancestor: rollback removes only the worktree, so an escaped mirror would survive.
+ */
+function nearestExistingReal(p: string): string {
+  let current = p;
+  for (;;) {
+    try {
+      return fs.realpathSync(current);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return current; /* reached the filesystem root */
+      current = parent;
+    }
+  }
+}
+
+function workspaceTarget(main: string, wtPath: string, sourceEntry: string): string | null {
+  const stat = lstatMaybe(sourceEntry);
+  /*
+   * A vanished / unreadable entry (the concurrent-`npm ci` window) is treated as "not a workspace
+   * link" — the caller links the source path directly (today's dangling-link behavior) — so a
+   * per-package ENOENT/EACCES never aborts tooling for the whole worktree.
+   */
+  if (stat === null || !stat.isSymbolicLink()) return null;
+  let resolvedTarget: string;
+  try {
+    resolvedTarget = fs.realpathSync(sourceEntry);
+  } catch {
+    return null;
+  }
+  const mainRelativeTarget = path.relative(main, resolvedTarget);
+  if (!isInsideOrEqual(main, resolvedTarget) || mainRelativeTarget.split(path.sep).includes(NODE_MODULES_DIR)) {
+    return null;
+  }
+  const worktreeTarget = path.join(wtPath, mainRelativeTarget);
+  /*
+   * Retarget when the worktree owns the target's PARENT directory — not when the target itself
+   * exists. The slice is applied BEFORE tooling is wired (slice.ts runValidation), so keying on the
+   * target would send a slice-DELETED file back to the main checkout's surviving copy and validate
+   * what the slice removed: a wrong GREEN. An existing parent means the worktree owns that source
+   * tree, so a missing target must dangle and fail loudly instead. A generated/gitignored artifact
+   * (`.bin/x -> ../../packages/y/dist/cli.js`) has no parent dir in a fresh worktree at all, so it
+   * keeps resolving through the main checkout exactly as the old symlinked-node_modules design did.
+   * Residual: an artifact generated IN PLACE beside tracked sources dangles — build output belongs
+   * in a build dir.
+   */
+  if (!fs.existsSync(path.dirname(worktreeTarget))) return null;
+  return worktreeTarget;
+}
+
+function mirrorNodeModulesEntry(main: string, wtPath: string, sourceEntry: string, destinationEntry: string): void {
+  /*
+   * An existing destination is the WORKTREE'S OWN content and always wins: a consumer that TRACKS
+   * files under a `node_modules` segment (test fixtures) has them checked out already, and
+   * `symlinkSync` would throw EEXIST — failing worktree creation outright for that consumer. Never
+   * mirror over reviewed source.
+   */
+  if (lstatMaybe(destinationEntry) !== null) return;
+  const target = workspaceTarget(main, wtPath, sourceEntry) ?? sourceEntry;
+  fs.symlinkSync(target, destinationEntry);
+}
+
+/*
+ * `wtPath` is the realpath-normalized worktree root (threaded from mirrorWorktreeNodeModules, not
+ * recomputed), so the A4 escape check and the workspaceTarget mapping both anchor on it.
+ */
+function mirrorNodeModulesDirectory(main: string, wtPath: string, source: string, destination: string): void {
+  /*
+   * A4: `mkdir -p` traverses an EXISTING symlinked ancestor and would create the mirror OUTSIDE the
+   * worktree; rollback removes only the worktree, so the escaped artifacts survive. Require the
+   * nearest existing ancestor of `destination` to resolve INSIDE the worktree before creating it.
+   */
+  const anchor = nearestExistingReal(destination);
+  if (!isInsideOrEqual(wtPath, anchor)) {
+    throw new ToolingError(
+      `refusing to mirror node_modules at ${destination}: it resolves outside the worktree via ${anchor} (a symlinked ancestor)`,
+    );
+  }
+  fs.mkdirSync(destination, { recursive: true });
+  for (const entryName of fs.readdirSync(source)) {
+    const sourceEntry = path.join(source, entryName);
+    const destinationEntry = path.join(destination, entryName);
+    const stat = lstatMaybe(sourceEntry);
+    if (stat === null) continue; /* vanished in the concurrent-`npm ci` window: skip, never fatal */
+    /*
+     * A3: a container gets one real directory level ONLY when it is itself a REAL directory. A
+     * SYMLINKED `.bin`/`@scope` (a workspace-hoisted container) is a plain entry to LINK — following
+     * it would replace the link with a real directory and expand a tree that should stay shared.
+     */
+    if (!(isNodeModulesContainer(entryName) && stat.isDirectory())) {
+      mirrorNodeModulesEntry(main, wtPath, sourceEntry, destinationEntry);
+      continue;
+    }
+
+    /* Same race as the lstat above: a container removed between its lstat and this read is skipped,
+       never fatal — an unguarded readdir here would abort tooling for the whole worktree. */
+    const childNames = readdirMaybe(sourceEntry);
+    if (childNames === null) continue;
+    fs.mkdirSync(destinationEntry, { recursive: true });
+    for (const childName of childNames) {
+      mirrorNodeModulesEntry(main, wtPath, path.join(sourceEntry, childName), path.join(destinationEntry, childName));
+    }
+  }
+}
+
+function discoverNestedNodeModules(main: string): string[] {
+  const discovered: string[] = [];
+  const scan = (directory: string, depth: number): void => {
+    if (depth >= NODE_MODULES_SCAN_MAX_DEPTH) return;
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === NODE_MODULES_DIR) {
+        if (directory !== main) discovered.push(path.relative(main, path.join(directory, entry.name)));
+        continue;
+      }
+      if (entry.name.startsWith('.') || NODE_MODULES_SCAN_EXCLUDED_DIRS.has(entry.name)) continue;
+      scan(path.join(directory, entry.name), depth + 1);
+    }
+  };
+  scan(main, 0);
+  return discovered;
+}
+
+/*
+ * The mirror is deliberately shallow: only package-manager containers gain one real directory
+ * level, avoiding a recursive walk through thousands of immutable package files on every slice.
+ */
+export function mirrorWorktreeNodeModules(mainCheckout: string, wtPath: string): void {
+  const main = fs.realpathSync(mainCheckout);
+  const worktree = fs.realpathSync(wtPath);
+  const nodeModulesPaths = [NODE_MODULES_DIR, ...discoverNestedNodeModules(main)];
+  for (const relativeNodeModules of nodeModulesPaths) {
+    const destination = path.join(worktree, relativeNodeModules);
+    /*
+     * A nested install whose package dir the worktree does not have is SKIPPED (the root's parent
+     * is the worktree itself, so it always passes). Mirroring it would CREATE `<wt>/<pkg>/`, and the
+     * cleanliness gates read ordinary porcelain, where a brand-new directory collapses to
+     * `?? <pkg>/` — no `node_modules` segment, so the tooling exemption misses it and handoff
+     * refuses on engine-created dirt. Nothing in that worktree could import it anyway.
+     */
+    if (!fs.existsSync(path.dirname(destination))) continue;
+    mirrorNodeModulesDirectory(main, worktree, path.join(main, relativeNodeModules), destination);
+  }
+}
+
 // Hand-rolled recursive copy: `fs.cpSync` is still experimental on the oldest supported Node
 // (^20.19.0 — n/no-unsupported-features flags it until 22.3.0). A dist tree is esbuild output —
 // plain files and dirs only — so readdir + copyFileSync covers it.
@@ -366,6 +589,19 @@ function isSymlinkPath(deps: WorktreeDeps, p: string): boolean {
   if (deps.isSymlink !== undefined) return deps.isSymlink(p);
   try {
     return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/*
+ * lstat semantics (does NOT follow the link) so a SYMLINK named node_modules is not a directory and
+ * a regular FILE named node_modules is rejected. A missing/unstattable path is not a directory.
+ */
+function isDirectoryPath(deps: WorktreeDeps, p: string): boolean {
+  if (deps.isDirectory !== undefined) return deps.isDirectory(p);
+  try {
+    return fs.lstatSync(p).isDirectory();
   } catch {
     return false;
   }
@@ -493,30 +729,42 @@ export function setupWorktreeTooling(deps: WorktreeDeps, wtPath: string): void {
   for (const target of COPY_TARGETS) {
     snapshotDist(deps, main, wtPath, target, pinned, runId);
   }
+  mirrorWorktreeNodeModules(main, wtPath);
   for (const rel of SYMLINK_TARGETS) {
     makeSymlink(deps, path.join(main, rel), path.join(wtPath, rel));
   }
 }
 
-// Reuse-time liveness: the symlinked tooling must still resolve (a consumer worktree whose main
-// checkout moved would have dangling symlinks) AND each dist must be a USABLE copied snapshot —
-// a real (non-symlink) dir whose bundle entrypoint exists and whose stamp equals this worktree's
-// pin. A SYMLINKED dist is tooling from the PRE-COPY engine, still exposed to the concurrent-
-// bootstrap race — and it would pass the entrypoint/stamp probes THROUGH the link, so the lstat
-// check stays first. An empty dir, a stray file, or a stale/missing stamp is equally dead —
-// refusing here beats a confusing verify exit 127 later. A repo with no gitlink is trivially alive.
+/*
+ * Reuse-time liveness. node_modules must be a real (non-symlink) DIRECTORY mirror — a legacy root
+ * symlink from the pre-mirror engine, a regular file, or a missing dir is dead. The .tools symlink
+ * must still resolve (a consumer worktree whose main checkout moved leaves it dangling), and each
+ * dist must be a USABLE copied snapshot: a real (non-symlink) dir whose bundle entrypoint exists and
+ * whose stamp equals this worktree's pin.
+ *
+ * ORDERING: a SYMLINKED dist is pre-copy-engine tooling still exposed to the concurrent-bootstrap
+ * race, and it would pass the entrypoint/stamp probes THROUGH the link — so the lstat shape check
+ * runs FIRST. An empty dir, a stray file, or a stale/missing stamp is equally dead; refusing here
+ * beats a confusing verify exit 127 later. A repo with no gitlink is trivially alive.
+ *
+ * Scope ceiling, not an enforced property: only the root mirror's SHAPE is checked. Dangling entry
+ * links (main re-installed since) and missing nested mirrors still pass — reuse is the same-run
+ * resume path over a worktree this engine created, and a per-entry manifest check would cost a full
+ * walk on every slice. A worktree mutated out of band therefore fails later, inside verify.
+ */
 function toolingAlive(deps: WorktreeDeps, wtPath: string): boolean {
   const pinned = pinnedSubmoduleSha(deps, wtPath);
   if (pinned === null) return true;
+  const nodeModulesIsMirror = isDirectoryPath(deps, path.join(wtPath, NODE_MODULES_DIR));
   const symlinksResolve = SYMLINK_TARGETS.every((rel) => deps.existsSync(path.join(wtPath, rel)));
-  const distsAreSnapshots = COPY_TARGETS.every((t) => {
-    const distPath = path.join(wtPath, t.rel);
+  const distsAreSnapshots = COPY_TARGETS.every((target) => {
+    const distPath = path.join(wtPath, target.rel);
     if (!deps.existsSync(distPath) || isSymlinkPath(deps, distPath)) return false;
-    if (!deps.existsSync(path.join(distPath, t.entrypoint))) return false;
+    if (!deps.existsSync(path.join(distPath, target.entrypoint))) return false;
     const stamp = (readFileMaybe(deps, path.join(distPath, DIST_STAMP)) ?? '').trim();
     return stamp === pinned;
   });
-  return symlinksResolve && distsAreSnapshots;
+  return nodeModulesIsMirror && symlinksResolve && distsAreSnapshots;
 }
 
 // ── Existing-directory validation (the S21 collision gate + descriptor reuse gate) ─
@@ -572,7 +820,7 @@ function validateExistingWorktree(deps: WorktreeDeps, wtPath: string, branch: st
   }
   if (!toolingAlive(deps, wtPath)) {
     return refuse(
-      `existing worktree at ${wtPath} has stale tooling (a symlinked dist from the pre-copy engine, or an artifact that no longer resolves); remove it and re-run select-worktree`,
+      `existing worktree at ${wtPath} has stale tooling (a legacy symlinked node_modules, a symlinked dist from the pre-copy engine, or an artifact that no longer resolves); remove it and re-run select-worktree`,
     );
   }
   return { exitCode: EXIT_OK, mode: 'dedicated', worktree: wtPath, branch };

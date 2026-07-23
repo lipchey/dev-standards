@@ -19,6 +19,9 @@ import { EXIT_OK, EXIT_FAILURE, EXIT_WRONG_STATE } from '../../deep-review/src/t
 import {
   selectWorktree,
   assertUnderParent,
+  isWorktreeTooling,
+  nonToolingDirtyPaths,
+  mirrorWorktreeNodeModules,
   realWorktreeDeps,
   setupWorktreeTooling,
   ToolingError,
@@ -383,10 +386,12 @@ function toolingDeps(submoduleSha: string | null, over: Partial<WorktreeDeps> = 
   return { deps: d, links };
 }
 
-// A real-fs fixture for the COPY path of setupWorktreeTooling: a `main` checkout holding the built
-// dist sources (each with its own `.built-from` stamp + bundle entrypoint, as ds-bootstrap leaves
-// them) plus node_modules/.tools, and an empty worktree dir. Git reads stay MOCKED (toolingSpawn) —
-// only the fs copy is real, so the immutable-snapshot + race guards run against real files.
+/* A real-fs fixture for the COPY path of setupWorktreeTooling: a `main` checkout holding the built
+   dist sources (each with its own `.built-from` stamp + bundle entrypoint, as ds-bootstrap leaves
+   them), the root + nested dependency trees the mirror walks (including workspace symlinks that must
+   retarget into the worktree), and .tools, plus an empty worktree dir. Git reads stay MOCKED
+   (toolingSpawn) — only the fs copy/mirror is real, so the immutable-snapshot + race guards run
+   against real files. */
 const TOOLING_DISTS = [
   ['vendor/dev-standards/runner/dist', 'verify-runner.mjs'],
   ['vendor/dev-standards/deep-review/dist', 'deep-review-runner.mjs'],
@@ -403,13 +408,24 @@ function makeToolingFixture(pinned: string): { root: string; main: string; wt: s
     fs.writeFileSync(path.join(main, rel, entry), '/* built */\n');
   }
   fs.mkdirSync(path.join(main, 'node_modules'), { recursive: true });
+  fs.mkdirSync(path.join(main, 'node_modules/plain-package'), { recursive: true });
+  fs.writeFileSync(path.join(main, 'node_modules/plain-package/index.js'), 'export {}\n');
+  fs.mkdirSync(path.join(main, 'node_modules/@fixture'), { recursive: true });
+  fs.mkdirSync(path.join(main, 'node_modules/.bin'), { recursive: true });
+  fs.mkdirSync(path.join(main, 'packages/engine'), { recursive: true });
+  fs.writeFileSync(path.join(main, 'packages/engine/bin.js'), 'export {}\n');
+  fs.symlinkSync('../../packages/engine', path.join(main, 'node_modules/@fixture/engine'));
+  fs.symlinkSync('../../packages/engine/bin.js', path.join(main, 'node_modules/.bin/fixture-engine'));
+  fs.mkdirSync(path.join(main, 'apps/api/node_modules/better-auth'), { recursive: true });
+  fs.writeFileSync(path.join(main, 'apps/api/node_modules/better-auth/index.js'), 'export {}\n');
+  fs.mkdirSync(path.join(wt, 'packages/engine'), { recursive: true });
+  fs.writeFileSync(path.join(wt, 'packages/engine/bin.js'), 'export {}\n');
+  fs.mkdirSync(path.join(wt, 'apps/api'), { recursive: true });
   fs.mkdirSync(path.join(main, '.tools'), { recursive: true });
   return { root, main, wt };
 }
 
-// deps for setupWorktreeTooling against a real-fs fixture: real fs reads + copy, but MOCKED git so
-// no real submodule is needed. `--git-common-dir` -> `<main>/.git` makes mainCheckoutOf resolve to
-// `<main>`. `over` layers a copyDir fault injection.
+/* A mocked common-dir keeps the fixture independent of a real submodule while copy faults remain injectable. */
 function realFsToolingDeps(fx: { main: string; wt: string }, pinned: string, over: Partial<WorktreeDeps> = {}): WorktreeDeps {
   return {
     cwd: fx.wt,
@@ -441,7 +457,7 @@ test('tooling: a repo WITHOUT a vendor/dev-standards gitlink is a no-op (no syml
   assert.equal(links.length, 0, 'core repo => nothing wired');
 });
 
-test('tooling: a fresh stamp COPIES the dist dirs (immutable real snapshots) and SYMLINKS node_modules/.tools', () => {
+test('tooling: node_modules is a real mirror whose plain entries link to main while .tools stays a plain symlink', () => {
   const pinned = 'abc123def456';
   const fx = makeToolingFixture(pinned);
   try {
@@ -456,13 +472,361 @@ test('tooling: a fresh stamp COPIES the dist dirs (immutable real snapshots) and
       const leftovers = fs.readdirSync(path.dirname(distPath)).filter((n) => n.includes('.tmp-'));
       assert.deepEqual(leftovers, [], `no leftover temp copy dir beside ${rel}`);
     }
-    for (const rel of ['node_modules', '.tools']) {
-      const link = path.join(fx.wt, rel);
-      assert.equal(fs.lstatSync(link).isSymbolicLink(), true, `${rel} must stay a symlink`);
-      assert.equal(fs.existsSync(link), true, `${rel} symlink must resolve`);
-    }
+    const nodeModules = path.join(fx.wt, 'node_modules');
+    assert.equal(fs.lstatSync(nodeModules).isSymbolicLink(), false, 'node_modules must be a real directory');
+    assert.equal(fs.statSync(nodeModules).isDirectory(), true, 'node_modules must be a directory');
+
+    const plainPackage = path.join(nodeModules, 'plain-package');
+    assert.equal(fs.lstatSync(plainPackage).isSymbolicLink(), true, 'a plain package entry must be a symlink');
+    assert.equal(fs.realpathSync(plainPackage), fs.realpathSync(path.join(fx.main, 'node_modules/plain-package')));
+
+    const tools = path.join(fx.wt, '.tools');
+    assert.equal(fs.lstatSync(tools).isSymbolicLink(), true, '.tools must stay a plain symlink');
+    assert.equal(fs.realpathSync(tools), fs.realpathSync(path.join(fx.main, '.tools')));
   } finally {
     fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('tooling: a scoped workspace package link resolves inside the worktree', () => {
+  const pinned = 'abc123def456';
+  const fx = makeToolingFixture(pinned);
+  try {
+    setupWorktreeTooling(realFsToolingDeps(fx, pinned), fx.wt);
+
+    const scope = path.join(fx.wt, 'node_modules/@fixture');
+    const workspacePackage = path.join(scope, 'engine');
+    assert.equal(fs.lstatSync(scope).isSymbolicLink(), false, 'scope containers must be real directories');
+    assert.equal(fs.lstatSync(workspacePackage).isSymbolicLink(), true, 'workspace packages must stay linked');
+    assert.equal(fs.realpathSync(workspacePackage), fs.realpathSync(path.join(fx.wt, 'packages/engine')));
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('tooling: a workspace binary link resolves inside the worktree', () => {
+  const pinned = 'abc123def456';
+  const fx = makeToolingFixture(pinned);
+  try {
+    setupWorktreeTooling(realFsToolingDeps(fx, pinned), fx.wt);
+
+    const binaryContainer = path.join(fx.wt, 'node_modules/.bin');
+    const workspaceBinary = path.join(binaryContainer, 'fixture-engine');
+    assert.equal(fs.lstatSync(binaryContainer).isSymbolicLink(), false, '.bin must be a real directory');
+    assert.equal(fs.lstatSync(workspaceBinary).isSymbolicLink(), true, 'workspace binaries must stay linked');
+    assert.equal(fs.realpathSync(workspaceBinary), fs.realpathSync(path.join(fx.wt, 'packages/engine/bin.js')));
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('tooling: nested workspace node_modules is mirrored at the same relative path', () => {
+  const pinned = 'abc123def456';
+  const fx = makeToolingFixture(pinned);
+  try {
+    mirrorWorktreeNodeModules(fx.main, fx.wt);
+
+    const nestedNodeModules = path.join(fx.wt, 'apps/api/node_modules');
+    const nestedPackage = path.join(nestedNodeModules, 'better-auth');
+    assert.equal(fs.lstatSync(nestedNodeModules).isSymbolicLink(), false, 'nested node_modules must be a real directory');
+    assert.equal(fs.lstatSync(nestedPackage).isSymbolicLink(), true, 'nested dependency entries must be linked');
+    assert.equal(fs.realpathSync(nestedPackage), fs.realpathSync(path.join(fx.main, 'apps/api/node_modules/better-auth')));
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+/* E1 (A2): retarget only when the worktree owns the target's PARENT dir; otherwise keep the
+   main-checkout target. A generated/gitignored `dist` target has no parent dir in a fresh worktree,
+   so retargeting it would dangle — a regression the old symlinked-node_modules design did not
+   have. */
+test('mirror (A2): a .bin link into a target absent from the worktree keeps the main-checkout target; a sibling present in the worktree retargets', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-nm-a2-')));
+  const main = path.join(root, 'main');
+  const wt = path.join(root, 'wt');
+  try {
+    fs.mkdirSync(path.join(main, 'node_modules/.bin'), { recursive: true });
+    /* A link into a GENERATED (gitignored) dist that only the main checkout has. */
+    fs.mkdirSync(path.join(main, 'packages/gen/dist'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'packages/gen/dist/cli.js'), 'gen\n');
+    fs.symlinkSync('../../packages/gen/dist/cli.js', path.join(main, 'node_modules/.bin/gen'));
+    /* A link into a tracked SOURCE file that the worktree also has. */
+    fs.mkdirSync(path.join(main, 'packages/tool/src'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'packages/tool/src/index.js'), 'tool\n');
+    fs.symlinkSync('../../packages/tool/src/index.js', path.join(main, 'node_modules/.bin/src-tool'));
+    fs.mkdirSync(path.join(wt, 'packages/tool/src'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'packages/tool/src/index.js'), 'tool\n');
+
+    mirrorWorktreeNodeModules(main, wt);
+
+    const genLink = path.join(wt, 'node_modules/.bin/gen');
+    assert.equal(fs.lstatSync(genLink).isSymbolicLink(), true, 'gen stays a symlink');
+    /* gen's worktree target does not exist, so it must keep resolving through the main checkout. */
+    assert.equal(fs.realpathSync(genLink), fs.realpathSync(path.join(main, 'packages/gen/dist/cli.js')));
+    /* src-tool's worktree target exists, so it is retargeted into the worktree. */
+    assert.equal(
+      fs.realpathSync(path.join(wt, 'node_modules/.bin/src-tool')),
+      fs.realpathSync(path.join(wt, 'packages/tool/src/index.js')),
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* The slice is applied BEFORE tooling is wired, so a slice that DELETES a workspace target must not
+   send the link back to the main checkout's surviving copy — that would validate what the slice
+   removed (a wrong GREEN). An owned parent dir means the link stays worktree-side and dangles. */
+test('mirror (A2): a target DELETED in the worktree still retargets worktree-side (never falls back to the main copy)', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-nm-a2-del-')));
+  const main = path.join(root, 'main');
+  const wt = path.join(root, 'wt');
+  try {
+    fs.mkdirSync(path.join(main, 'node_modules/.bin'), { recursive: true });
+    fs.mkdirSync(path.join(main, 'packages/tool/src'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'packages/tool/src/index.js'), 'tool\n');
+    fs.symlinkSync('../../packages/tool/src/index.js', path.join(main, 'node_modules/.bin/tool'));
+    /* The worktree owns packages/tool/src, but the slice under validation deleted index.js. */
+    fs.mkdirSync(path.join(wt, 'packages/tool/src'), { recursive: true });
+
+    mirrorWorktreeNodeModules(main, wt);
+
+    const link = path.join(wt, 'node_modules/.bin/tool');
+    assert.equal(
+      fs.readlinkSync(link),
+      path.join(wt, 'packages/tool/src/index.js'),
+      'the link must point at the worktree copy the slice deleted, not at the main checkout',
+    );
+    assert.equal(fs.existsSync(link), false, 'and therefore dangle, so verify fails loudly');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* A consumer that TRACKS files under a node_modules segment (test fixtures) has them checked out in
+   the worktree; symlinkSync over them throws EEXIST and rolls back worktree creation entirely. */
+test('mirror: a TRACKED worktree file under a node_modules segment is preserved, not mirrored over', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-nm-tracked-')));
+  const main = path.join(root, 'main');
+  const wt = path.join(root, 'wt');
+  try {
+    fs.mkdirSync(path.join(main, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(main, 'fixtures/node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'fixtures/node_modules/case.js'), 'main\n');
+    fs.mkdirSync(path.join(wt, 'fixtures/node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'fixtures/node_modules/case.js'), 'worktree\n');
+
+    mirrorWorktreeNodeModules(main, wt);
+
+    const tracked = path.join(wt, 'fixtures/node_modules/case.js');
+    assert.equal(fs.lstatSync(tracked).isSymbolicLink(), false, 'the tracked file stays a real file');
+    assert.equal(fs.readFileSync(tracked, 'utf8'), 'worktree\n', 'the reviewed content is untouched');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* Mirroring an install whose package dir the worktree lacks would CREATE `<wt>/<pkg>/`, which
+   ordinary porcelain collapses to `?? <pkg>/` — no node_modules segment, so the cleanliness gates
+   read engine-created dirt as user work and refuse handoff. */
+test('mirror: a nested install whose package dir is absent from the worktree is not mirrored', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-nm-absent-')));
+  const main = path.join(root, 'main');
+  const wt = path.join(root, 'wt');
+  try {
+    fs.mkdirSync(path.join(main, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(main, 'packages/added-later/node_modules/pkg'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'packages/added-later/node_modules/pkg/index.js'), 'x\n');
+    fs.mkdirSync(path.join(wt, 'packages'), { recursive: true });
+
+    mirrorWorktreeNodeModules(main, wt);
+
+    assert.equal(fs.existsSync(path.join(wt, 'packages/added-later')), false, 'no phantom package dir is created');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* E2 (A3): a SYMLINKED scope container is a plain entry to link, not a tree to expand. */
+test('mirror (A3): a SYMLINKED @scope container is mirrored as a link, not expanded into a real directory', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-nm-a3-')));
+  const main = path.join(root, 'main');
+  const wt = path.join(root, 'wt');
+  try {
+    fs.mkdirSync(path.join(main, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(main, 'external/scope-real'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'external/scope-real/pkg.js'), 'x\n');
+    /* A scope directory that is itself a SYMLINK (a workspace-hoisted scope), not a real dir. */
+    fs.symlinkSync('../external/scope-real', path.join(main, 'node_modules/@scope'));
+    fs.mkdirSync(wt, { recursive: true });
+
+    mirrorWorktreeNodeModules(main, wt);
+
+    const scope = path.join(wt, 'node_modules/@scope');
+    assert.equal(fs.lstatSync(scope).isSymbolicLink(), true, 'a symlinked scope container must stay a link');
+    assert.equal(fs.statSync(scope).isDirectory(), true, 'the link still resolves to the scope dir');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* E3 (A4): a mirror destination whose worktree parent is a symlink escaping the worktree is refused. */
+test('mirror (A4): a nested mirror whose worktree parent escapes via a symlink is refused with ToolingError, nothing created at the escape target', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-nm-a4-')));
+  const main = path.join(root, 'main');
+  const wt = path.join(root, 'wt');
+  const escape = path.join(root, 'escape');
+  try {
+    fs.mkdirSync(path.join(main, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(main, 'apps/api/node_modules/pkg'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'apps/api/node_modules/pkg/index.js'), 'x\n');
+    /* `escape/api` exists so the package dir resolves (an absent one is skipped, not escaped). */
+    fs.mkdirSync(path.join(escape, 'api'), { recursive: true });
+    fs.mkdirSync(wt, { recursive: true });
+    /*
+     * The worktree's `apps` is a symlink escaping the worktree: `mkdir -p` of the nested mirror
+     * would otherwise create it under `escape`, where rollback (worktree-only) cannot reach.
+     */
+    fs.symlinkSync(escape, path.join(wt, 'apps'));
+
+    assert.throws(
+      () => mirrorWorktreeNodeModules(main, wt),
+      (error: unknown) => error instanceof ToolingError && /escape|worktree/i.test((error as Error).message),
+    );
+    assert.equal(
+      fs.existsSync(path.join(escape, 'api/node_modules')),
+      false,
+      'nothing created at the escape target',
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* E4 (A5): the depth bound includes the deepest supported layout and excludes the next one — both. */
+test('mirror (A5): the deepest supported nested install <a>/<b>/<c>/node_modules is mirrored; <a>/<b>/<c>/<d>/node_modules is not', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dr-nm-a5-')));
+  const main = path.join(root, 'main');
+  const wt = path.join(root, 'wt');
+  try {
+    fs.mkdirSync(path.join(main, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(main, 'a/b/c/node_modules/pkg'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'a/b/c/node_modules/pkg/index.js'), 'x\n');
+    fs.mkdirSync(path.join(main, 'a/b/c/d/node_modules/pkg'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'a/b/c/d/node_modules/pkg/index.js'), 'x\n');
+    /* Both package dirs exist in the worktree, so only the scan bound can decide between them. */
+    fs.mkdirSync(path.join(wt, 'a/b/c/d'), { recursive: true });
+
+    mirrorWorktreeNodeModules(main, wt);
+
+    assert.equal(fs.existsSync(path.join(wt, 'a/b/c/node_modules')), true, 'deepest included install is mirrored');
+    assert.equal(fs.statSync(path.join(wt, 'a/b/c/node_modules')).isDirectory(), true, 'the included mirror is a real dir');
+    assert.equal(fs.existsSync(path.join(wt, 'a/b/c/d/node_modules')), false, 'the too-deep install is not mirrored');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('tooling scope: an UNTRACKED nested node_modules path is exempt from the slice gate', () => {
+  assert.equal(isWorktreeTooling('apps/api/node_modules/foo', true), true);
+});
+
+/* E6 (B): the node_modules exemption is UNTRACKED-only — a tracked node_modules edit is user work. */
+test('gate: a node_modules path is exempt only when UNTRACKED (a tracked node_modules edit is real user work)', () => {
+  assert.equal(isWorktreeTooling('fixtures/node_modules/case.js', false), false, 'tracked node_modules path is not tooling');
+  assert.equal(isWorktreeTooling('fixtures/node_modules/case.js', true), true, 'untracked node_modules path is exempt mirror content');
+});
+
+/* E6 (B): nonToolingDirtyPaths keeps a tracked ` M` node_modules line and drops the untracked mirror. */
+test('nonToolingDirtyPaths: a tracked node_modules edit survives the tooling filter while untracked mirror content is dropped', () => {
+  const status = ' M fixtures/node_modules/case.js\n?? node_modules/pkg/index.js\n';
+  assert.deepEqual(nonToolingDirtyPaths(status), ['fixtures/node_modules/case.js']);
+});
+
+test('tooling reuse: a node_modules symlink from the pre-mirror engine is dead', () => {
+  const { base, repo } = makeBase();
+  const pinned = 'abc123def456';
+  const mainNodeModules = path.join(repo, 'node_modules');
+  const mainTools = path.join(repo, '.tools');
+  fs.mkdirSync(mainNodeModules, { recursive: true });
+  fs.mkdirSync(mainTools, { recursive: true });
+
+  const spawn: WorktreeDeps['spawn'] = (file, args, options) => {
+    if (file === 'git' && args.includes('ls-files') && args.includes('vendor/dev-standards')) {
+      return { status: 0, stdout: `160000 ${pinned} 0\tvendor/dev-standards\n`, stderr: '' };
+    }
+    const result = spawnSync(file, [...args], { cwd: options.cwd, encoding: 'utf8', shell: false });
+    return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  };
+
+  try {
+    const first = selectWorktree(
+      'oldnm',
+      deps(repo, {
+        spawn,
+        setupTooling: (_toolingDeps, wtPath) => {
+          for (const [rel, entrypoint] of TOOLING_DISTS) {
+            fs.mkdirSync(path.join(wtPath, rel), { recursive: true });
+            fs.writeFileSync(path.join(wtPath, rel, '.built-from'), `${pinned}\n`);
+            fs.writeFileSync(path.join(wtPath, rel, entrypoint), '/* built */\n');
+          }
+          fs.symlinkSync(mainNodeModules, path.join(wtPath, 'node_modules'));
+          fs.symlinkSync(mainTools, path.join(wtPath, '.tools'));
+        },
+      }),
+    );
+    assert.equal(first.exitCode, EXIT_OK);
+
+    const second = selectWorktree('oldnm', deps(repo, { spawn }));
+    assert.equal(second.exitCode, EXIT_WRONG_STATE);
+    assert.match(second.machineError?.message ?? '', /stale tooling/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+/*
+ * E5 (A6): a regular FILE named node_modules passes `existsSync && !isSymlink` but is not a usable
+ * mirror — reuse must require a real directory, same refusal shape as the legacy-symlink case.
+ */
+test('tooling reuse: a regular FILE named node_modules fails reuse as stale tooling', () => {
+  const { base, repo } = makeBase();
+  const pinned = 'abc123def456';
+  const mainTools = path.join(repo, '.tools');
+  fs.mkdirSync(path.join(repo, 'node_modules'), { recursive: true });
+  fs.mkdirSync(mainTools, { recursive: true });
+
+  const spawn: WorktreeDeps['spawn'] = (file, args, options) => {
+    if (file === 'git' && args.includes('ls-files') && args.includes('vendor/dev-standards')) {
+      return { status: 0, stdout: `160000 ${pinned} 0\tvendor/dev-standards\n`, stderr: '' };
+    }
+    const result = spawnSync(file, [...args], { cwd: options.cwd, encoding: 'utf8', shell: false });
+    return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  };
+
+  try {
+    const first = selectWorktree(
+      'filenm',
+      deps(repo, {
+        spawn,
+        setupTooling: (_toolingDeps, wtPath) => {
+          for (const [rel, entrypoint] of TOOLING_DISTS) {
+            fs.mkdirSync(path.join(wtPath, rel), { recursive: true });
+            fs.writeFileSync(path.join(wtPath, rel, '.built-from'), `${pinned}\n`);
+            fs.writeFileSync(path.join(wtPath, rel, entrypoint), '/* built */\n');
+          }
+          /* A regular FILE named node_modules — exists, is not a symlink, but is not a mirror. */
+          fs.writeFileSync(path.join(wtPath, 'node_modules'), 'not a dir\n');
+          fs.symlinkSync(mainTools, path.join(wtPath, '.tools'));
+        },
+      }),
+    );
+    assert.equal(first.exitCode, EXIT_OK);
+
+    const second = selectWorktree('filenm', deps(repo, { spawn }));
+    assert.equal(second.exitCode, EXIT_WRONG_STATE);
+    assert.match(second.machineError?.message ?? '', /stale tooling/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
   }
 });
 

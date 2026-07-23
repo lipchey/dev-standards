@@ -159,10 +159,10 @@ opt-in re-seed that respects consumer edits. Effort M.
 non-Node consumer (empty `node_modules/`, no `package-lock.json`)
 create-then-reuse test: select-worktree twice reuses the same worktree (asserted
 by an unchanged run-descriptor `run_id`, so a silent remove-and-recreate can't
-masquerade as reuse) with the `node_modules` symlink resolving both times; a
-negative third run (main `node_modules` removed) must refuse with
-`EXIT_WRONG_STATE` + stale-tooling — so the unconditional-symlink contract can't
-regress. Effort S.
+masquerade as reuse) with the real `node_modules` mirror (a directory of
+per-entry symlinks) resolving both times; a negative third run (the mirror
+replaced by a legacy root SYMLINK) must refuse with `EXIT_WRONG_STATE` +
+stale-tooling — so the real-directory-mirror contract can't regress. Effort S.
 
 ## 2026-07-10 — Descriptor-relative confinement for skill-wrapper generation — MOOT (Phase 2, 2026-07-10)
 
@@ -278,9 +278,11 @@ From the full disposition of `DEEP_REVIEW_FINDINGS.md` (58 findings; see its
   is orchestrator prose; a standing violation has no engine state, so nothing
   mechanically blocks a later `verify`+`handoff`. Fix: a self-review verdict
   bound to HEAD in the findings file, required green by `verify`/`handoff`.
-- **node_modules/.tools symlinks are a shared-mutation window.** Root `npm ci`
-  in a concurrent bootstrap rebuilds them under a running worktree. Accepted
-  trade-off (documented at `SYMLINK_TARGETS`); per-worktree install if it bites.
+- **The node_modules mirror + .tools symlink are a shared-mutation window.** The
+  mirror is per-entry symlinks into the main checkout's packages (and .tools links
+  the main tree), so a root `npm ci` in a concurrent bootstrap rebuilds them under
+  a running worktree. Accepted trade-off (documented at the NODE_MODULES_*
+  constants / `SYMLINK_TARGETS`); per-worktree install if it bites.
 - **Pin-bump transaction excludes freshly seeded instance docs.**
   `ds-update-pins.sh` commits pathspec-confined to the gitlink; bootstrap
   inside the transaction seeds any missing instance doc (e.g. the ADR-019

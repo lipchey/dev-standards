@@ -444,11 +444,13 @@ test('scope gate: a dirty path OUTSIDE slice_files -> refused BEFORE any test ru
   assert.equal(readFindings(fpath).findings[0]?.status, 'pending');
 });
 
-test('scope gate: the engine\'s OWN worktree-tooling footprint (node_modules/.tools/submodule) is NOT out-of-slice dirt', () => {
+test("scope gate: the engine's OWN worktree-tooling footprint (the node_modules mirror, .tools, submodule) is NOT out-of-slice dirt", () => {
   const repo = repoWithEditedSlice();
-  // Simulate the footprint setupWorktreeTooling leaves in a consumer worktree: the
-  // node_modules/.tools symlinks and the wired submodule surface as dirty because a
-  // trailing-slash .gitignore (node_modules/, dist/) does not match a symlink.
+  /*
+   * Simulate the UNTRACKED footprint setupWorktreeTooling leaves in a consumer worktree: the real
+   * node_modules mirror (an anchored `/node_modules/` ignore misses nested mirrors, so they surface
+   * dirty), the .tools symlink, and the wired submodule dist — all engine-created untracked content.
+   */
   writeFileIn(repo, 'node_modules/pkg/index.js', 'x\n');
   writeFileIn(repo, '.tools/bin', 'x\n');
   writeFileIn(repo, 'vendor/dev-standards/runner/dist/x', 'x\n');
@@ -460,6 +462,37 @@ test('scope gate: the engine\'s OWN worktree-tooling footprint (node_modules/.to
   const committed = git(repo, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']).trim().split('\n').filter(Boolean);
   assert.deepEqual(committed, ['src/app.ts'], 'only the slice is committed; tooling is never swept in');
   assert.equal(readFindings(fpath).findings[0]?.status, 'fixed');
+});
+
+/*
+ * E7 (B): the node_modules exemption is UNTRACKED-only. A TRACKED file under a node_modules segment
+ * (genuine user work, e.g. a committed fixture) is out-of-slice dirt and must refuse the slice, even
+ * while the untracked mirror footprint alongside it stays exempt.
+ */
+test('scope gate: a TRACKED node_modules file is out-of-slice dirt (refuses) while the untracked mirror footprint stays exempt', () => {
+  const repo = repoWithEditedSlice();
+  /* A committed (tracked) file under a node_modules segment, then dirtied — real user work. */
+  writeFileIn(repo, 'fixtures/node_modules/case.js', 'export const v = 1;\n');
+  git(repo, ['add', '--', 'fixtures/node_modules/case.js']);
+  git(repo, ['commit', '-q', '-m', 'add fixture']);
+  fs.writeFileSync(path.join(repo, 'fixtures/node_modules/case.js'), 'export const v = 2;\n');
+  /* The untracked mirror footprint is present alongside it (still exempt). */
+  writeFileIn(repo, 'node_modules/pkg/index.js', 'x\n');
+  const before = head(repo);
+  const reports = reportsRoot();
+  const fpath = findingsPathIn(reports);
+  writeV2(fpath, validFile([validFinding()]));
+  let ran = false;
+  const result = commitSlice('f-001', fpath, sliceDeps(repo, reports, {
+    runProcess: () => {
+      ran = true;
+      return okVerdict;
+    },
+  }));
+  assert.equal(result.exitCode, EXIT_WRONG_STATE, 'a tracked node_modules edit is out-of-slice dirt');
+  assert.equal(ran, false, 'no validation run on out-of-slice dirt');
+  assert.equal(head(repo), before, 'no commit');
+  assert.equal(readFindings(fpath).findings[0]?.status, 'pending', 'findings not mutated');
 });
 
 test('path-safety gate: an unsafe slice_files path -> status "invalid", no commit', () => {

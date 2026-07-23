@@ -12,12 +12,12 @@ import path from 'node:path';
 import { EXIT_OK, EXIT_FAILURE, EXIT_WRONG_STATE } from '../../deep-review/src/types.ts';
 import { initConsumerRepo, runVerb, git, cleanup, readRunDescriptor } from './helper.ts';
 
-/* The two dist dirs are now COPIED (immutable real snapshots); node_modules/.tools stay symlinks. */
 const COPY_TARGETS = [
   ['vendor/dev-standards/runner/dist', 'verify-runner.mjs'],
   ['vendor/dev-standards/deep-review/dist', 'deep-review-runner.mjs'],
 ] as const;
-const SYMLINK_TARGETS = ['node_modules', '.tools'];
+const REAL_DIRECTORY_TARGETS = ['node_modules'];
+const SYMLINK_TARGETS = ['.tools'];
 
 test('consumer worktree, fresh build stamp -> submodule initialized + dist copied / tooling symlinked, descriptor written', () => {
   const box = initConsumerRepo({ stampFresh: true });
@@ -47,6 +47,11 @@ test('consumer worktree, fresh build stamp -> submodule initialized + dist copie
       'copied runner/dist stamp != pinned submodule SHA',
     );
 
+    for (const rel of REAL_DIRECTORY_TARGETS) {
+      const directory = path.join(wt, rel);
+      assert.equal(fs.lstatSync(directory).isSymbolicLink(), false, `${rel} must not be a symlink`);
+      assert.equal(fs.statSync(directory).isDirectory(), true, `${rel} must be a directory`);
+    }
     for (const rel of SYMLINK_TARGETS) {
       const link = path.join(wt, rel);
       assert.equal(fs.lstatSync(link).isSymbolicLink(), true, `${rel} is not a symlink`);
@@ -61,11 +66,10 @@ test('consumer worktree, fresh build stamp -> submodule initialized + dist copie
   }
 });
 
-test('non-Node consumer worktree: create then REUSE (node_modules symlink resolves both runs)', () => {
+test('non-Node consumer worktree: create then REUSE with a real node_modules mirror', () => {
   /* initConsumerRepo models a non-Node consumer: an empty node_modules/ (only .keep)
      and NO package-lock.json. ds-bootstrap.sh `mkdir -p node_modules` for such repos so
-     worktree.ts's UNCONDITIONAL node_modules symlink resolves — this test guards that
-     contract across BOTH create and reuse (toolingAlive re-checks every symlink target). */
+     the unconditional shallow mirror has a source — this guards create and reuse. */
   const box = initConsumerRepo({ stampFresh: true });
   try {
     /* Fixture really is non-Node: empty node_modules, no lockfile. */
@@ -76,8 +80,9 @@ test('non-Node consumer worktree: create then REUSE (node_modules symlink resolv
     const wt = box.worktreePath;
 
     const nodeModules = path.join(wt, 'node_modules');
-    assert.equal(fs.lstatSync(nodeModules).isSymbolicLink(), true, 'node_modules is not a symlink');
-    assert.equal(fs.existsSync(nodeModules), true, 'node_modules symlink does not resolve on create');
+    assert.equal(fs.lstatSync(nodeModules).isSymbolicLink(), false, 'node_modules must not be a symlink');
+    assert.equal(fs.statSync(nodeModules).isDirectory(), true, 'node_modules must be a directory');
+    assert.equal(fs.existsSync(path.join(nodeModules, '.keep')), true, 'node_modules mirror does not resolve on create');
     /* The descriptor's run_id is the reuse discriminator: reuse validates and keeps it, whereas a
        silent remove-and-recreate at the same path/branch would mint a fresh run_id (worktree.ts
        writes the descriptor only on create). Capture it to prove the 2nd run truly reuses. */
@@ -93,15 +98,13 @@ test('non-Node consumer worktree: create then REUSE (node_modules symlink resolv
       .split('\n')
       .filter((l) => l === `branch refs/heads/${box.branch}`);
     assert.equal(branchLines.length, 1, 'reuse created a second worktree for the branch');
-    assert.equal(fs.existsSync(nodeModules), true, 'node_modules symlink broke on reuse');
+    assert.equal(fs.existsSync(path.join(nodeModules, '.keep')), true, 'node_modules mirror broke on reuse');
 
-    /* Negative sensitivity check: without this, the reuse asserts would stay green even if
-       toolingAlive stopped requiring node_modules. Break the symlink target in the main
-       checkout and confirm a THIRD run REFUSES (EXIT_WRONG_STATE + stale-tooling message) —
-       i.e. the non-Node node_modules contract is genuinely enforced on the reuse path. */
-    fs.rmSync(path.join(box.repo, 'node_modules'), { recursive: true, force: true });
+    /* The pre-mirror engine's root symlink must force a re-wire instead of being silently reused. */
+    fs.rmSync(nodeModules, { recursive: true, force: true });
+    fs.symlinkSync(path.join(box.repo, 'node_modules'), nodeModules);
     const third = runVerb(box.repo, ['select-worktree', '--slug', 'e2e'], box.env);
-    assert.equal(third.status, EXIT_WRONG_STATE, `dangling node_modules must refuse reuse; got status=${third.status} stdout=${third.stdout}`);
+    assert.equal(third.status, EXIT_WRONG_STATE, `symlinked node_modules must refuse reuse; got status=${third.status} stdout=${third.stdout}`);
     assert.match(third.stderr, /stale tooling/);
   } finally {
     cleanup(box);

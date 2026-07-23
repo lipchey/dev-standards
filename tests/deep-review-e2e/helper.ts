@@ -215,7 +215,8 @@ export function initCoreRepo(opts: CoreFixtureOpts = {}): Sandbox {
    gitlink submodule (added over file:// with `protocol.file.allow=always`, which
    git >=2.38 requires for local submodule transport), carrying a committed
    pre-commit hook. The main checkout holds the tooling SOURCES a fresh run-worktree
-   COPIES (built dist) + symlinks (node_modules / .tools), plus the build stamps
+   COPIES (built dist), MIRRORS (node_modules -> a real dir of per-entry symlinks), and
+   SYMLINKS (.tools), plus the build stamps
    (runner/ + deep-review/ dist/.built-from). `stampFresh` sets the stamps to the
    pinned submodule SHA (tooling wires successfully) or a bogus SHA
    (setupWorktreeTooling must fail loud at the before-copy gate).

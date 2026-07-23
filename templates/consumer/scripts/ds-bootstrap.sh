@@ -43,8 +43,8 @@ elif [[ -f package.json ]]; then
   echo "    note: root package.json without package-lock.json — install root deps yourself (npm/pnpm/yarn)"
 fi
 
-# deep-review symlinks root node_modules into its worktree unconditionally
-# (worktree.ts), so the dir must exist even for non-Node consumers.
+# deep-review shallow-MIRRORS root node_modules into its worktree unconditionally
+# (worktree.ts readdirSyncs this dir), so it must exist even for non-Node consumers.
 mkdir -p node_modules
 
 echo "==> installing gitleaks"
