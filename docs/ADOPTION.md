@@ -77,8 +77,8 @@ project-specific gates start empty, so `./scripts/verify` passes immediately.
    boundaries, lazy-read triggers) instead of mandated pre-code reads; the
    Stage-2 offer after a feature is a READY PROMPT for a fresh session
    (`deep-review-refactor` for the original Claude workflow, or
-   `deep-review-refactor-codex` for the Codex-only six-stage workflow + scope =
-   diff vs base + branch/worktree). The Codex skill enables safe fixes by
+   `deep-review-refactor-codex` for the tiered, adaptive Codex-run workflow with
+   one cross-family final reviewer + scope = diff vs base + branch/worktree). The Codex skill enables safe fixes by
    default after consent — never run either workflow as a
    review run inside the build session, whose context is already spent. A
    declined/postponed offer ends without a repository-documentation entry for
@@ -195,10 +195,10 @@ structural checks).
 Both deep-review skills review a completed feature branch's diff (not the whole
 repo) and run **only with explicit user consent**. The original Claude workflow
 remains `$deep-review-refactor` with its existing behavior. The explicitly named
-Codex workflow is `$deep-review-refactor-codex`; an accepted Codex run defaults
-to the six-stage `review-and-refactor` pipeline and fixes confirmed
-behavior-preserving findings, while `review-only` is an explicit opt-out from
-edits.
+Codex workflow is `$deep-review-refactor-codex`; a direct Codex invocation
+defaults to a `STANDARD`-tier, adaptive `review-and-refactor` run (Codex workers
+with one cross-family final reviewer) and fixes confirmed behavior-preserving
+findings, while `review-only` is an explicit opt-out from edits.
 
 ### Guides-read enforcement (ADR-016)
 
@@ -290,5 +290,6 @@ never worked around in consumer code. Shared rules/guides are proposed via
   `.claude/review-guides/` may be empty.
 - Claude and Codex consumer skill files are thin pointers to distinct
   package-owned bodies: the original `deep-review-refactor` for Claude and the
-  six-stage `deep-review-refactor-codex` for Codex. `seed-consumer.sh` installs
-  both, so either runtime exposes its workflow without a per-project skill fork.
+  tiered, adaptive `deep-review-refactor-codex` for Codex. Both read the shared
+  `deep-review-core.md` and add only runtime mechanics. `seed-consumer.sh`
+  installs both, so either runtime exposes its workflow without a per-project fork.

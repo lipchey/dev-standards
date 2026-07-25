@@ -101,47 +101,56 @@ test('each runtime composition (core + adapter) enumerates every corpus file by 
   }
 });
 
-test('the Claude runtime composition retains its mandatory/non-collapsible fan-out contract', () => {
-  const normalizedBody = composedBody('deep-review-refactor.md').replace(/\s+/g, ' ');
-  const requiredPhrases = [
-    'MANDATORY and NON-COLLAPSIBLE',
-    'worker-route floor',
-    'one item per CORPUS profile route',
-    'broadcast into EVERY profile route',
-    'one row for EVERY corpus profile',
-  ];
-  const missing = requiredPhrases.filter((phrase) => !normalizedBody.includes(phrase));
-  assert.deepEqual(missing, [], `Claude fan-out contract phrases missing: ${missing.join(' | ')}`);
-  for (const matrixState of ['APPLIED', 'SKIPPED', 'GAP']) {
-    assert.ok(normalizedBody.includes(matrixState), `Claude coverage-matrix state ${matrixState} missing`);
+/* The resource-redesign contract (ADR-026), pinned on BOTH compositions because
+   every phrase is a core rule read by each runtime. Each pins a known
+   silent-regression boundary: tier collapse, discovery-route merge, lost
+   fork-freshness, a full-pipeline commit-slice, homogeneous final review,
+   partial fan-out, or infra masquerading as a fix failure. */
+const SHARED_CONTRACT_PINS = [
+  'NOT_TRIGGERED',
+  'LIGHT',
+  'STANDARD',
+  'DEEP',
+  'fork:none',
+  'one-finding-per-call',
+  'cross-runtime-family',
+  'Budget fail-fast',
+  'infra-blocked',
+  'stay differentiated',
+];
+
+test('each runtime composition pins the shared resource-redesign contract', () => {
+  for (const adapter of RUNTIME_ADAPTERS) {
+    const normalizedBody = composedBody(adapter).replace(/\s+/g, ' ');
+    const missing = SHARED_CONTRACT_PINS.filter((phrase) => !normalizedBody.includes(phrase));
+    assert.deepEqual(missing, [], `${adapter} composition missing contract phrases: ${missing.join(' | ')}`);
+    /* The four matrix states must all be named so a dropped-state rewrite is
+       caught; NOT_TRIGGERED is the new adaptive-discovery state. */
+    for (const matrixState of ['APPLIED', 'SKIPPED', 'GAP', 'NOT_TRIGGERED']) {
+      assert.ok(normalizedBody.includes(matrixState), `${adapter} coverage-matrix state ${matrixState} missing`);
+    }
   }
 });
 
-test('the Codex runtime composition pins the six-stage fan-out and coverage contract', () => {
+test('the Claude composition keeps its worker-route floor and transcript-gate markers', () => {
+  const normalizedBody = composedBody('deep-review-refactor.md').replace(/\s+/g, ' ');
+  const requiredPhrases = ['worker-route floor', 'DEEP_REVIEW_GUARD_OFF', 'TRIGGERED route'];
+  const missing = requiredPhrases.filter((phrase) => !normalizedBody.includes(phrase));
+  assert.deepEqual(missing, [], `Claude markers missing: ${missing.join(' | ')}`);
+});
+
+test('the Codex composition pins Codex-only staffing and the conflict-preflight exclusive worker', () => {
   /* Collapse whitespace so prose line-wrapping never splits a phrase mid-match. */
   const normalizedBody = composedBody('deep-review-refactor-codex.md').replace(/\s+/g, ' ');
-  /* Each phrase pins a known silent-regression boundary: model-choice drift,
-     fan-out collapse, lost legacy overlays, or a partial coverage matrix. */
   const requiredPhrases = [
     'Use Codex workers exclusively',
-    'fan-out is mandatory and non-collapsible',
-    'never collapse multiple profiles into one worker',
-    'broadcast into every profile route',
-    'one row for every corpus profile',
-    'Mandatory preflight — reconcile the branch with main',
+    'Default to `review-and-refactor`',
+    'Keep the main session as a thin orchestrator',
+    /* The conflict preflight now lives in core; the adapter binds the exclusive
+       conflict worker to Codex and the core carries the same-SHA re-check. */
     'dispatch exactly one fresh, separate Codex worker dedicated only to conflict resolution',
-    'repeat the non-mutating merge-tree check against the same mainline SHA',
+    'non-mutating merge-tree check against the same mainline SHA',
   ];
   const missing = requiredPhrases.filter((phrase) => !normalizedBody.includes(phrase));
-  assert.deepEqual(missing, [], `fan-out contract phrases missing from the Codex composition: ${missing.join(' | ')}`);
-  /* All three coverage-matrix states must be named so a 2-state or dropped-state
-     rewrite is caught. */
-  for (const matrixState of ['APPLIED', 'SKIPPED', 'GAP']) {
-    assert.ok(normalizedBody.includes(matrixState), `coverage-matrix state ${matrixState} missing from the Codex composition`);
-  }
-  for (let stage = 1; stage <= 6; stage += 1) {
-    assert.ok(normalizedBody.includes(`Stage ${stage} —`), `Stage ${stage} missing from the Codex composition`);
-  }
-  assert.ok(normalizedBody.includes('Default to `review-and-refactor`'));
-  assert.ok(normalizedBody.includes('Keep the main session as a thin orchestrator'));
+  assert.deepEqual(missing, [], `Codex contract phrases missing: ${missing.join(' | ')}`);
 });

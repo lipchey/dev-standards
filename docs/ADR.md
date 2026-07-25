@@ -1042,3 +1042,98 @@ Codex without copying or forking its body.
   not create new root files.
 - If no Codex worker route exists, the pass stops with an operational blocker;
   it does not collapse into a context-heavy main-session review.
+
+---
+
+## ADR-026 — Shared deep-review core with adaptive tiered topology
+
+- **Status:** Accepted
+- **Date:** 2026-07-25
+- **Owner decision** (repo owner, 2026-07-25)
+- **Scope:** Both deep-review runtimes (Claude and Codex).
+- **Amends:** ADR-003/010 (one shared core body now sits under both canonical
+  runtime bodies), ADR-012/016 (the transcript Stop gate keeps anchoring only
+  `review-contract.md` + required reads; each adapter enforces its own
+  fail-closed core read), ADR-018/020 (the mandatory non-collapsible 8-route
+  fan-out is replaced by adaptive triggered discovery), ADR-024 (the
+  cost/benefit carve-out survives inside the merged triage+plan pass), and
+  **supersedes the ADR-025 topology** (six fixed stages, ≥2-default-3
+  reviewers, one monolithic integration worker, Codex-workers-only without
+  exception). ADR-025's naming, consent, main-context-floor, and
+  workers-exchange-paths rules stay in force.
+
+### Context
+
+The first full Codex-runtime run (PR #83, 2026-07-25) took 12h05m, dispatched
+42 workers, and consumed roughly 60% of the weekly Codex usage limit for one
+review. The process retrospective and an independent utility audit attribute
+the cost to structural mandates, not defects: an unconditional 8-route (dual
+fleet: 16) fan-out regardless of diff shape, inherited transcripts in 31 of 42
+workers, a monolithic integration worker serializing 16 per-finding commits,
+duplicated full-verify runs, and re-running the pipeline after head drift.
+The owner requires the process to stay recall-safe on risk lenses while
+scaling its cost to the diff actually under review.
+
+### Decision
+
+1. **Shared core + thin adapters.** Every runtime-shared rule lives once in
+   `agents/skill-sources/deep-review-core.md`; each canonical runtime body is
+   an adapter whose FIRST executable instruction resolves the dev-standards
+   root, reads the core, and fails closed if it is missing. Frontmatter and
+   wrapper metadata stay frozen; the composed core+adapter text is the
+   contract the runner tests pin.
+2. **Entry tiers.** Deterministic tiers by diff size and file classes:
+   LIGHT (1-2 workers, review-only), STANDARD (3-5, review-and-refactor),
+   DEEP (7-9, full topology, explicit opt-in only — never auto-selected,
+   never silently escalated mid-run). Direct Codex invocation = STANDARD;
+   the automatic post-feature offer = LIGHT review-only; the Claude runtime
+   keeps its run-setup ask.
+3. **Adaptive discovery.** The unconditional 8-route fan-out is replaced by a
+   deterministic trigger table; ANY uncertainty triggers the route. Risk
+   routes (security, correctness/lifecycle, tests-quality) stay
+   differentiated workers; the five structural lenses run as ONE combined
+   route at reduced effort. The 8-row coverage matrix survives with a new
+   `NOT_TRIGGERED(+reason)` state, so a skipped lens is visible and
+   deterministic, never silent.
+4. **Merged triage+plan, deterministic-first verification.** One
+   consolidation+estimation pass. Claims checkable by AST/grep/CodeGraph are
+   verified deterministically; model falsification is reserved for P1/P2,
+   PARTIAL/uncertain, and disputed claims; P3 is sample-verified; a 0-INVALID
+   large cohort triggers a falsification audit, never a precision claim.
+5. **Serialized thematic chunks.** A fresh worker per 2-4 same-seam findings
+   authors, self-reviews, and commits via `commit-slice` one finding at a
+   time. No monolithic integration worker; parallel authoring only with
+   proven disjoint ownership in isolated worktrees/patch-only.
+6. **One cross-family final reviewer.** ONE fresh read-only reviewer from the
+   other runtime family (Codex run → Claude reviewer and vice versa;
+   fallback = same-family + explicit disclosure). A second reviewer only on
+   defined risk triggers. One bounded repair pass with targeted re-review of
+   affected hunks; exactly ONE `verify --full` on the final HEAD, its
+   attestation reusable while head, toolchain pin, deps lock, and env
+   contract are unchanged.
+7. **Deterministic Stage 0 preflight.** Before any model dispatch: head/base
+   pin + non-mutating merge-tree, commit-slice compatibility smoke, worktree/
+   deps attestation, env-contract presence (names only), findings-schema
+   check, baseline fast verify. Infra red → `infra-blocked`, never
+   `fix-failed`; head drift → delta-revalidation of changed files, never a
+   full pipeline rerun.
+8. **Caps, effort ladder, telemetry.** Hard caps (DEEP ≤9 workers, discovery
+   ≤3 routes + structural, reviewers ≤2, repair 1, full verify 1, route retry
+   1) and budget fail-fast before dispatch. Top reasoning effort only for
+   security/correctness discovery, P1/P2 falsification, and final review.
+   `run.json` records per-worker model, effort, fork mode, prompt bytes,
+   duration, and finding IDs; the retrospective stage is opt-in.
+
+### Consequences
+
+- Cost scales with the diff: a docs-only change no longer buys an 8-route
+  fan-out. Recall risk is concentrated where triggers could misfire; the
+  conservative table (uncertain → trigger) plus the visible `NOT_TRIGGERED`
+  matrix rows are the mitigations, and the first real run at this topology is
+  the evaluation gate — usage reduction is a forecast until its telemetry
+  lands (baseline: 42 workers / 12h05m, 2026-07-25).
+- The Codex runtime's workers-only rule gains one named exception (the
+  cross-family final reviewer); the fallback path discloses when a review was
+  not cross-family.
+- Consumers pick the new topology up through a pin bump; wrappers, skill
+  names, and descriptions are unchanged, so no reseeding is needed.
