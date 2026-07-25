@@ -1082,12 +1082,13 @@ scaling its cost to the diff actually under review.
    root, reads the core, and fails closed if it is missing. Frontmatter and
    wrapper metadata stay frozen; the composed core+adapter text is the
    contract the runner tests pin.
-2. **Entry tiers.** Deterministic tiers by diff size and file classes:
-   LIGHT (1-2 workers, review-only), STANDARD (3-5, review-and-refactor),
-   DEEP (7-9, full topology, explicit opt-in only — never auto-selected,
-   never silently escalated mid-run). Direct Codex invocation = STANDARD;
-   the automatic post-feature offer = LIGHT review-only; the Claude runtime
-   keeps its run-setup ask.
+2. **Entry tiers.** The tier is fixed up front by the entry path and the
+   user's explicit choice (each adapter binds its defaults), recorded with
+   its inputs in the run artifacts: LIGHT (1-2 workers, review-only),
+   STANDARD (3-5, review-and-refactor), DEEP (7-9, full topology, explicit
+   opt-in only — never auto-selected, never silently escalated mid-run).
+   Direct Codex invocation = STANDARD; the automatic post-feature offer =
+   LIGHT review-only; the Claude runtime keeps its run-setup ask.
 3. **Adaptive discovery.** The unconditional 8-route fan-out is replaced by a
    deterministic trigger table; ANY uncertainty triggers the route. Risk
    routes (security, correctness/lifecycle, tests-quality) stay
@@ -1101,14 +1102,16 @@ scaling its cost to the diff actually under review.
    PARTIAL/uncertain, and disputed claims; P3 is sample-verified; a 0-INVALID
    large cohort triggers a falsification audit, never a precision claim.
 5. **Serialized thematic chunks.** A fresh worker per 2-4 same-seam findings
-   authors, self-reviews, and commits via `commit-slice` one finding at a
-   time. No monolithic integration worker; parallel authoring only with
-   proven disjoint ownership in isolated worktrees/patch-only.
+   authors and self-reviews, and each fix lands through `commit-slice` one
+   finding at a time (each adapter binds which actor executes the CLI call).
+   No monolithic integration worker; parallel authoring only with proven
+   disjoint ownership in isolated worktrees/patch-only.
 6. **One cross-family final reviewer.** ONE fresh read-only reviewer from the
    other runtime family (Codex run → Claude reviewer and vice versa;
    fallback = same-family + explicit disclosure). A second reviewer only on
    defined risk triggers. One bounded repair pass with targeted re-review of
-   affected hunks; exactly ONE `verify --full` on the final HEAD, its
+   affected hunks; exactly ONE final `verify` on the final HEAD at the gate
+   tier (`--full` default; `deep_review.verify_after_fix` per ADR-013), its
    attestation reusable while head, toolchain pin, deps lock, and env
    contract are unchanged.
 7. **Deterministic Stage 0 preflight.** Before any model dispatch: head/base
@@ -1118,7 +1121,7 @@ scaling its cost to the diff actually under review.
    `fix-failed`; head drift → delta-revalidation of changed files, never a
    full pipeline rerun.
 8. **Caps, effort ladder, telemetry.** Hard caps (DEEP ≤9 workers, discovery
-   ≤3 routes + structural, reviewers ≤2, repair 1, full verify 1, route retry
+   ≤3 routes + structural, reviewers ≤2, repair 1, final verify 1, route retry
    1) and budget fail-fast before dispatch. Top reasoning effort only for
    security/correctness discovery, P1/P2 falsification, and final review.
    `run.json` records per-worker model, effort, fork mode, prompt bytes,

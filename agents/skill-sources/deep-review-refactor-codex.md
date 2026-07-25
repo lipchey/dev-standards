@@ -37,8 +37,9 @@ prohibitions, the conflict-worker binding, and the cross-family final reviewer.
   workflow over the requested scope.
 - Enter `review-only` only when the user explicitly asks for a report without
   edits. The automatic post-feature offer defaults to `LIGHT` review-only (core
-  C0); if offered automatically, state that acceptance includes automatic safe
-  fixes - the offer itself is not consent. `DEEP` is explicit opt-in only.
+  C0): accepting it consents to a report, NOT to edits - a fix run requires an
+  explicit `STANDARD`/fix upgrade, and the offer itself is not consent even for
+  that. `DEEP` is explicit opt-in only.
 - Offer once per completed feature, scoped to its branch diff plus new untracked
   feature files. Do not re-ask after a decline or postponement, and do not create
   or update repository documentation solely to record that the review was not run.
@@ -60,6 +61,7 @@ prohibitions, the conflict-worker binding, and the cross-family final reviewer.
 ## Keep the main session lean
 
 The main session may establish/relay consent and scope, create the high-level plan,
+run the Stage-0 deterministic gates as host commands (outputs to run files),
 dispatch/wait/retry/stop workers, open the mandatory anchor files when a host
 transcript gate requires proof (never the eight profile bodies for that gate), read
 compact stage summaries and `run.json`, resolve a blocker needing user authority,
@@ -85,47 +87,56 @@ one unique run directory `<reports-dir>/deep-review-runs/<run-id>/` holding
 stage, artifact paths, counts, status - kept small), `scope.txt`, and per-stage
 artifacts named below. Workers update their own uniquely named artifacts; only the
 stage owner updates shared stage outputs; never let concurrent workers write the
-same file. Designate one Codex worker as each stage's owner; in fan-out stages,
-route workers write unique files and the owner updates `run.json` after checking
-them. The first stage owner establishes scope into `scope.txt`/`run.json` per core
-C0/C1 (base resolution, tracked+staged+untracked changes, preserve unrelated work,
-no widening, `quality.json` fail-closed).
+same file. Designate one Codex worker as each of Stages 1-4's owner; in fan-out
+stages, route workers write unique files and the owner updates `run.json` after
+checking them. The MAIN session populates `scope.txt`/`run.json` from its
+host-run Stage-0 outputs per core C0/C1 (base resolution, tracked+staged+
+untracked changes, preserve unrelated work, no widening, `quality.json`
+fail-closed); model stage owners begin at Stage 1 and consume those artifacts.
 
-## Stages 0-4 run as Codex workers
+## Stages 0-4
 
-Each core stage is executed by fresh Codex worker(s); the main session tracks only
-these plan items and reads only compact summaries plus `run.json`:
+Stages 1-4 are executed by fresh Codex worker(s); Stage 0 is host-run. The main
+session tracks only these plan items and reads only compact summaries plus
+`run.json`:
 
-1. **Stage 0 preflight (core C1)** — the stage owner runs the deterministic gates.
-   When the non-mutating merge-tree check finds conflicts, the core C1
-   conflict-resolution worker is a Codex worker: **dispatch exactly one fresh,
-   separate Codex worker dedicated only to conflict resolution**, with the
-   exclusive isolated worktree, merge-not-rebase, and re-check semantics core C1
-   mandates. Do not dispatch any other worker concurrently with it.
+1. **Stage 0 preflight (core C1)** — the MAIN session runs the deterministic
+   gates itself as host commands with outputs to run files (they are cheap and
+   non-model; delegating them to a worker is what core C1 forbids). When the
+   non-mutating merge-tree check finds conflicts in a fix-capable run, the core
+   C1 conflict-resolution worker is a Codex worker: **dispatch exactly one
+   fresh, separate Codex worker dedicated only to conflict resolution**, with
+   the exclusive isolated worktree, merge-not-rebase, and re-check semantics
+   core C1 mandates. Do not dispatch any other worker concurrently with it.
 2. **Stage 1 discovery (core C2)** — one read-only Codex worker per TRIGGERED route
    (the three risk routes plus the one combined structural route), each writing a
    unique `discovery/<route>.md` with the core-C2 output shape.
 3. **Stage 2 triage + plan (core C3)** — ONE fresh Codex worker consolidates and
    plans in one pass, writing schema-valid `consolidated-findings.json`,
-   `execution-plan.json`, and a compact `plan-summary.md` with the coverage matrix.
-   In `review-only` mode, stop after this stage and present the summary plus matrix.
+   `execution-plan.json` (each thematic packet records its immutable finding
+   IDs, owned files, dependency order, execution wave, overlap notes, expected
+   behavior preservation, focused tests, placement, and risk/effort - the proof
+   core C4's chunking and any parallel claim rests on),
+   and a compact `plan-summary.md` with the coverage matrix. A `classify`
+   outcome that changes a packet's contents forces a re-plan of the affected
+   packets. In `review-only` mode, stop after this stage and present the
+   summary plus matrix.
 4. **Stage 3 implementation (core C4)** — the stage owner runs `select-worktree`
-   then `classify`; fresh thematic-chunk workers (2-4 findings per seam) author,
-   self-review, and `commit-slice` one finding at a time in the canonical worktree.
-   No monolithic integration worker.
+   then `classify`; fresh thematic-chunk workers implement per core C4 in the
+   canonical worktree, and each chunk worker EXECUTES its own `commit-slice`
+   calls (the core-C4 actor binding for this runtime).
 5. **Stage 4 final review + repair + verify + handoff (core C5)** — the final
-   reviewer (below); one bounded repair worker with the core-C5 targeted re-review;
-   exactly one `verify --full`; then `report` and `handoff`, writing
-   `final-summary.md` (counts, commit SHAs, verification status, residual risks,
-   artifact paths). The main session reads only `final-summary.md` and `run.json`.
+   reviewer (below), repair, the final verify, then `report` and `handoff` per
+   core C5, writing `final-summary.md` (counts, commit SHAs, verification
+   status, residual risks, artifact paths). The main session reads only
+   `final-summary.md` and `run.json`.
 
 ## The final reviewer — the named cross-family exception
 
 Codex workers own discovery, triage, implementation, and repair; the final reviewer
 is the named exception — one fresh read-only **Claude** reviewer over the diff from
-`initial_head_sha`. If no Claude route exists, use one fresh Codex reviewer and
-disclose that the review was not cross-family. A second reviewer is added only on
-the core-C5 trigger.
+`initial_head_sha` (no Claude route → core C5's disclosed same-family fallback). A
+second reviewer is added only on the core-C5 trigger.
 
 ## No-touch and budget
 

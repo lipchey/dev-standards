@@ -34,9 +34,11 @@ Two modes exist and only two: `review-only` (prioritized findings, change
 nothing) and `review-and-refactor` (find the issues and immediately fix the
 fixable ones). A finding that needs redesign is a plan, not an edit.
 
-**Entry tier** is deterministic (diff size + file classes) and picks the
-topology - route count, reviewer count, effort - UP FRONT; it never silently
-escalates mid-run:
+**Entry tier** is fixed UP FRONT by the entry path and the user's explicit
+choice (each adapter binds its defaults) and picks the topology - route count,
+reviewer count, effort - before any dispatch; it never silently escalates
+mid-run, and the selected tier plus its inputs are recorded in the run
+artifacts:
 
 - **LIGHT** - 1-2 workers, review-only. The automatic post-feature offer's
   default: small, low-risk diffs.
@@ -55,13 +57,19 @@ request only.
 ## C1 - Stage 0: deterministic preflight, then context and evidence
 
 Stage 0 is a deterministic preflight run by BOTH runtimes BEFORE any model
-dispatch; every gate is non-model.
+dispatch; every gate is non-model and runs as host commands with outputs to
+run files - a deterministic gate is never itself delegated to a model worker.
+The only Stage-0 dispatch is the conflict-RESOLUTION worker below, and only in
+`review-and-refactor` mode.
 
 - **Head/base + conflict preflight.** Resolve the exact HEAD and base SHA, and
   the mainline ref from `origin/main` after fetching (else local `main`). Run a
   NON-MUTATING merge-tree check of the feature HEAD against that exact mainline
   SHA - never infer mergeability from ancestry, a clean tree, or a stale PR
-  status. Clean → record the mainline SHA and continue. Conflicts → resolution
+  status. Clean → record the mainline SHA and continue. In `review-only` mode
+  the check is REPORT-ONLY: record any conflict in the run artifacts and review
+  the feature head as-is - a run that promised to change nothing never mutates
+  a branch. In `review-and-refactor` mode, conflicts → resolution
   goes to a SINGLE dedicated worker with EXCLUSIVE ownership of an isolated
   worktree/branch, NO other worker running concurrently and the main session not
   resolving them itself; it merges the recorded mainline SHA into the feature
@@ -74,7 +82,10 @@ dispatch; every gate is non-model.
   hosts the conflict worker.
 - **Toolchain.** Dev-standards pin freshness AND a real `commit-slice`
   compatibility smoke (the fix CLI the run will call actually runs); canonical
-  worktree / deps / `.tools` attestation; `tsx` IPC mode for the engine.
+  worktree / deps / `.tools` attestation; `tsx` IPC mode for the engine;
+  deployment integrity of the review corpus - all nine files under
+  `agents/review-guide-templates/` present and nonblank, and every configured
+  overlay / `required_reads` entry readable (fail closed on a miss).
 - **Contract.** Required env/secret contract presence by NAME only, never values;
   findings schema + `file:line` grammar validation; baseline `./verify --fast`
   for a green pre-run baseline.
@@ -177,7 +188,8 @@ plan/human instead of edited:
   to and larger than the cost/benefit carve-out.
 - Cost/benefit: a behavior-preserving fix disproportionately large or invasive
   for a marginal benefit sets `needs_plan = true` with a one-line
-  effort-vs-benefit rationale. Never silently fix or drop it; a later approval
+  effort-vs-benefit rationale in the finding's `impact` field (rendered by
+  `report`; ADR-024). Never silently fix or drop it; a later approval
   re-enters it as a fresh `fixable-now` finding.
 
 Observable behavior changes, protected paths, redesigns, and disproportionately
@@ -193,15 +205,18 @@ fewer than the full roster, is itself the visible evidence of a collapsed
 discovery. The CLI lifecycle report is metadata-only and carries no matrix; the
 matrix ships in the merged review output in BOTH modes.
 
-**LIGHT-mode cap.** A cohort mostly test/hygiene with no fixable high-risk
-behavior caps at ≤3 thematic packets; the full fix topology needs explicit
-opt-in. In `review-only` mode, stop after this triage and present the findings
-plus the coverage matrix.
+**Hygiene-cohort cap.** In a fix-capable run, a cohort mostly test/hygiene with
+no fixable high-risk behavior caps at ≤3 thematic packets; the full fix
+topology needs explicit opt-in. (The LIGHT tier itself is review-only, C0 - it
+never reaches fix work.) In `review-only` mode, stop after this triage and
+present the findings plus the coverage matrix.
 
 ## C4 - Stage 3: serialized thematic implementation chunks
 
 Fix work runs inside a dedicated `deep-review/<slug>` worktree/branch, driven by
-the engine's CLI verbs in this order:
+the engine's CLI verbs in this order. If the base working tree holds
+uncommitted changes that cannot be safely represented in that worktree, stop
+with a blocker - never risk silently omitting or corrupting user work:
 
 `select-worktree → classify → commit-slice → self-review → verify → report → handoff`
 
@@ -215,9 +230,10 @@ carrying the running state (id, classification, status, sha) across the run.
   refuse outright rather than classify against the baseline floor alone. No-touch
   takes precedence over needs-plan and fixable-now.
 - Implementation is SERIALIZED into thematic chunks: a fresh worker owns 2-4
-  related findings on the SAME seam. Within a chunk the owner AUTHORS,
-  self-reviews, and calls `commit-slice` ONE finding at a time - the CLI stays
-  one-finding-per-call. Validate exact placement against
+  related findings on the SAME seam. Within a chunk the owner AUTHORS and
+  self-reviews, and each fix lands through `commit-slice` ONE finding at a
+  time - the CLI stays one-finding-per-call; each adapter binds which actor
+  EXECUTES the CLI call. Validate exact placement against
   `.claude/code-conventions.md` (never guess a destination); make the smallest
   behavior-preserving slice; run the author/preflight AND binding focused tests.
   Self-review each slice against its guides AND placement/conventions before
@@ -245,15 +261,26 @@ carrying the running state (id, classification, status, sha) across the run.
 - **Final review.** ONE fresh HETEROGENEOUS (cross-runtime-family) READ-ONLY
   reviewer over the actual diff from `initial_head_sha`. A SECOND reviewer ONLY
   on a P1/P2 behavior or security change, ≥3 trust boundaries touched, or
-  reviewer/owner disagreement. Each adapter names the cross-family reviewer.
-- **Repair.** ONE bounded repair pass. After repair, a TARGETED re-review of the
-  affected hunks ONLY - a complete-diff re-review claim is never made without one
-  (`verified-but-not-independently-re-reviewed` is the honest status otherwise).
-  Unresolved issues or a red verify become `needs-human`, never an unbounded
-  loop. Repair routes behavior changes, protected paths, redesigns, and
-  unresolved conflicts to `needs-human`.
-- **Verify.** EXACTLY ONE `verify --full` on the final HEAD (`--full` default;
-  `deep_review.verify_after_fix` overrides) across the applied slices only - the
+  reviewer/owner disagreement. Each adapter names the cross-family reviewer;
+  when no cross-family route exists, use ONE fresh same-family reviewer and
+  DISCLOSE that the review was not cross-family. The recorded final-review
+  verdict is a handoff precondition: a failed or unavailable reviewer is
+  retried once, then the run routes to `needs-human` - a produced fix diff
+  never ships unreviewed.
+- **Repair.** ONE bounded repair pass. Every repair issue is verified, gets its
+  own finding ID in the ledger (C7), passes `classify`, and lands through the
+  same C4 slice discipline - repair is never an out-of-ledger edit path. After
+  repair, a TARGETED re-review of the affected hunks ONLY - a complete-diff
+  re-review claim is never made without one
+  (`verified-but-not-independently-re-reviewed` is the honest status otherwise)
+  - then a FRESH whole-diff self-review on the final HEAD (the engine rejects a
+  stale self-review or verify SHA at handoff). Unresolved issues or a red
+  verify become `needs-human`, never an unbounded loop. Repair routes behavior
+  changes, protected paths, redesigns, and unresolved conflicts to
+  `needs-human`.
+- **Verify.** EXACTLY ONE final `verify` on the final HEAD, at the gate tier
+  (`--full` default; `deep_review.verify_after_fix` overrides, ADR-013),
+  across the applied slices only - the
   process's own changes, no base integration. Red means the whole refactor is
   `needs-human`; nothing proceeds to handoff. Its attestation may be reused
   pre-push while head, toolchain pin, deps lock, and env contract are unchanged.
@@ -297,7 +324,7 @@ run. A self-review violation, a fix-failed slice, or a cost/benefit escalation i
 recorded in its own ledger state - not laundered into a fresh finding - and only
 re-enters as a new `fixable-now` finding on explicit later approval.
 
-## C8 - Caps, effort ladder, telemetry, early stop, and the eval guard
+## C8 - Caps, effort ladder, telemetry, and the eval guard
 
 One pass per request, governed by the `deep_review` block in `quality.json`. The
 `seconds` ceiling is the enforced control; `tokens` is optional (`null` =
@@ -308,11 +335,16 @@ fan-out per request; a later fix-phase fan-out is a distinct round on the same
 run budget.
 
 - **Caps** (DEEP-tier ceiling): ≤9 workers total, discovery ≤3 risk routes plus
-  the combined structural route, final reviewers ≤2, repair passes 1, full
+  the combined structural route, final reviewers ≤2, repair passes 1, final
   verify 1, route retry 1.
 - **Budget fail-fast**: if the configured budget cannot cover the tier's minimal
   topology, fail BEFORE dispatch - never a partial fan-out with retries.
-- **Early stop**: two consecutive passes with no new P1/P2 end the broad review.
+- **Trigger-vs-cap conflict**: when the trigger table demands more routes than
+  the tier's cap can host, surface the conflict to the user - escalate the
+  tier, narrow the scope, or record an explicit `GAP`/stop, all by EXPLICIT
+  user choice. Never silently drop a triggered route, never silently escalate
+  the tier, and never resolve the conflict by merging the three risk routes
+  (C2 forbids it at every tier).
 - **Effort ladder**: top reasoning effort ONLY for security/correctness
   discovery, P1/P2 falsification, and final review; the structural/hygiene route
   and mechanical chunks run at medium; `ultra` stays user-gated, never
@@ -323,7 +355,7 @@ run budget.
   `required_reads` + the host preamble); keep the shared static prefix IDENTICAL
   across a stage's workers (provider prefix-cache friendly).
 - **First-run eval guard**: the first real run at this topology records worker
-  count, fork modes, prompt bytes, full-verify count, and wall time against the
+  count, fork modes, prompt bytes, final-verify count, and wall time against the
   2026-07-25 baseline (42 workers / 12h05m). Usage-% reduction is a FORECAST until
   the telemetry follow-up lands - never claimed as measured. The retrospective
   stage is opt-in.

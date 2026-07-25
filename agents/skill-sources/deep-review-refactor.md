@@ -8,7 +8,8 @@ description: Repo-local deep code/architecture review (review-only) and behavior
 Canonical Claude-runtime body (single source per ADR-003) for the repo-local
 `deep-review-refactor` skill. The runtime skill wrappers under `.agents/skills/`
 and `.claude/skills/` are thin static pointers at this file; do not duplicate it
-into them (ADR-010). The shared, runtime-agnostic process rules live in the core
+into them (ADR-010) - wrapper generation is retired and
+`tests/runner/skill-wrappers-static.test.ts` guards the drift. The shared, runtime-agnostic process rules live in the core
 body; this file adds ONLY the Claude-runtime mechanics on top of it.
 
 ## FIRST - read the shared core (fail closed)
@@ -105,7 +106,9 @@ Codex), report-only - and say so in the report.
    the snippet below. Set each worker's reasoning effort per the core-C8 ladder
    (top effort for security/correctness discovery and final review; medium for the
    structural/hygiene route and mechanical chunks; `ultra` only on explicit
-   per-run request). Every review route is read-only regardless of the fix answer.
+   per-run request) - the ladder deliberately supersedes the former fixed-xhigh
+   pin for dual-fleet Codex routes (ADR-026). Every review route is read-only
+   regardless of the fix answer.
    FIRST action, both modes: `TodoWrite` one item per mandated anchor read PLUS one
    per TRIGGERED route and one for the coverage-matrix merge, each done only after
    the Read / that route returns - materializing discovery as tracked todos is what
@@ -135,13 +138,15 @@ Codex), report-only - and say so in the report.
    (`opus`/`codex`/`both`) and verdict, INVALID last with reasons; assemble the
    required coverage matrix. When a route is dual-staffed, verify the Opus and
    Codex findings independently before merging so neither fleet anchors the other.
-6. Final review (core C5): ONE fresh read-only Codex reviewer over the diff from
-   `initial_head_sha` (the snippet above - cross-family, since the main runtime is
-   Claude); a SECOND reviewer only on the core-C5 trigger. Then branch on the mode:
-   report-only → stop after the merged report; fix consent → continue into
-   `review-and-refactor` on the merged set; a finding enters the fix phase ONLY with
-   a `VALID` verdict, and `classify` still decides fixable-now vs no-touch vs
-   needs-plan.
+6. Branch on the mode: report-only → stop after the merged report (the core-C5
+   final review governs a PRODUCED fix diff; a report-only pass has none). Fix
+   consent → continue into `review-and-refactor` on the merged set - a finding
+   enters the fix phase ONLY with a `VALID` verdict, and `classify` still
+   decides fixable-now vs no-touch vs needs-plan - then run the core-C5 final
+   review over the produced diff from `initial_head_sha`: ONE fresh read-only
+   Codex reviewer (the snippet above - cross-family, since the main runtime is
+   Claude; no Codex route → core C5's disclosed same-family fallback); a SECOND
+   reviewer only on the core-C5 trigger.
 
 ## Fix phase - main-side authoring and the serialized commit
 

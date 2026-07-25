@@ -16,7 +16,11 @@ import { fileURLToPath } from 'node:url';
       enumerate all nine corpus files and keep every currently pinned contract
       phrase, and each adapter must fail closed on the core read.
    A corpus file added without catalog provenance, a catalog entry pointing at
-   a missing file, or a renamed/dropped corpus file all fail here. */
+   a missing file, or a renamed/dropped corpus file all fail here.
+   Pin OWNERSHIP mirrors rule ownership (ADR-026): corpus enumeration is
+   asserted on each composition, shared contract rules on the core alone, and
+   runtime mechanics on each raw adapter — so neither an emptied adapter nor a
+   mis-homed shared rule can pass on the other file's text. */
 
 const templatesDir = fileURLToPath(new URL('../../agents/review-guide-templates/', import.meta.url));
 const catalogPath = fileURLToPath(new URL('../../agents/skill-catalog.json', import.meta.url));
@@ -58,8 +62,9 @@ function templateNames(): string[] {
     .sort();
 }
 
-/* Each runtime EXECUTES the shared core plus its own adapter, so every pinned
-   contract phrase is asserted against that composition, never a single file. */
+/* Each runtime EXECUTES the shared core plus its own adapter; the composition
+   is what corpus enumeration is asserted against (contract pins assert on the
+   owning file instead — see the header). */
 function composedBody(adapterSource: string): string {
   const adapterPath = fileURLToPath(new URL(`../../agents/skill-sources/${adapterSource}`, import.meta.url));
   return `${readFileSync(corePath, 'utf8')}\n${readFileSync(adapterPath, 'utf8')}`;
@@ -81,7 +86,7 @@ test('the skill corpus list equals the template dir exactly (no orphan in either
   );
 });
 
-test('the shared core exists nonblank and each adapter fail-closes on its read', () => {
+test('the shared core exists nonblank and each adapter fail-closes on its read FIRST', () => {
   const core = readFileSync(corePath, 'utf8');
   assert.ok(core.trim().length > 0, `${CORE_SOURCE} must exist and be nonblank`);
   for (const adapter of RUNTIME_ADAPTERS) {
@@ -90,6 +95,15 @@ test('the shared core exists nonblank and each adapter fail-closes on its read',
     assert.ok(raw.includes(CORE_POINTER), `${adapter} must name the core path ${CORE_POINTER}`);
     /* A stable fail-closed phrase so a rewrite that drops the guard is caught. */
     assert.match(raw, /fail closed/i, `${adapter} must fail closed if the core is unreadable`);
+    /* ORDER is part of the contract: the core read is the adapter's first
+       executable instruction, so the first section heading must be the
+       core-read section — a rewrite that moves setup/dispatch above it fails. */
+    const firstSectionHeading = raw.split('\n').find((line) => line.startsWith('## '));
+    assert.match(
+      firstSectionHeading ?? '',
+      /read the shared core/i,
+      `${adapter} first section must be the fail-closed core read, found: ${firstSectionHeading}`,
+    );
   }
 });
 
@@ -101,12 +115,15 @@ test('each runtime composition (core + adapter) enumerates every corpus file by 
   }
 });
 
-/* The resource-redesign contract (ADR-026), pinned on BOTH compositions because
-   every phrase is a core rule read by each runtime. Each pins a known
-   silent-regression boundary: tier collapse, discovery-route merge, lost
-   fork-freshness, a full-pipeline commit-slice, homogeneous final review,
-   partial fan-out, or infra masquerading as a fix failure. */
-const SHARED_CONTRACT_PINS = [
+/* The resource-redesign contract (ADR-026). Rule OWNERSHIP is part of the
+   contract — every shared rule lives in the CORE (a rule surviving only via an
+   adapter mention is a mis-homed rule) — so these pins assert on the core file
+   ALONE, not the composition. Each pins a known silent-regression boundary:
+   tier collapse, discovery-route merge, lost fork-freshness, a full-pipeline
+   commit-slice, homogeneous final review without disclosure, partial fan-out,
+   a silently dropped per-route COVERAGE/legacy-broadcast rule, or infra
+   masquerading as a fix failure. */
+const CORE_CONTRACT_PINS = [
   'NOT_TRIGGERED',
   'LIGHT',
   'STANDARD',
@@ -114,43 +131,51 @@ const SHARED_CONTRACT_PINS = [
   'fork:none',
   'one-finding-per-call',
   'cross-runtime-family',
+  'not cross-family',
   'Budget fail-fast',
   'infra-blocked',
   'stay differentiated',
+  'COVERAGE',
+  'broadcast into every TRIGGERED route',
+  'non-mutating merge-tree check against the same mainline SHA',
 ];
 
-test('each runtime composition pins the shared resource-redesign contract', () => {
-  for (const adapter of RUNTIME_ADAPTERS) {
-    const normalizedBody = composedBody(adapter).replace(/\s+/g, ' ');
-    const missing = SHARED_CONTRACT_PINS.filter((phrase) => !normalizedBody.includes(phrase));
-    assert.deepEqual(missing, [], `${adapter} composition missing contract phrases: ${missing.join(' | ')}`);
-    /* The four matrix states must all be named so a dropped-state rewrite is
-       caught; NOT_TRIGGERED is the new adaptive-discovery state. */
-    for (const matrixState of ['APPLIED', 'SKIPPED', 'GAP', 'NOT_TRIGGERED']) {
-      assert.ok(normalizedBody.includes(matrixState), `${adapter} coverage-matrix state ${matrixState} missing`);
-    }
+test('the core alone pins the shared resource-redesign contract (rule ownership)', () => {
+  /* Collapse whitespace so prose line-wrapping never splits a phrase mid-match. */
+  const normalizedCore = readFileSync(corePath, 'utf8').replace(/\s+/g, ' ');
+  const missing = CORE_CONTRACT_PINS.filter((phrase) => !normalizedCore.includes(phrase));
+  assert.deepEqual(missing, [], `core missing contract phrases: ${missing.join(' | ')}`);
+  /* The four matrix states must all be named so a dropped-state rewrite is
+     caught; NOT_TRIGGERED is the new adaptive-discovery state. */
+  for (const matrixState of ['APPLIED', 'SKIPPED', 'GAP', 'NOT_TRIGGERED']) {
+    assert.ok(normalizedCore.includes(matrixState), `core coverage-matrix state ${matrixState} missing`);
   }
 });
 
-test('the Claude composition keeps its worker-route floor and transcript-gate markers', () => {
-  const normalizedBody = composedBody('deep-review-refactor.md').replace(/\s+/g, ' ');
-  const requiredPhrases = ['worker-route floor', 'DEEP_REVIEW_GUARD_OFF', 'TRIGGERED route'];
-  const missing = requiredPhrases.filter((phrase) => !normalizedBody.includes(phrase));
-  assert.deepEqual(missing, [], `Claude markers missing: ${missing.join(' | ')}`);
-});
-
-test('the Codex composition pins Codex-only staffing and the conflict-preflight exclusive worker', () => {
-  /* Collapse whitespace so prose line-wrapping never splits a phrase mid-match. */
-  const normalizedBody = composedBody('deep-review-refactor-codex.md').replace(/\s+/g, ' ');
-  const requiredPhrases = [
+/* Adapter mechanics are pinned on the RAW adapter file (not the composition) so
+   an emptied adapter cannot pass on core mentions alone. */
+const ADAPTER_CONTRACT_PINS: Record<string, string[]> = {
+  'deep-review-refactor.md': [
+    'worker-route floor',
+    'DEEP_REVIEW_GUARD_OFF',
+    'TRIGGERED route',
+    'SINGLE-ECOSYSTEM',
+  ],
+  'deep-review-refactor-codex.md': [
     'Use Codex workers exclusively',
     'Default to `review-and-refactor`',
     'Keep the main session as a thin orchestrator',
-    /* The conflict preflight now lives in core; the adapter binds the exclusive
-       conflict worker to Codex and the core carries the same-SHA re-check. */
+    /* The conflict preflight lives in core; the adapter binds the exclusive
+       conflict worker to Codex. */
     'dispatch exactly one fresh, separate Codex worker dedicated only to conflict resolution',
-    'non-mutating merge-tree check against the same mainline SHA',
-  ];
-  const missing = requiredPhrases.filter((phrase) => !normalizedBody.includes(phrase));
-  assert.deepEqual(missing, [], `Codex contract phrases missing: ${missing.join(' | ')}`);
+  ],
+};
+
+test('each raw adapter pins its own runtime mechanics', () => {
+  for (const adapter of RUNTIME_ADAPTERS) {
+    const adapterPath = fileURLToPath(new URL(`../../agents/skill-sources/${adapter}`, import.meta.url));
+    const normalizedAdapter = readFileSync(adapterPath, 'utf8').replace(/\s+/g, ' ');
+    const missing = ADAPTER_CONTRACT_PINS[adapter].filter((phrase) => !normalizedAdapter.includes(phrase));
+    assert.deepEqual(missing, [], `${adapter} missing runtime-mechanic phrases: ${missing.join(' | ')}`);
+  }
 });

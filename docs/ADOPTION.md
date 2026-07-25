@@ -44,7 +44,7 @@ scripts/ds-install.sh /path/to/consumer [--ref vX.Y.Z] [--eslint]
 | `.claude/two-stage-dev.marker` | ADR-019 two-stage marker (copy-if-absent; needs no filling): write-time guide injectors (editor pre-tool hooks, delegate-launcher preambles) stay silent in repos carrying it — guides bind at Stage-2 review. Standard instance doc: `--check` requires it and bootstrap re-seeds it; two-stage is the package default (ADR-019). NOTE for pre-marker consumers: the first pin bump seeds it via bootstrap — commit it together with that pin (a gitlink-only pin commit leaves it untracked). |
 | `.claude/review-guides/` | Optional additive overlays (empty by default). |
 | `.claude/skills/deep-review-refactor/SKILL.md` | Original Claude skill, pointing to its package-owned canonical body. |
-| `.agents/skills/deep-review-refactor-codex/SKILL.md` | Distinct Codex-only six-stage skill, pointing to its package-owned canonical body. |
+| `.agents/skills/deep-review-refactor-codex/SKILL.md` | Distinct Codex-runtime skill (tiered, adaptive; ADR-026), pointing to its package-owned canonical body. |
 | `.agents/skills/deep-review-refactor-codex/agents/openai.yaml` | Codex UI metadata and default review-and-fix prompt. |
 | `.claude/settings.json` | Guides-read gate wiring (ADR-016): the `Stop` + `SubagentStop` hooks. Structurally MERGED, not copy-if-absent — a consumer's existing settings survive. |
 | `AGENTS.md` | Pointer to `CLAUDE.md` for agents that read only AGENTS.md (never a second source of truth). |
@@ -78,9 +78,11 @@ project-specific gates start empty, so `./scripts/verify` passes immediately.
    Stage-2 offer after a feature is a READY PROMPT for a fresh session
    (`deep-review-refactor` for the original Claude workflow, or
    `deep-review-refactor-codex` for the tiered, adaptive Codex-run workflow with
-   one cross-family final reviewer + scope = diff vs base + branch/worktree). The Codex skill enables safe fixes by
-   default after consent — never run either workflow as a
-   review run inside the build session, whose context is already spent. A
+   one cross-family final reviewer + scope = diff vs base + branch/worktree).
+   Accepting the automatic offer runs a LIGHT review-only report; default
+   fixing is reserved for a direct STANDARD invocation (ADR-026) — never run
+   either workflow as a review run inside the build session, whose context is
+   already spent. A
    declined/postponed offer ends without a repository-documentation entry for
    the unperformed Stage 2.
 
@@ -209,7 +211,7 @@ mandated ANCHOR guide was actually opened with a `Read`. Since the 2026-07-16
 rescope (ADR-016 Amendment) the main-session anchor set is: the corpus contract
 `review-contract.md`, its `.claude/review-guides/` overlay if present, and every
 `deep_review.required_reads` entry — the eight `profile-*` lens bodies are read by
-the mandatory fan-out's profile routes, not gated on the main transcript (though
+the TRIGGERED profile routes (ADR-026), not gated on the main transcript (though
 the AVAILABILITY of every listed overlay stays fail-closed, and the full nine-file
 corpus still loads as a deployment check). The starter sets `required_reads` to the
 three seeded instance docs. `seed-consumer.sh --check` fails if the hooks are not wired.
