@@ -15,7 +15,7 @@ This file is the package-owned canonical body for the Codex runtime and its cons
 - Enter `review-only` only when the user explicitly asks for a report without edits.
 - Treat a direct `$deep-review-refactor-codex` invocation as consent for the default review-and-fix workflow. If the skill is offered automatically after feature work, state that acceptance includes automatic safe fixes; the offer itself is not consent.
 - Offer once per completed feature, scoped to its branch diff plus new untracked feature files. Do not re-ask after a decline or postponement.
-- On decline or postponement, record `stage-2 pending` in an existing repository status document; if none exists, state it in the handoff instead of creating a new status system.
+- On decline or postponement, stop after the one-time offer. Do not create or update repository documentation solely to record that Stage 2 was not run.
 - Except for the mandatory conflict-resolution preflight below, never merge, rebase, push, open a PR, or land changes to the base branch as part of this workflow.
 
 ## Use only Codex workers

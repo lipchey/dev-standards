@@ -648,20 +648,18 @@ Feature development in an adopting repo is explicitly two-stage:
    work.** The profile fan-out applies the full standards corpus with per-lens
    attention; architecture/quality intent is given to the AI here, where recall
    is engineered. Consent (ADR-012/016 posture) governs WHEN it runs, never
-   WHETHER: a skipped or postponed Stage 2 leaves the feature explicitly marked
-   `stage-2 pending` — a tracked debt entry in the repo's status doc — never
-   silently "done".
+   WHETHER.
 
 The checklist template frames its sections as Stage-1 (blocks commit — gates)
 vs Stage-2 (review-owned — profiles). Consumer pre-read guidance is updated at
 adoption, not retroactively by this ADR.
 
-**Enforcement (v1, honest).** The `stage-2 pending` record is a skill-driven
-CONVENTION, not a machine gate: the deep-review offer step writes the debt
-entry on decline; no receipt schema, merge check, or hook enforces it (a
-machine-readable Stage-2 receipt is deferred — same deferral register as the
-worker-scoped read set, ADR-018). The calibration session reviews pending
-entries, which is where an unrecorded decline surfaces.
+**Amendment (2026-07-25, owner decision).** The documentation convention for an
+unperformed Stage 2 is retired. A declined or postponed offer ends after the
+one-time offer and does not create a `stage-2 pending` entry, handoff note, or
+other repository-documentation record solely because the review did not run.
+This changes recording only; consent and the one-time-offer behavior are
+unchanged. There is no Stage-2 receipt or merge gate.
 
 **Addendum (2026-07-16, pilot adoption).** The seeder now drops
 `.claude/two-stage-dev.marker` (copy-if-absent, verified by `--check` with the
@@ -682,9 +680,8 @@ tracked in BACKLOG).
 - Writing sessions carry less rule prose; standards enforcement concentrates in
   the two layers that demonstrably hold: deterministic gates and the
   high-recall Stage-2 review.
-- A declined Stage 2 lowers the bar VISIBLY when the convention is followed —
-  the debt entry survives session boundaries; making that impossible to skip
-  (receipt + gate) is the deferred hardening above.
+- A declined Stage 2 does not add repository-documentation debt or a receipt;
+  the one-time offer is the complete handling for that session.
 
 ## ADR-020 — Codex joins the review as a per-profile fan-out staffing mode, replacing the standalone full-corpus cross-run
 

@@ -80,9 +80,9 @@ project-specific gates start empty, so `./scripts/verify` passes immediately.
    `deep-review-refactor-codex` for the Codex-only six-stage workflow + scope =
    diff vs base + branch/worktree). The Codex skill enables safe fixes by
    default after consent — never run either workflow as a
-   review run inside the build session, whose context is already spent; a
-   declined/postponed Stage 2 leaves a `stage-2 pending: <feature>` debt entry
-   in the repo's status doc.
+   review run inside the build session, whose context is already spent. A
+   declined/postponed offer ends without a repository-documentation entry for
+   the unperformed Stage 2.
 
 ### Optional gate: test-to-source placement (report-only)
 
