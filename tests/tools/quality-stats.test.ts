@@ -441,6 +441,9 @@ test('CLI: a missing telemetry file prints a friendly message and exits 0', () =
 });
 
 test('CLI: a real fixture prints every documented section, both candidate lists, and the counters', () => {
+  // Live clock is deliberate: events stay a fixed N days old, so they never age out of the
+  // subprocess CLI's 7/30-day flip/prune windows. The CLI reads its own clock (t+init), but with
+  // days of margin the read-skew is harmless — not a t@t+init flake to harden (verified 2026-07-25).
   const now = Date.now();
   const at = (deltaDays: number): string => new Date(now - deltaDays * DAY).toISOString();
   const fixture = [

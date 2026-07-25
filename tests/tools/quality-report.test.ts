@@ -280,6 +280,9 @@ function runCli(args: string[]): { status: number | null; stdout: string; stderr
 }
 
 function withFixture(fn: (file: string, dir: string) => void): void {
+  // Live clock is deliberate: events stay a fixed N days old, so they never age out of the
+  // subprocess CLI's 90-day window. The CLI reads its own clock (t+init), but with days of
+  // margin the read-skew is harmless — not a t@t+init flake to harden (verified 2026-07-25).
   const now = Date.now();
   const at = (d: number): string => new Date(now - d * DAY).toISOString();
   const fixture = jsonl([
