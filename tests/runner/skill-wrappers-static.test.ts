@@ -1,7 +1,8 @@
 /*
  * Static contract for the committed skill wrappers. Replaces the retired
  * generate-skill-wrappers drift check (Phase 2): the single surviving skill
- * (deep-review-refactor) ships hand-written per-runtime wrappers, so this
+ * (deep-review-refactor for Claude and deep-review-refactor-codex for Codex)
+ * ships hand-written per-runtime wrappers, so this
  * guards the invariants the generator used to enforce — name/description match
  * the canonical body, the pointer is actionable and equals canonical_source,
  * the body is not duplicated, and no orphan wrapper appears. Adversarial
@@ -17,15 +18,42 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const SKILL = 'deep-review-refactor';
-const CANONICAL_SOURCE = path.posix.join('agents', 'skill-sources', `${SKILL}.md`);
+const CLAUDE_SKILL = 'deep-review-refactor';
+const CODEX_SKILL = 'deep-review-refactor-codex';
+const CLAUDE_CANONICAL_SOURCE = path.posix.join('agents', 'skill-sources', `${CLAUDE_SKILL}.md`);
+const CODEX_CANONICAL_SOURCE = path.posix.join('agents', 'skill-sources', `${CODEX_SKILL}.md`);
+const CONSUMER_CLAUDE_CANONICAL_SOURCE = path.posix.join('vendor', 'dev-standards', CLAUDE_CANONICAL_SOURCE);
+const CONSUMER_CODEX_PACKAGE_SOURCE = path.posix.join('vendor', 'dev-standards', CODEX_CANONICAL_SOURCE);
+const CONSUMER_CODEX_CANONICAL_SOURCE = path.posix.join('..', '..', '..', CONSUMER_CODEX_PACKAGE_SOURCE);
+const CONSUMER_CODEX_WRAPPER = path.posix.join(
+  'templates',
+  'consumer',
+  'agents-skills',
+  CODEX_SKILL,
+  'SKILL.md',
+);
+const CONSUMER_CLAUDE_WRAPPER = path.posix.join(
+  'templates',
+  'consumer',
+  'claude-skills',
+  CLAUDE_SKILL,
+  'SKILL.md',
+);
+const CONSUMER_CODEX_UI = path.posix.join(
+  'templates',
+  'consumer',
+  'agents-skills',
+  CODEX_SKILL,
+  'agents',
+  'openai.yaml',
+);
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 
 /* Runtime dir → the runtime id its wrapper must declare (explicit tuple, not a
  * membership check, so a wrapper can't silently claim the wrong runtime). */
-const RUNTIMES: ReadonlyArray<readonly [string, string]> = [
-  ['.agents/skills', 'codex'],
-  ['.claude/skills', 'claude'],
+const RUNTIMES: ReadonlyArray<readonly [string, string, string, string, string]> = [
+  ['.agents/skills', CODEX_SKILL, 'codex', CODEX_CANONICAL_SOURCE, path.posix.join('..', '..', '..', CODEX_CANONICAL_SOURCE)],
+  ['.claude/skills', CLAUDE_SKILL, 'claude', CLAUDE_CANONICAL_SOURCE, CLAUDE_CANONICAL_SOURCE],
 ];
 
 /* Read as text, normalized to LF so a CRLF checkout doesn't fail the contract. */
@@ -63,24 +91,32 @@ function assertNoSymlinkedComponent(absPath: string, repoRoot: string): void {
   }
 }
 
-const canonical = parseFrontmatter(readLF(path.join(repoRoot, CANONICAL_SOURCE)));
+const claudeCanonical = parseFrontmatter(readLF(path.join(repoRoot, CLAUDE_CANONICAL_SOURCE)));
+const codexCanonical = parseFrontmatter(readLF(path.join(repoRoot, CODEX_CANONICAL_SOURCE)));
 
-test('canonical body declares the expected skill name', () => {
-  assert.equal(canonical.name, SKILL);
-  assert.ok(canonical.description && canonical.description.length > 0);
+test('runtime-specific canonical bodies declare distinct expected skill names', () => {
+  assert.equal(claudeCanonical.name, CLAUDE_SKILL);
+  assert.equal(codexCanonical.name, CODEX_SKILL);
+  assert.ok(claudeCanonical.description && claudeCanonical.description.length > 0);
+  assert.ok(codexCanonical.description && codexCanonical.description.length > 0);
 });
 
-for (const [dir, expectedRuntime] of RUNTIMES) {
-  test(`static wrapper ${dir}/${SKILL} matches the canonical body`, () => {
-    const raw = readLF(path.join(repoRoot, dir, SKILL, 'SKILL.md'));
+for (const [dir, skill, expectedRuntime, canonicalSource, pointerSource] of RUNTIMES) {
+  test(`static wrapper ${dir}/${skill} matches its runtime-specific canonical body`, () => {
+    const raw = readLF(path.join(repoRoot, dir, skill, 'SKILL.md'));
     const fm = parseFrontmatter(raw);
+    const canonical = parseFrontmatter(readLF(path.join(repoRoot, canonicalSource)));
 
-    assert.equal(fm.name, SKILL, 'name must equal the canonical name');
+    assert.equal(fm.name, skill, 'name must equal the runtime-specific canonical name');
     assert.match(fm.name, NAME_PATTERN, 'name must be kebab-case');
     assert.equal(fm.description, canonical.description, 'description drifted from the canonical body');
     assert.equal(fm.runtime, expectedRuntime, `${dir} must declare runtime ${expectedRuntime}`);
-    assert.equal(fm.canonical_source, CANONICAL_SOURCE, 'canonical_source must point at the body');
-    assert.ok(existsSync(path.join(repoRoot, fm.canonical_source)), 'canonical_source must resolve to a file');
+    assert.equal(fm.canonical_source, pointerSource, 'canonical_source must carry the runtime-correct pointer');
+    const resolvedCanonical = expectedRuntime === 'codex'
+      ? path.resolve(repoRoot, dir, skill, fm.canonical_source)
+      : path.resolve(repoRoot, fm.canonical_source);
+    assert.equal(resolvedCanonical, path.join(repoRoot, canonicalSource));
+    assert.ok(existsSync(resolvedCanonical), 'canonical_source must resolve to a file');
 
     /* Actionable pointer: exactly one ```text fence, and the positive read
      * instruction must be immediately followed by it (a negated or detached
@@ -88,7 +124,7 @@ for (const [dir, expectedRuntime] of RUNTIMES) {
     const fenceCount = (raw.match(/```text\n/g) ?? []).length;
     assert.equal(fenceCount, 1, 'wrapper must contain exactly one pointer fence');
     const block = raw.match(
-      new RegExp('(?:^|\\n)Read and follow the canonical `' + SKILL + '` skill body:\\n\\n```text\\n([^\\n]*)\\n```'),
+      new RegExp('(?:^|\\n)Read and follow the canonical `' + skill + '` skill body:\\n\\n```text\\n([^\\n]*)\\n```'),
     );
     const pointer = block?.[1];
     assert.ok(pointer !== undefined, 'the read instruction must be immediately followed by the pointer fence');
@@ -106,24 +142,87 @@ for (const [dir, expectedRuntime] of RUNTIMES) {
 }
 
 test('no orphan wrappers: each runtime dir holds exactly the one expected wrapper', () => {
-  for (const [dir] of RUNTIMES) {
+  for (const [dir, skill] of RUNTIMES) {
     const abs = path.join(repoRoot, dir);
     /* Count symlinked dirs too — a symlinked orphan must not escape the guard. */
     const withSkill = readdirSync(abs, { withFileTypes: true })
       .filter((e) => (e.isDirectory() || e.isSymbolicLink()) && existsSync(path.join(abs, e.name, 'SKILL.md')))
       .map((e) => e.name)
       .sort();
-    assert.deepEqual(withSkill, [SKILL], `${dir} must contain only the ${SKILL} wrapper`);
+    assert.deepEqual(withSkill, [skill], `${dir} must contain only the ${skill} wrapper`);
     assert.ok(
-      lstatSync(path.join(abs, SKILL, 'SKILL.md')).isFile(),
-      `${dir}/${SKILL}/SKILL.md must be a regular file, not a symlink`,
+      lstatSync(path.join(abs, skill, 'SKILL.md')).isFile(),
+      `${dir}/${skill}/SKILL.md must be a regular file, not a symlink`,
     );
   }
 });
 
+test('consumer Codex wrapper is a discoverable thin pointer to the installed submodule', () => {
+  const raw = readLF(path.join(repoRoot, CONSUMER_CODEX_WRAPPER));
+  const fm = parseFrontmatter(raw);
+
+  assert.deepEqual(
+    Object.keys(fm).sort(),
+    ['description', 'name'],
+    'Codex consumer frontmatter must contain only the supported discovery fields',
+  );
+  assert.equal(fm.name, CODEX_SKILL);
+  assert.equal(fm.description, codexCanonical.description);
+
+  const fenceCount = (raw.match(/```text\n/g) ?? []).length;
+  assert.equal(fenceCount, 1, 'consumer Codex wrapper must contain exactly one pointer fence');
+  const block = raw.match(
+    new RegExp('(?:^|\\n)Read and follow the canonical `' + CODEX_SKILL + '` skill body:\\n\\n```text\\n([^\\n]*)\\n```'),
+  );
+  assert.equal(block?.[1]?.trim(), CONSUMER_CODEX_CANONICAL_SOURCE);
+  const installedWrapperDir = path.join(path.sep, 'consumer', '.agents', 'skills', CODEX_SKILL);
+  assert.equal(
+    path.normalize(path.join(installedWrapperDir, CONSUMER_CODEX_CANONICAL_SOURCE)),
+    path.join(path.sep, 'consumer', CONSUMER_CODEX_PACKAGE_SOURCE),
+    'consumer Codex pointer must resolve from the installed SKILL.md directory',
+  );
+  assert.ok(existsSync(path.join(repoRoot, CODEX_CANONICAL_SOURCE)), 'consumer pointer target must ship in the package');
+  assert.ok(Buffer.byteLength(raw) < 1500, 'consumer Codex wrapper must stay thin (<1500 bytes)');
+  assert.deepEqual(raw.match(/^## .*/gm) ?? [], ['## Canonical body']);
+  assert.match(raw, /```text\n[^\n]+\n```\n$/u, 'consumer Codex pointer must be the final body block');
+});
+
+test('consumer Claude wrapper matches the shared canonical body', () => {
+  const raw = readLF(path.join(repoRoot, CONSUMER_CLAUDE_WRAPPER));
+  const fm = parseFrontmatter(raw);
+
+  assert.equal(fm.name, CLAUDE_SKILL);
+  assert.equal(fm.description, claudeCanonical.description);
+  assert.equal(fm.runtime, 'claude');
+  assert.equal(fm.canonical_source, CONSUMER_CLAUDE_CANONICAL_SOURCE);
+  const block = raw.match(
+    new RegExp('(?:^|\\n)Read and follow the canonical `' + CLAUDE_SKILL + '` skill body:\\n\\n```text\\n([^\\n]*)\\n```'),
+  );
+  assert.equal(block?.[1]?.trim(), CONSUMER_CLAUDE_CANONICAL_SOURCE);
+  assert.ok(Buffer.byteLength(raw) < 1500, 'consumer Claude wrapper must stay thin (<1500 bytes)');
+});
+
+test('consumer Codex UI metadata invokes the skill and keeps implicit discovery enabled', () => {
+  const raw = readLF(path.join(repoRoot, CONSUMER_CODEX_UI));
+  assert.equal(
+    raw,
+    [
+      'interface:',
+      '  display_name: "Deep Review & Refactor — Codex"',
+      '  short_description: "Worker-led deep review with safe fixes"',
+      '  default_prompt: "Use $deep-review-refactor-codex to review the current branch diff and automatically fix every confirmed safe, behavior-preserving finding."',
+      '',
+      'policy:',
+      '  allow_implicit_invocation: true',
+      '',
+    ].join('\n'),
+    'consumer Codex metadata must stay a complete, package-owned discovery definition',
+  );
+});
+
 test('wrapper path has no symlinked component', () => {
-  for (const [dir] of RUNTIMES) {
-    assertNoSymlinkedComponent(path.join(repoRoot, dir, SKILL, 'SKILL.md'), repoRoot);
+  for (const [dir, skill] of RUNTIMES) {
+    assertNoSymlinkedComponent(path.join(repoRoot, dir, skill, 'SKILL.md'), repoRoot);
   }
 });
 

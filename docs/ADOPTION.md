@@ -43,7 +43,9 @@ scripts/ds-install.sh /path/to/consumer [--ref vX.Y.Z] [--eslint]
 | `.claude/{CHECKLIST,code-conventions,gate-misses,project-facts}.md` | Instance docs (copy-if-absent; fill them in). |
 | `.claude/two-stage-dev.marker` | ADR-019 two-stage marker (copy-if-absent; needs no filling): write-time guide injectors (editor pre-tool hooks, delegate-launcher preambles) stay silent in repos carrying it — guides bind at Stage-2 review. Standard instance doc: `--check` requires it and bootstrap re-seeds it; two-stage is the package default (ADR-019). NOTE for pre-marker consumers: the first pin bump seeds it via bootstrap — commit it together with that pin (a gitlink-only pin commit leaves it untracked). |
 | `.claude/review-guides/` | Optional additive overlays (empty by default). |
-| `.claude/skills/deep-review-refactor/SKILL.md` | Static pointer to the canonical skill body. |
+| `.claude/skills/deep-review-refactor/SKILL.md` | Original Claude skill, pointing to its package-owned canonical body. |
+| `.agents/skills/deep-review-refactor-codex/SKILL.md` | Distinct Codex-only six-stage skill, pointing to its package-owned canonical body. |
+| `.agents/skills/deep-review-refactor-codex/agents/openai.yaml` | Codex UI metadata and default review-and-fix prompt. |
 | `.claude/settings.json` | Guides-read gate wiring (ADR-016): the `Stop` + `SubagentStop` hooks. Structurally MERGED, not copy-if-absent — a consumer's existing settings survive. |
 | `AGENTS.md` | Pointer to `CLAUDE.md` for agents that read only AGENTS.md (never a second source of truth). |
 
@@ -74,7 +76,10 @@ project-specific gates start empty, so `./scripts/verify` passes immediately.
    compact Stage-1 core (placement map, no-touch zones, secrets, security
    boundaries, lazy-read triggers) instead of mandated pre-code reads; the
    Stage-2 offer after a feature is a READY PROMPT for a fresh session
-   (`deep-review-refactor` + scope = diff vs base + branch/worktree) — never a
+   (`deep-review-refactor` for the original Claude workflow, or
+   `deep-review-refactor-codex` for the Codex-only six-stage workflow + scope =
+   diff vs base + branch/worktree). The Codex skill enables safe fixes by
+   default after consent — never run either workflow as a
    review run inside the build session, whose context is already spent; a
    declined/postponed Stage 2 leaves a `stage-2 pending: <feature>` debt entry
    in the repo's status doc.
@@ -187,9 +192,13 @@ structural checks).
 
 ## Deep review is opt-in
 
-`deep-review-refactor` reviews a completed feature branch's diff (not the whole
-repo). The agent OFFERS it when feature work finishes and runs it **only with
-explicit user consent** — never automatically.
+Both deep-review skills review a completed feature branch's diff (not the whole
+repo) and run **only with explicit user consent**. The original Claude workflow
+remains `$deep-review-refactor` with its existing behavior. The explicitly named
+Codex workflow is `$deep-review-refactor-codex`; an accepted Codex run defaults
+to the six-stage `review-and-refactor` pipeline and fixes confirmed
+behavior-preserving findings, while `review-only` is an explicit opt-out from
+edits.
 
 ### Guides-read enforcement (ADR-016)
 
@@ -222,11 +231,16 @@ three seeded instance docs. `seed-consumer.sh --check` fails if the hooks are no
   `SubagentStop` entries whose command contains `guides-read --hook-stdin` from
   `.claude/settings.json`. Re-running the seeder re-adds them.
 
-**Migrating consumers seeded before this gate:** a pin bump touches only the
-gitlink, so it does not back-fill `.claude/settings.json` or `required_reads`. Run
-`scripts/seed-consumer.sh <root>` once (or
-`node vendor/dev-standards/scripts/merge-deep-review-hooks.mjs <root>`) to wire the
-hooks, and add `deep_review.required_reads` to `quality.json` by hand.
+**Migrating consumers seeded before this gate or before the Codex wrapper:** a
+pin bump touches only the gitlink, so it does not back-fill
+`.claude/settings.json`, `.agents/skills/deep-review-refactor-codex/`, or
+`required_reads`. If the Codex wrapper is absent, run
+`vendor/dev-standards/scripts/seed-consumer.sh <root>` once; this installs the
+package-owned thin wrapper and UI metadata and also wires the hooks. For a
+hook-only migration where the wrapper is already present, the narrower
+`node vendor/dev-standards/scripts/merge-deep-review-hooks.mjs <root>` helper is
+an alternative. Add `deep_review.required_reads` to `quality.json` by hand when
+the consumer predates that manifest field.
 
 ## Updating the pin
 
@@ -274,3 +288,7 @@ never worked around in consumer code. Shared rules/guides are proposed via
 - The **nine corpus files** (`review-contract.md` + eight `profile-*.md`) are read
   in place from the package; the consumer owns only additive overlays, and
   `.claude/review-guides/` may be empty.
+- Claude and Codex consumer skill files are thin pointers to distinct
+  package-owned bodies: the original `deep-review-refactor` for Claude and the
+  six-stage `deep-review-refactor-codex` for Codex. `seed-consumer.sh` installs
+  both, so either runtime exposes its workflow without a per-project skill fork.

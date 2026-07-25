@@ -1,0 +1,7 @@
+interface:
+  display_name: "Deep Review & Refactor — Codex"
+  short_description: "Worker-led deep review with safe fixes"
+  default_prompt: "Use $deep-review-refactor-codex to review the current branch diff and automatically fix every confirmed safe, behavior-preserving finding."
+
+policy:
+  allow_implicit_invocation: true

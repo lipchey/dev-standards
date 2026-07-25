@@ -83,6 +83,40 @@ if [ "$check_mode" = true ]; then
   [ -f "$consumer_root_abs/quality.json" ] || { echo "check: missing quality.json" >&2; ok=false; }
   [ -f "$consumer_root_abs/.github/dependabot.yml" ] || { echo "check: missing .github/dependabot.yml" >&2; ok=false; }
 
+  claude_canonical_skill='vendor/dev-standards/agents/skill-sources/deep-review-refactor.md'
+  codex_canonical_skill='vendor/dev-standards/agents/skill-sources/deep-review-refactor-codex.md'
+  codex_wrapper='.agents/skills/deep-review-refactor-codex/SKILL.md'
+  codex_pointer="../../../$codex_canonical_skill"
+  codex_template="$package_root/templates/consumer/agents-skills/deep-review-refactor-codex/SKILL.md"
+  if [ ! -f "$consumer_root_abs/$codex_wrapper" ]; then
+    echo "check: missing skill wrapper: $codex_wrapper" >&2; ok=false
+  elif ! cmp -s "$codex_template" "$consumer_root_abs/$codex_wrapper"; then
+    echo "check: Codex skill wrapper drifted from the package-owned thin pointer: $codex_wrapper" >&2; ok=false
+  elif ! grep -qF -- "$codex_pointer" "$consumer_root_abs/$codex_wrapper"; then
+    echo "check: Codex skill wrapper does not point at $codex_pointer: $codex_wrapper" >&2; ok=false
+  elif [ ! -f "$(dirname "$consumer_root_abs/$codex_wrapper")/$codex_pointer" ]; then
+    echo "check: Codex skill pointer does not resolve to the installed canonical body: $codex_wrapper" >&2; ok=false
+  fi
+
+  for wrapper in .claude/skills/deep-review-refactor/SKILL.md; do
+    if [ ! -f "$consumer_root_abs/$wrapper" ]; then
+      echo "check: missing skill wrapper: $wrapper" >&2; ok=false
+    elif ! cmp -s \
+      "$package_root/templates/consumer/claude-skills/deep-review-refactor/SKILL.md" \
+      "$consumer_root_abs/$wrapper"; then
+      echo "check: Claude skill wrapper drifted from the package-owned thin pointer: $wrapper" >&2; ok=false
+    elif ! grep -qF -- "$claude_canonical_skill" "$consumer_root_abs/$wrapper"; then
+      echo "check: skill wrapper does not point at $claude_canonical_skill: $wrapper" >&2; ok=false
+    fi
+  done
+  codex_skill_ui='.agents/skills/deep-review-refactor-codex/agents/openai.yaml'
+  codex_skill_ui_template="$package_root/templates/consumer/agents-skills/deep-review-refactor-codex/agents/openai.yaml"
+  if [ ! -f "$consumer_root_abs/$codex_skill_ui" ]; then
+    echo "check: missing Codex skill metadata: $codex_skill_ui" >&2; ok=false
+  elif ! cmp -s "$codex_skill_ui_template" "$consumer_root_abs/$codex_skill_ui"; then
+    echo "check: Codex skill metadata drifted from the package-owned definition: $codex_skill_ui" >&2; ok=false
+  fi
+
   # The guides-read gate (ADR-016) is only armed if its Stop/SubagentStop hooks are wired.
   node "$package_root/scripts/merge-deep-review-hooks.mjs" "$consumer_root_abs" --check \
     || { echo "check: guides-read Stop/SubagentStop hooks not wired in .claude/settings.json" >&2; ok=false; }
@@ -179,6 +213,10 @@ copy_if_absent "$templates_dir/github/dependabot.yml"       "$consumer_root_abs/
 copy_if_absent "$templates_dir/AGENTS.md"                   "$consumer_root_abs/AGENTS.md"                    644
 copy_if_absent "$templates_dir/claude-skills/deep-review-refactor/SKILL.md" \
                "$consumer_root_abs/.claude/skills/deep-review-refactor/SKILL.md" 644
+copy_if_absent "$templates_dir/agents-skills/deep-review-refactor-codex/SKILL.md" \
+               "$consumer_root_abs/.agents/skills/deep-review-refactor-codex/SKILL.md" 644
+copy_if_absent "$templates_dir/agents-skills/deep-review-refactor-codex/agents/openai.yaml" \
+               "$consumer_root_abs/.agents/skills/deep-review-refactor-codex/agents/openai.yaml" 644
 
 # Render __DS_REPO_NAME__ into the starter manifest (validated before any write).
 # Escape sed-special chars so a name with & / \ cannot break the substitution.

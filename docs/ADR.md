@@ -980,3 +980,68 @@ justifies, and that go/no-go is the developer's call, not the skill's.
   cost/benefit escalations; `FindingsFileV2` has no structured decision state (v1),
   so the per-finding effort-vs-benefit rationale in `impact` — rendered by `report`
   — is what distinguishes them and carries the developer's out-of-band go/no-go.
+
+---
+
+## ADR-025 — Add a distinct Codex-only six-stage deep-review skill
+
+- **Status:** Accepted
+- **Date:** 2026-07-25
+- **Owner decision** (repo owner, 2026-07-25)
+- **Scope:** Codex runtime only. The original Claude `deep-review-refactor`
+  skill and ADR-018/020 behavior remain available and unchanged.
+- **Amends:** ADR-003/010 by adding a separately named Codex canonical body and
+  consumer wrapper; both bodies remain package-owned and shared across projects.
+
+### Context
+
+For Codex sessions, the original mixed-model workflow kept the main session
+responsible for too much direct consolidation, planning, and fix-loop context.
+Once that context was saturated, every further judgment became expensive and
+quickly consumed model limits. The owner requires the Codex host session to
+remain a thin orchestrator and wants all heavy work performed by fresh Codex
+workers through durable file artifacts. The existing Claude workflow remains a
+useful separate runtime path and must not be rewritten by this decision.
+Projects that install dev-standards must discover the skill automatically in
+Codex without copying or forking its body.
+
+### Decision
+
+1. **Codex workers only.** The new Codex skill has no Opus/Claude/BOTH choice.
+   Every profile,
+   consolidator, planner, implementer, integrator, reviewer, and repair route is
+   staffed by Codex collaboration workers.
+2. **Six explicit stages:** per-profile fan-out; one consolidation worker; one
+   estimation/scheduling worker; implementation workers plus serialized
+   integration; several independent review workers; one bounded post-review
+   repair worker followed by self-review and verification.
+3. **Main-context floor.** Workers exchange paths to run artifacts, not copied
+   reports or patches. The main session reads compact summaries and `run.json`,
+   surfacing only consent, blockers, decisions requiring new authority, and the
+   final result. Host transcript anchors required by ADR-016 are the sole
+   runtime-specific read exception.
+4. **Fix by default after consent.** An accepted or directly invoked run uses
+   `review-and-refactor`; `review-only` requires an explicit no-edit request.
+   Auto-fixes remain behavior-preserving, no-touch-aware, verified, and never
+   land to the base branch.
+5. **Separate names and bodies.** The original Claude skill remains
+   `deep-review-refactor` and points to
+   `agents/skill-sources/deep-review-refactor.md`. `seed-consumer.sh` installs a
+   distinct `.agents/skills/deep-review-refactor-codex/SKILL.md` pointer plus
+   `agents/openai.yaml`, resolving
+   `agents/skill-sources/deep-review-refactor-codex.md`. Consumers never fork
+   either package-owned body.
+
+### Consequences
+
+- The Codex skill intentionally omits cross-model diversity in exchange for
+  predictable worker availability, lower host-context pressure, and a simpler
+  run contract. The original Claude skill retains its existing behavior.
+- Parallel writes require isolated worktrees or patch-only workers; one
+  integration worker serializes application, tests, self-review, and
+  `commit-slice`.
+- A consumer pin bump updates the shared logic. Consumers seeded before the
+  Codex wrapper must rerun `seed-consumer.sh` once because pin-only updates do
+  not create new root files.
+- If no Codex worker route exists, the pass stops with an operational blocker;
+  it does not collapse into a context-heavy main-session review.

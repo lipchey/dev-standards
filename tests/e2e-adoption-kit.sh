@@ -77,6 +77,10 @@ expect "A no leftover recovery state" test ! -e "$A/.git/ds-install.state"
 expect "A node_modules exists" test -d "$A/node_modules"
 expect "A overlay dir empty" test -z "$(ls -A "$A/.claude/review-guides" 2>/dev/null)"
 expect "A CLAUDE.md managed marker" grep -q "dev-standards:managed-section" "$A/CLAUDE.md"
+expect "A CLAUDE.md keeps the original Claude skill offer" grep -q \
+  '`deep-review-refactor` in Claude' "$A/CLAUDE.md"
+expect "A CLAUDE.md offers the explicitly named Codex skill" grep -q \
+  '`deep-review-refactor-codex` in Codex' "$A/CLAUDE.md"
 expect "A quality.json repo rendered" grep -q '"repo": "consumer-a"' "$A/quality.json"
 # The --full fix-verify default needs headroom inside the run deadline: the seeded
 # budget must stay 1800 (a silent revert to 900 starves the deep-review full tier).
@@ -84,6 +88,17 @@ expect "A deep_review budget seeded at 1800" python3 -c "import json,sys; m=json
 expect "A deep_review fix verify seeded --full" python3 -c "import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if m['deep_review']['verify_after_fix']=='--full' else 1)" "$A/quality.json"
 expect "A dependabot.yml seeded" test -f "$A/.github/dependabot.yml"
 expect "A AGENTS.md pointer seeded" grep -q "CLAUDE.md" "$A/AGENTS.md"
+expect "A original Claude deep-review skill wrapper preserved" grep -q \
+  "vendor/dev-standards/agents/skill-sources/deep-review-refactor.md" \
+  "$A/.claude/skills/deep-review-refactor/SKILL.md"
+expect "A Codex deep-review skill wrapper seeded under explicit name" grep -q \
+  "../../../vendor/dev-standards/agents/skill-sources/deep-review-refactor-codex.md" \
+  "$A/.agents/skills/deep-review-refactor-codex/SKILL.md"
+expect "A Codex deep-review skill pointer resolves" test -f \
+  "$A/.agents/skills/deep-review-refactor-codex/../../../vendor/dev-standards/agents/skill-sources/deep-review-refactor-codex.md"
+expect "A Codex deep-review skill metadata seeded" grep -q \
+  '\$deep-review-refactor-codex' \
+  "$A/.agents/skills/deep-review-refactor-codex/agents/openai.yaml"
 # The guides-read gate (ADR-016) is only armed if its hooks are wired + required_reads seeded.
 expect "A settings.json guides-read Stop/SubagentStop hooks wired" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); h=s.get('hooks',{}); cmd=lambda e: any(x.get('command')=='\"\$CLAUDE_PROJECT_DIR\"/scripts/deep-review guides-read --hook-stdin' for g in h.get(e,[]) for x in g.get('hooks',[])); sys.exit(0 if cmd('Stop') and cmd('SubagentStop') else 1)" "$A/.claude/settings.json"
 expect "A deep_review required_reads seeded (all three)" python3 -c "import json,sys; m=json.load(open(sys.argv[1])); r=m['deep_review'].get('required_reads',[]); sys.exit(0 if sorted(r)==sorted(['.claude/project-facts.md','.claude/code-conventions.md','.claude/CHECKLIST.md']) else 1)" "$A/quality.json"
@@ -101,6 +116,12 @@ expect "A --check green after restore" "$INSTALL" "$A" --check
 mv "$A/.claude/settings.json" "$A/.claude/settings.json.bak"
 expect_fail "A --check red without guides-read hooks" "$INSTALL" "$A" --check
 mv "$A/.claude/settings.json.bak" "$A/.claude/settings.json"
+printf '\nconsumer-local fork\n' >> "$A/.agents/skills/deep-review-refactor-codex/SKILL.md"
+expect_fail "A --check red on forked Codex skill wrapper" "$INSTALL" "$A" --check
+git -C "$A" restore -- .agents/skills/deep-review-refactor-codex/SKILL.md
+printf '\n# consumer-local metadata drift\n' >> "$A/.agents/skills/deep-review-refactor-codex/agents/openai.yaml"
+expect_fail "A --check red on drifted Codex skill metadata" "$INSTALL" "$A" --check
+git -C "$A" restore -- .agents/skills/deep-review-refactor-codex/agents/openai.yaml
 
 echo "=== B: failure paths"
 mkconsumer "$E2E/consumer-dirty"; touch "$E2E/consumer-dirty/untracked.txt"
