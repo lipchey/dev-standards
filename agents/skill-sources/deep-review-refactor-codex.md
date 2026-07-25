@@ -16,7 +16,7 @@ This file is the package-owned canonical body for the Codex runtime and its cons
 - Treat a direct `$deep-review-refactor-codex` invocation as consent for the default review-and-fix workflow. If the skill is offered automatically after feature work, state that acceptance includes automatic safe fixes; the offer itself is not consent.
 - Offer once per completed feature, scoped to its branch diff plus new untracked feature files. Do not re-ask after a decline or postponement.
 - On decline or postponement, record `stage-2 pending` in an existing repository status document; if none exists, state it in the handoff instead of creating a new status system.
-- Never merge, rebase, push, open a PR, or land changes to the base branch as part of this workflow.
+- Except for the mandatory conflict-resolution preflight below, never merge, rebase, push, open a PR, or land changes to the base branch as part of this workflow.
 
 ## Use only Codex workers
 
@@ -91,6 +91,18 @@ The main session tracks only these plan items:
 4. implementation and integration;
 5. independent review;
 6. post-review repair and verification.
+
+## Mandatory preflight — reconcile the branch with main
+
+Complete this preflight before creating the run workspace, reading review profiles, or dispatching any of the six review stages.
+
+- Resolve the current mainline ref from `origin/main` after fetching it when a remote is available; fall back to local `main` only when no remote main exists.
+- Check whether the current feature `HEAD` merges with that exact mainline SHA without conflicts. Use a non-mutating merge-tree check first; do not infer mergeability from ancestry, a clean working tree, or a stale pull-request status.
+- If the merge-tree check is clean, record the checked mainline SHA and continue.
+- If conflicts exist, dispatch exactly one fresh, separate Codex worker dedicated only to conflict resolution. Do not dispatch profile, planning, implementation, or review workers concurrently with it, and do not resolve the conflicts in the main session.
+- Give the conflict worker exclusive ownership of an isolated worktree and branch. It must merge the checked mainline SHA into the feature head without rebasing, resolve only the merge conflicts, run focused validation for the affected files, and commit the resolution. It must not perform deep review, opportunistic refactors, or unrelated fixes.
+- After the conflict worker finishes, repeat the non-mutating merge-tree check against the same mainline SHA. Continue only from the resolved head when the check is clean; otherwise stop and report the blocker.
+- Use the resolved head as the review head for scope calculation and every later stage. This preflight may update the feature/review branch, but it must never change, force-push, or land anything on `main`.
 
 ## Establish scope and package paths
 

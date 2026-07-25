@@ -107,6 +107,9 @@ test('the skill body pins the Codex-only six-stage fan-out and coverage contract
     'never collapse multiple profiles into one worker',
     'broadcast into every profile route',
     'one row for every corpus profile',
+    'Mandatory preflight — reconcile the branch with main',
+    'dispatch exactly one fresh, separate Codex worker dedicated only to conflict resolution',
+    'repeat the non-mutating merge-tree check against the same mainline SHA',
   ];
   const missing = requiredPhrases.filter((phrase) => !normalizedBody.includes(phrase));
   assert.deepEqual(missing, [], `fan-out contract phrases missing from the skill body: ${missing.join(' | ')}`);
