@@ -7,7 +7,11 @@ description: Run a repo-local, consent-gated deep code and architecture review t
 
 Run the repository's deep review as a six-stage Codex-worker pipeline. Keep the main session as a thin orchestrator: workers read the large inputs, produce durable artifacts, implement changes, and review the result. The main session carries only consent, compact status, blocking decisions, and the final user-facing summary.
 
-This file is the package-owned canonical body for the Codex runtime and its consumer wrapper. The original Claude skill remains separate at `agents/skill-sources/deep-review-refactor.md`. Do not run this workflow when the user only asks to create, inspect, install, or update the skill.
+This file is the Codex-runtime adapter over the shared process core. The original Claude skill remains separate at `agents/skill-sources/deep-review-refactor.md`. Do not run this workflow when the user only asks to create, inspect, install, or update the skill.
+
+## First — read the shared core (fail closed)
+
+Before creating the run workspace, reading review profiles, dispatching any stage, or running the conflict preflight below, resolve `<dev-standards-root>` (`vendor/dev-standards` in a consumer, `.` inside the package) and read the shared process body at `<dev-standards-root>/agents/skill-sources/deep-review-core.md`. If that file is missing or unreadable, **fail closed**: stop and report the blocker; do not proceed on this adapter alone. The core carries the consent, scope, fan-out, coverage-matrix, fix-lifecycle, no-touch, and landing rules this adapter assumes, and no transcript gate enforces this read, so this instruction is the enforcement. This adapter adds only the Codex-runtime mechanics: Codex-only workers, the mainline conflict preflight, the durable six-stage `run.json`/stage-owner workspace, the four-line worker response, and the main-lean prohibitions.
 
 ## Default behavior and consent
 
@@ -234,18 +238,8 @@ The main session reads `final-summary.md` and `run.json` only, then delivers the
 
 ## Enforce the no-touch set
 
-Never edit the union of:
-
-- `.githooks/`, `.github/workflows/`, `./verify`, `tools/`, `auth/**`, and `credentials/**`;
-- `.claude/settings.json`, `.claude/hooks/**`, and `scripts/deep-review`;
-- `.claude/skills/deep-review-refactor/**` and `.agents/skills/deep-review-refactor-codex/**`;
-- `vendor/dev-standards/**` when running from a consumer;
-- `agents/skill-sources/deep-review-refactor.md`, `agents/skill-sources/deep-review-refactor-codex.md`, both runtime wrappers, and their consumer templates when running inside dev-standards;
-- every configured required-read file and the configured guides directory;
-- every path under `## No-Touch Zones` in `.claude/project-facts.md`.
-
-Repository policy may extend this set but never shrink it. Findings on protected paths become plans only.
+The no-touch set is the shared safety floor defined in the core body (C6): the fixed executable floor (`.githooks/`, `.github/workflows/`, `./verify`, `tools/`, `auth/**`, `credentials/**`, `.claude/settings.json`, `.claude/hooks/**`, `scripts/deep-review`), the process self-protection set (both runtime wrappers, both canonical skill sources, the shared core `agents/skill-sources/deep-review-core.md`, the consumer templates, and `vendor/dev-standards/**` when running from a consumer), every configured required-read file and the configured guides directory, and every path under `## No-Touch Zones` in `.claude/project-facts.md`. Repository policy may extend this set but never shrink it. Findings on protected paths become plans only.
 
 ## Stop on budget exhaustion
 
-Share one configured `deep_review` budget across the six stages. When time expires, stop dispatching work, preserve completed artifacts, mark unfinished routes or packets as explicit `GAP`s, and have the current stage owner write a compact partial summary. Do not silently start a second pass.
+Share one configured `deep_review` budget across the six stages (core C8). When time expires, stop dispatching work, preserve completed artifacts, mark unfinished routes or packets as explicit `GAP`s, have the current stage owner write a compact partial summary, and do not silently start a second pass.

@@ -4,24 +4,33 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /* INT-06 integrity guard, strengthened in the guides revamp (Gate-P F5),
-   re-keyed to the profile corpus (ADR-018 rewrite): the canonical corpus is
-   the *.md names in agents/review-guide-templates/ minus TRACEABILITY.md (the
-   migration/canary registry the loader excludes). This test pins that set
-   from two independent directions:
-   1. catalog provenance: the corpus names must equal the set the
-      skill-catalog `feeds_guides` arrays reference (the distributed
-      baseline shares live inside profiles that also carry upstream
-      material, so no baseline special-case remains);
-   2. skill consumption: both runtime-specific skill bodies must enumerate all
-      nine corpus files they load.
+   re-keyed to the profile corpus (ADR-018 rewrite), then re-keyed again to the
+   core/adapter split (deep-review-core extraction): the two runtime bodies no
+   longer carry the process rules directly — each ADAPTER reads a shared
+   runtime-agnostic core and adds only its runtime mechanics, so every rule is
+   executed as the COMPOSITION core + adapter. This test therefore asserts the
+   pinned contract against that composition, from two independent directions:
+   1. catalog provenance: the corpus names must equal the set the skill-catalog
+      `feeds_guides` arrays reference (unchanged by the split);
+   2. skill consumption: for each runtime, the core + adapter composition must
+      enumerate all nine corpus files and keep every currently pinned contract
+      phrase, and each adapter must fail closed on the core read.
    A corpus file added without catalog provenance, a catalog entry pointing at
    a missing file, or a renamed/dropped corpus file all fail here. */
 
 const templatesDir = fileURLToPath(new URL('../../agents/review-guide-templates/', import.meta.url));
 const catalogPath = fileURLToPath(new URL('../../agents/skill-catalog.json', import.meta.url));
 
-/* The corpus names deep-review-refactor-codex's profile fan-out consumes, by contract:
-   the shared worker contract plus the eight lens profiles. */
+/* The shared, runtime-agnostic process body both adapters read first. */
+const CORE_SOURCE = 'deep-review-core.md';
+const CORE_POINTER = 'agents/skill-sources/deep-review-core.md';
+const corePath = fileURLToPath(new URL(`../../agents/skill-sources/${CORE_SOURCE}`, import.meta.url));
+
+/* The two runtime adapters; each executes core + itself. */
+const RUNTIME_ADAPTERS = ['deep-review-refactor.md', 'deep-review-refactor-codex.md'];
+
+/* The corpus names the profile fan-out consumes, by contract: the shared worker
+   contract plus the eight lens profiles. */
 const CORPUS_ROLES = [
   'review-contract.md',
   'profile-architecture-and-boundaries.md',
@@ -49,6 +58,13 @@ function templateNames(): string[] {
     .sort();
 }
 
+/* Each runtime EXECUTES the shared core plus its own adapter, so every pinned
+   contract phrase is asserted against that composition, never a single file. */
+function composedBody(adapterSource: string): string {
+  const adapterPath = fileURLToPath(new URL(`../../agents/skill-sources/${adapterSource}`, import.meta.url));
+  return `${readFileSync(corePath, 'utf8')}\n${readFileSync(adapterPath, 'utf8')}`;
+}
+
 test('template dir and catalog provenance agree exactly (set equality)', () => {
   assert.deepEqual(
     templateNames(),
@@ -65,20 +81,28 @@ test('the skill corpus list equals the template dir exactly (no orphan in either
   );
 });
 
-test('both runtime-specific skill bodies enumerate every corpus file by name', () => {
-  for (const source of ['deep-review-refactor.md', 'deep-review-refactor-codex.md']) {
-    const skillBodyPath = fileURLToPath(new URL(`../../agents/skill-sources/${source}`, import.meta.url));
-    const skillBody = readFileSync(skillBodyPath, 'utf8');
-    const missing = templateNames().filter((name) => !skillBody.includes(name));
-    assert.deepEqual(missing, [], `${source} never names corpus files: ${missing.join(', ')}`);
+test('the shared core exists nonblank and each adapter fail-closes on its read', () => {
+  const core = readFileSync(corePath, 'utf8');
+  assert.ok(core.trim().length > 0, `${CORE_SOURCE} must exist and be nonblank`);
+  for (const adapter of RUNTIME_ADAPTERS) {
+    const adapterPath = fileURLToPath(new URL(`../../agents/skill-sources/${adapter}`, import.meta.url));
+    const raw = readFileSync(adapterPath, 'utf8');
+    assert.ok(raw.includes(CORE_POINTER), `${adapter} must name the core path ${CORE_POINTER}`);
+    /* A stable fail-closed phrase so a rewrite that drops the guard is caught. */
+    assert.match(raw, /fail closed/i, `${adapter} must fail closed if the core is unreadable`);
   }
 });
 
-test('the original Claude skill retains its mandatory/non-collapsible profile fan-out contract', () => {
-  const skillBodyPath = fileURLToPath(
-    new URL('../../agents/skill-sources/deep-review-refactor.md', import.meta.url),
-  );
-  const normalizedBody = readFileSync(skillBodyPath, 'utf8').replace(/\s+/g, ' ');
+test('each runtime composition (core + adapter) enumerates every corpus file by name', () => {
+  for (const adapter of RUNTIME_ADAPTERS) {
+    const body = composedBody(adapter);
+    const missing = templateNames().filter((name) => !body.includes(name));
+    assert.deepEqual(missing, [], `${adapter} composition never names corpus files: ${missing.join(', ')}`);
+  }
+});
+
+test('the Claude runtime composition retains its mandatory/non-collapsible fan-out contract', () => {
+  const normalizedBody = composedBody('deep-review-refactor.md').replace(/\s+/g, ' ');
   const requiredPhrases = [
     'MANDATORY and NON-COLLAPSIBLE',
     'worker-route floor',
@@ -93,12 +117,9 @@ test('the original Claude skill retains its mandatory/non-collapsible profile fa
   }
 });
 
-test('the skill body pins the Codex-only six-stage fan-out and coverage contract', () => {
-  const skillBodyPath = fileURLToPath(
-    new URL('../../agents/skill-sources/deep-review-refactor-codex.md', import.meta.url),
-  );
+test('the Codex runtime composition pins the six-stage fan-out and coverage contract', () => {
   /* Collapse whitespace so prose line-wrapping never splits a phrase mid-match. */
-  const normalizedBody = readFileSync(skillBodyPath, 'utf8').replace(/\s+/g, ' ');
+  const normalizedBody = composedBody('deep-review-refactor-codex.md').replace(/\s+/g, ' ');
   /* Each phrase pins a known silent-regression boundary: model-choice drift,
      fan-out collapse, lost legacy overlays, or a partial coverage matrix. */
   const requiredPhrases = [
@@ -112,14 +133,14 @@ test('the skill body pins the Codex-only six-stage fan-out and coverage contract
     'repeat the non-mutating merge-tree check against the same mainline SHA',
   ];
   const missing = requiredPhrases.filter((phrase) => !normalizedBody.includes(phrase));
-  assert.deepEqual(missing, [], `fan-out contract phrases missing from the skill body: ${missing.join(' | ')}`);
+  assert.deepEqual(missing, [], `fan-out contract phrases missing from the Codex composition: ${missing.join(' | ')}`);
   /* All three coverage-matrix states must be named so a 2-state or dropped-state
      rewrite is caught. */
   for (const matrixState of ['APPLIED', 'SKIPPED', 'GAP']) {
-    assert.ok(normalizedBody.includes(matrixState), `coverage-matrix state ${matrixState} missing from the skill body`);
+    assert.ok(normalizedBody.includes(matrixState), `coverage-matrix state ${matrixState} missing from the Codex composition`);
   }
   for (let stage = 1; stage <= 6; stage += 1) {
-    assert.ok(normalizedBody.includes(`Stage ${stage} —`), `Stage ${stage} missing from the skill body`);
+    assert.ok(normalizedBody.includes(`Stage ${stage} —`), `Stage ${stage} missing from the Codex composition`);
   }
   assert.ok(normalizedBody.includes('Default to `review-and-refactor`'));
   assert.ok(normalizedBody.includes('Keep the main session as a thin orchestrator'));
