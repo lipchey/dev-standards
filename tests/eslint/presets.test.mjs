@@ -12,7 +12,9 @@ import {
   frontend,
   frontendVite,
   frontendNext,
+  sonarjs,
 } from "../../eslint/index.js";
+import { SMOKE_DISPOSITIONS, SMOKE_RULE } from "./sonarjs-fixture.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -30,6 +32,10 @@ const config = [
   ...frontend({ files: ["**/*.tsx"] }),
   ...frontendVite({ files: ["**/fixtures/bad/vite/**/*.tsx"] }),
   ...frontendNext({ files: ["**/fixtures/bad/next/**/*.tsx"] }),
+  /* The disposition matrix belongs to the consumer (DQ1-D1); this smoke passes a
+     generated all-off map with exactly one rule enabled, so the fixture proves
+     the factory really wires the plugin in. */
+  ...sonarjs({ dispositions: SMOKE_DISPOSITIONS, files: ["**/*.{ts,tsx}"] }),
 ];
 
 const eslint = new ESLint({ cwd: root, overrideConfigFile: true, overrideConfig: config });
@@ -47,6 +53,7 @@ const EXPECT = {
   "tests/eslint/fixtures/bad/a11y.tsx": "jsx-a11y/alt-text",
   "tests/eslint/fixtures/bad/vite/bad-export.tsx": "react-refresh/only-export-components",
   "tests/eslint/fixtures/bad/next/img.tsx": "@next/next/no-img-element",
+  "tests/eslint/fixtures/bad/sonarjs.ts": `sonarjs/${SMOKE_RULE}`,
 };
 
 for (const [file, ruleId] of Object.entries(EXPECT)) {

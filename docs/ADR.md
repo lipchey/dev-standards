@@ -1042,3 +1042,81 @@ Codex without copying or forking its body.
   not create new root files.
 - If no Codex worker route exists, the pass stops with an operational blocker;
   it does not collapse into a context-heavy main-session review.
+
+---
+
+## ADR-026 — Ship the SonarJS machinery upstream; the consumer owns the rule matrix
+
+- **Status:** Accepted
+- **Date:** 2026-07-28
+- **Supersedes:** the `eslint/README.md` §"Deliberately opt-in / not shipped (v1)"
+  bullet that held `sonarjs` out of the package entirely.
+- **Amends:** ADR-018 (review-owned rule classes get named owners) by moving a
+  bounded slice of the complexity class from the review profile to a machine gate.
+
+### Context
+
+`eslint-plugin-sonarjs` was held out of v1 because its value is real but its
+curation is heavy: 279 rules in 4.2.0, of which `recommended` leaves 217
+non-`off` — a set that, in the first adopting repo, was measured to overlap
+dozens of rules already enabled by core/`typescript-eslint`/`vitest`/`react`,
+and that folds the security "hotspot" family (review-not-CI semantics) in with
+real bug rules. Which of those collisions apply is a property of the consuming
+repo, not of this package. At the same time the roadmap requires the plugin
+dev-standards-first, and names `rule disposition` a per-repo output.
+The two are only in conflict if upstream ships opinions. They are compatible if
+upstream ships machinery: the original README reasoning — "add a small bug
+subset per repo, not a universal inheritance" — is preserved exactly by making
+the per-repo subset the mandatory input rather than an optional override.
+
+A second, weaker temptation was to let the plugin's own defaults stand for the
+24 configurable rules. That would make a patch upgrade silently redefine what
+the repo considers too complex, with no key changing in any repo file.
+
+### Decision
+
+1. **Upstream owns machinery only.** `eslint-plugin-sonarjs` becomes a
+   `dependency` at an exact pin, and `eslint/sonarjs.js` exports a factory that
+   takes the consumer's complete disposition map and returns a flat config. The
+   factory contains no rule list, no thresholds, and never spreads
+   `recommended`. Its whole job is to refuse a matrix that is incomplete or
+   incoherent.
+2. **The matrix is validated against the runtime catalog, not a number.** The
+   map's key set must equal `Object.keys(plugin.rules)` of the installed
+   version exactly — an unknown rule id and a missing disposition are equally
+   red. A plugin upgrade therefore becomes an explicit dispositioning task
+   instead of a silent behavior change.
+3. **`error` or `off`, never `warn`.** Lifelong warnings are banned by the
+   standard, and ESLint bulk suppressions act on `error` alone.
+4. **Every disposition carries a closed-vocabulary reason.** `enabled`,
+   `overlap:<ruleId>`, `owned-elsewhere:<gate>`, `hotspot-review`, `unproven`,
+   `style-not-defect`, `cost-exceeds-value` — anything else is red, and every
+   reason but `enabled` requires a non-empty note.
+5. **Enabled rules restate every value the plugin would default.** Schema
+   validity is not explicitness: ESLint merges `meta.defaultOptions` into
+   whatever the consumer supplies, so `[]`, `[{}]`, and a partial object all
+   validate while the built-in threshold silently survives. The factory reads
+   the defaulted positions and properties off the installed plugin and requires
+   an own, defined value for each; supplied options are additionally validated
+   against the rule's own schema, so a typo'd key cannot pass as a threshold.
+6. **The complexity-class transfer is bounded (DQ1-D15).**
+   `profile-refactoring-and-smells.md` hands the machine gate only the counted
+   forms a repo's matrix actually marks `enabled`. Essential-versus-accidental
+   judgment, change amplification, cognitive load, and the
+   duplication-versus-wrong-abstraction call stay with the review profile.
+
+### Consequences
+
+- The plugin is installed for every consumer, but inert until that consumer
+  writes a matrix — the cost is install weight, not lint noise. Part of that
+  weight is a `typescript` **runtime** dependency (`>=5 <6.1.0`, not a peer), so
+  a consumer can end up resolving a TypeScript copy beside its own; it also
+  peers `eslint ^8 || ^9 || ^10`, so it adds no new ESLint-10 blocker.
+- Options validation needs a JSON-Schema validator at config-build time, so
+  `ajv` moves from `devDependencies` to `dependencies`.
+- Writing the first matrix is deliberately expensive: 279 reasoned entries. That
+  is the price of the ADR-018 invariant, and it is paid once per repo, plus the
+  delta on each upgrade.
+- Because the transfer in (6) is partial, a class the matrix leaves `off` keeps
+  its review-profile ceiling. A future decision that enables more rules must
+  narrow the profile again, in the same batch — silence is not a transfer.
