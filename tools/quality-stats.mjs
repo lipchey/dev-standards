@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /*
  * quality-stats: read the append-only verify telemetry (one JSONL line per run,
- * schema in docs/effectiveness-plan.md §2) and report what dev-standards actually
+ * schema in docs/plans/archive/2026-07-10-effectiveness-plan.md §2) and report what dev-standards actually
  * catches, so a calibration session (docs/CALIBRATION.md) can flip/prune/tune on
  * data instead of by eye.
  *

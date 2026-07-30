@@ -1,6 +1,10 @@
 # Post-workflow-removal roadmap
 
-> Статус: затверджено 2026-07-10; Gate P пройдено 2026-07-10 (Codex xhigh,
+Status: **historical (implemented)**. Phases 1–7 were completed by 2026-07-15;
+the removed workflow remains retired. Live contracts moved to `docs/ADOPTION.md`
+and `docs/ADR.md`; open residuals moved to `docs/plans/backlog.md`.
+
+> Original status: затверджено 2026-07-10; Gate P пройдено 2026-07-10 (Codex xhigh,
 > 22 знахідки верифіковано й інтегровано нижче).
 > Старт виконання: ПІСЛЯ мержа видалення `workflow/` (гілка `ch/workflow-removal`).
 > Правило виконання: кожна фаза — окрема сесія з low-level планом і Gate P
@@ -237,7 +241,8 @@ Stryker в `audit` — лише якщо diff-coverage покаже зелені
 > проти дерева (стан задачі був застарілий — ядро вже на v0.19.0, пілот ai-prompter
 > уже бампнутий на v0.19.0 паралельною сесією):
 > - **§5.0–5.5 hardening** — відвантажено v0.15.0 (ADR-013/014); DR-01/03–13/17 +
->   RUN-01/02 = `fixed` за кодом (диспозиція DEEP_REVIEW_FINDINGS.md).
+>   RUN-01/02 = `fixed` за кодом (диспозиція
+>   `docs/research/2026-07-15-deep-review-findings.md`).
 > - **§5.6 shipping ВИКОНАНО** — consumer shim (`templates/consumer/scripts/deep-review`),
 >   `build:deep-review`, заповнений `deep_review`-блок, skill verb-wiring, worktree
 >   copy/reuse/stale (ADR-013 copy-not-symlink + freshness-stamp). INT-04 → fixed.
@@ -377,7 +382,8 @@ bootstrap кейс); один slice реально приземлений у п�
 >   (002/004/005 не призначались; 006/009 — workflow-internal, retired з removal).
 > - **6.2 ВИКОНАНО** — ADR-011 записаний як «automatic review-chain gating» (retired),
 >   геть від назви «review-chain» (колізія зі скілом `codex-chain` знята).
-> - **6.3 ВИКОНАНО** — DEEP_REVIEW_FINDINGS.md відновлено з refs/stash і закомічено
+> - **6.3 ВИКОНАНО** — `docs/research/2026-07-15-deep-review-findings.md`
+>   відновлено з refs/stash і закомічено
 >   (595 рядків/58 знахідок); повна диспозиція всіх 58 (26 fixed · 29
 >   obsolete-after-removal · 1 phase-5.6 (INT-04) · 2 BACKLOG (DR-14/16)) у секції
 >   «Диспозиція (Фаза 6)». Це передумова зняття gate — виконана.
@@ -395,7 +401,8 @@ bootstrap кейс); один slice реально приземлений у п�
 1. `docs/ADR.md` — канонічний ADR-лог (перші записи: ADR-008/012 retired у
    removal; далі — всі id, на які посилається код).
 2. Перейменувати ADR-011 «review-chain» (колізія зі скілом `codex-chain`).
-3. Повна диспозиція `DEEP_REVIEW_FINDINGS.md` (передумова зняття gate —
+3. Повна диспозиція `docs/research/2026-07-15-deep-review-findings.md`
+   (передумова зняття gate —
    зараз файл untracked, а roadmap адресує лише частину знахідок): кожен
    finding → fixed / obsolete-after-removal / rejected+evidence /
    phase-N / BACKLOG; диспозицію закомітити.

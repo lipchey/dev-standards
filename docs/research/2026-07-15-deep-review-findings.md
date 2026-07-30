@@ -1,5 +1,8 @@
 # Deep Review Findings
 
+Status: **historical**. All 58 findings were dispositioned; current residual work was
+distilled into `docs/plans/backlog.md`.
+
 Дата рев’ю: 2026-07-09  
 Репозиторій: `lipchey/dev-standards`  
 Режим: read-only review; production code під час рев’ю не змінювався.
@@ -34,7 +37,8 @@ copy/reuse/stale) і §5.8 пілот satisfied (fix-mode slices приземл�
 - З 27 fixed — **25 повністю**, а **INT-01 та INT-07 — fixed із tracked-residual
   карв-аутом**: INT-01 (CI-частина виправлена; branch-protection = GitHub-ops-toggle
   поза кодом — не в підрахунку коду); INT-07 (lint+dead-code виправлено;
-  coverage/format запарковано). Обидва карв-аути занесені у `BACKLOG.md`.
+  coverage/format запарковано). Обидва карв-аути занесені у
+  `docs/plans/backlog.md`.
 - DEP-02 сам finding (SHA-pin) — fixed; авто-оновлення тих пінів через dependabot —
   окремий проактивний BACKLOG-пункт, не диспозиція DEP-02.
 - INT-04: fixed (v0.15.0–v0.19.0). Доставка відвантажена (consumer shim-шаблон,
@@ -83,7 +87,8 @@ copy/reuse/stale) і §5.8 пілот satisfied (fix-mode slices приземл�
 **BACKLOG-елементи, породжені диспозицією:** DR-14 (slice-invariant enforcement),
 DR-16 (`check-path` `assertSafeRepoPath`), DEP-02 auto-update (`dependabot.yml`
 `github-actions` у core), + nits: INT-07 core coverage/format gate, RUN-04
-`scope:TierName` type-narrow. Занесені у `BACKLOG.md`. INT-01 branch-protection —
+`scope:TierName` type-narrow. Занесені у `docs/plans/backlog.md`. INT-01
+branch-protection —
 platform/ops toggle, не код.
 
 ## 1. Інтеграція, CI та repository governance

@@ -1,6 +1,7 @@
 # Review-recall plan — three tiers against review-owned entropy
 
-- **Status:** EXECUTED (merged via PR #6; ADR-018 + ADR-019 Accepted). Retained as the design/decision record.
+- **Status:** historical (implemented; merged via PR #6). ADR-018 through ADR-020
+  own the current decisions; this file is retained as design and acceptance evidence.
 - **Date:** 2026-07-15
 - **Owner ADRs:** ADR-018 (recall system; amends ADR-014, supersedes the
   ownership half of ADR-015) + ADR-019 (two-stage development doctrine)
@@ -253,7 +254,8 @@ code" pre-reads is adoption work (follow-up task, out of scope here).
 
 ## Tier 3 — recall ratchet (extend existing mechanisms, no new machinery)
 
-1. **`agents/gate-misses-template.md` AND `docs/effectiveness-plan.md` (the
+1. **`agents/gate-misses-template.md` AND
+   `docs/plans/archive/2026-07-10-effectiveness-plan.md` (the
    canonical ledger definition — both, same batch, Gate P F9):** a new entry
    class `judgment-missed` and fix route `profile:<name>` for judgment
    escapes. **Canaries are BLINDED:** they live in the ds-side registry

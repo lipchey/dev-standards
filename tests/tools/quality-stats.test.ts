@@ -18,7 +18,8 @@ import {
 } from '../../tools/quality-stats.mjs';
 
 /* The .mjs tool is dep-free and exports no types; these builders mirror the
-   emitter contract (docs/effectiveness-plan.md §2) so fixtures stay readable. */
+   emitter contract (docs/plans/archive/2026-07-10-effectiveness-plan.md §2) so
+   fixtures stay readable. */
 type Result = {
   name: string;
   tier: string;

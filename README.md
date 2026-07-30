@@ -1,15 +1,40 @@
 # dev-standards
 
-Shared quality-system runner, schema, and fixtures.
+Shared quality tooling for repositories that want one explicit, testable verification
+contract without outsourcing their project topology to the package.
 
 ## Scope
 
-This repo provides the core `./verify` runner (schema + hand validator, tiered
-checks) and the optional `deep-review` refactor engine.
-It does not implement red-main tracking, health digests, or baseline-diff
-promotion. Adopting a consumer repo is a one-command flow — see
-[docs/ADOPTION.md](docs/ADOPTION.md) (`scripts/ds-install.sh`,
-`scripts/ds-update-pins.sh`).
+The repository ships five deliberately separate surfaces:
+
+1. **Runner and manifest contract** — `./verify`, `schemas/quality.schema.json`,
+   tier budgets, filesets, blocking/report-only checks, reports, telemetry, and the
+   staged-file formatter.
+2. **Standalone tools** — dependency-change policy, companion-test checks,
+   test-placement reporting, diff coverage, build fingerprints, and effectiveness
+   reports under `tools/`.
+3. **ESLint package** — shared flat-config presets and custom rules exported as
+   `dev-standards/eslint`; see [eslint/README.md](eslint/README.md).
+4. **Deep review** — the optional review/fix engine, its Codex and Claude skill
+   wrappers, and the canonical review-profile corpus.
+5. **Adoption kit** — installer/updater scripts and copy-if-absent consumer templates.
+
+Consumers author the actual pipeline in `quality.json`. The runner executes the named
+commands and validates their contract; it does not infer Nx projects, framework
+defaults, or a built-in list of mandatory gates. It also does not implement red-main
+tracking, health digests, or baseline-diff promotion.
+
+Adoption is a one-command flow — see [docs/ADOPTION.md](docs/ADOPTION.md)
+(`scripts/ds-install.sh`, `scripts/ds-update-pins.sh`).
+
+## Documentation
+
+[docs/README.md](docs/README.md) is the documentation map. The live sources are:
+
+- [docs/ADOPTION.md](docs/ADOPTION.md) for consumer setup and updates;
+- [docs/ADR.md](docs/ADR.md) for architectural decisions;
+- [docs/CALIBRATION.md](docs/CALIBRATION.md) for effectiveness metrics and tuning;
+- [docs/plans/backlog.md](docs/plans/backlog.md) for open repository work.
 
 ## Getting started
 

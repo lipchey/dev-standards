@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /*
  * quality-report: a human-friendly VISUAL layer over the SAME verify telemetry sink that
- * tools/quality-stats.mjs analyses (docs/effectiveness-plan.md §8.6). The text report stays
+ * tools/quality-stats.mjs analyses
+ * (docs/plans/archive/2026-07-10-effectiveness-plan.md §8.6). The text report stays
  * the calibration-session workhorse; this renders a single self-contained HTML dashboard —
  * "how is dev-standards doing at a glance" — that opens offline, survives a re-clone, and is
  * one artifact to share. No server, no npm deps, no CDN.

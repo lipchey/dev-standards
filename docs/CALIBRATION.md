@@ -1,8 +1,11 @@
 # Calibration playbook — turning telemetry into gate decisions
 
+Status: **live playbook and append-only session log**.
+
 A recurring micro-session (every 1–2 weeks, and before ANY report-only →
 blocking flip) that converts accumulated evidence into configuration
-decisions. Effectiveness telemetry design: `docs/effectiveness-plan.md`.
+decisions. Historical telemetry design:
+`docs/plans/archive/2026-07-10-effectiveness-plan.md`.
 
 ## Inputs
 
@@ -113,7 +116,7 @@ candidate (exclude browser-only paths), not a flip.
 - Seed/pilot eslint+format-check flip: an explicit owner decision (friction
   appetite) + read the pilot `.claude/gate-misses.md` — deferred.
 - check-new-deps & diff-coverage flips stay coupled to their parked CI-bridge
-  items (`BACKLOG.md` 2026-07-14) — decide together with, not before, blocking.
+  items (`docs/plans/backlog.md`) — decide together with, not before, blocking.
 
 ### 2026-07-16 — `comparisonLiterals` warn-ramp baseline (ADR-022)
 

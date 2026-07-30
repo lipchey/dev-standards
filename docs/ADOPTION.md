@@ -1,5 +1,8 @@
 # Adopting dev-standards
 
+Status: **live reference**. Code, templates, and the end-to-end adoption suite are the
+implemented contract; update this document in the same batch when that contract moves.
+
 dev-standards is vendored into a consumer as a git submodule at
 `vendor/dev-standards` (pinned by SHA). The consumer builds the runner bundles
 locally and runs thin `scripts/verify` / `scripts/deep-review` shims over them.
@@ -56,9 +59,12 @@ missing.
 
 ## After install — make the gates real
 
-The starter `quality.json` ships with `stack: "meta-docs"` and only the seeded
-`instance-docs-seeded` check (in the `fast` and `full` tiers); the
-project-specific gates start empty, so `./scripts/verify` passes immediately.
+The starter `quality.json` ships with `stack: "meta-docs"`, a report-only
+`check-new-deps` check in `staged`, and the `instance-docs-seeded` check in
+`fast` and `full`. The dependency check is npm/package-lock-v3 only and stands
+down for pnpm/yarn repositories; it is not a generic cross-package-manager
+supply-chain gate. Project-specific build/test/lint gates start empty, so
+`./scripts/verify` passes immediately.
 
 1. Switch `stack` (and each workspace `stack`) from `meta-docs` to your real
    stack, then add your project's checks (typecheck, tests, lint, …) to the

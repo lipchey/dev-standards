@@ -1,5 +1,8 @@
 # Глибоке рев'ю проєкту на наявність багів
 
+Status: **historical (implemented)**. All 12 confirmed defects were fixed: 11 in
+`fc08200`, with BUG-10 fixed independently in `e654408`.
+
 - Дата: 2026-07-16
 - Перевірений commit: `e173320fcfa9256c04c692cc6024aea8c91876c2`
 - Гілка: `main`
@@ -36,7 +39,7 @@
 
 Пріоритет: **High**
 
-Код: [`deep-review/src/verify.ts:145`](../deep-review/src/verify.ts#L145), [`deep-review/src/verify.ts:159`](../deep-review/src/verify.ts#L159), [`deep-review/src/verify.ts:188`](../deep-review/src/verify.ts#L188), [`deep-review/src/handoff.ts:231`](../deep-review/src/handoff.ts#L231).
+Код: [`deep-review/src/verify.ts:145`](../../deep-review/src/verify.ts#L145), [`deep-review/src/verify.ts:159`](../../deep-review/src/verify.ts#L159), [`deep-review/src/verify.ts:188`](../../deep-review/src/verify.ts#L188), [`deep-review/src/handoff.ts:231`](../../deep-review/src/handoff.ts#L231).
 
 `runFinalVerify` фіксує `HEAD` до і після запуску shim, але не перевіряє `git status`. Тому shim може перевірити незакомічені дані, а зелений stamp буде записаний як такий, що підтверджує commit із SHA `HEAD`. Handoff перевіряє лише збіг SHA і чистоту worktree у поточний момент.
 
@@ -64,7 +67,7 @@ verifyOnActualHead: 13
 
 Пріоритет: **High**
 
-Код: [`deep-review/src/verify.ts:165`](../deep-review/src/verify.ts#L165), [`deep-review/src/verify.ts:195`](../deep-review/src/verify.ts#L195), [`deep-review/src/verify.ts:213`](../deep-review/src/verify.ts#L213), [`deep-review/src/handoff.ts:231`](../deep-review/src/handoff.ts#L231).
+Код: [`deep-review/src/verify.ts:165`](../../deep-review/src/verify.ts#L165), [`deep-review/src/verify.ts:195`](../../deep-review/src/verify.ts#L195), [`deep-review/src/verify.ts:213`](../../deep-review/src/verify.ts#L213), [`deep-review/src/handoff.ts:231`](../../deep-review/src/handoff.ts#L231).
 
 `verification` оновлюється тільки при exit `0`. Червоний verdict, timeout, signal або інша operational failure повертають код помилки, але попередній зелений запис не видаляється. Handoff не знає, що після зеленого запуску була новіша невдала спроба.
 
@@ -85,7 +88,7 @@ handoffAfterLatestRed: 0
 
 Пріоритет: **High**
 
-Код: [`runner/src/exec.ts:41`](../runner/src/exec.ts#L41), [`runner/src/exec.ts:63`](../runner/src/exec.ts#L63), [`runner/src/fix-staged.ts:103`](../runner/src/fix-staged.ts#L103), [`runner/src/git.ts:27`](../runner/src/git.ts#L27).
+Код: [`runner/src/exec.ts:41`](../../runner/src/exec.ts#L41), [`runner/src/exec.ts:63`](../../runner/src/exec.ts#L63), [`runner/src/fix-staged.ts:103`](../../runner/src/fix-staged.ts#L103), [`runner/src/git.ts:27`](../../runner/src/git.ts#L27).
 
 Process group примусово завершується лише для `ETIMEDOUT`. Якщо безпосередній процес завершується через signal або `spawnSync` повертає іншу operational error, його нащадки лишаються активними. `runFixStaged` уже відновлює snapshot і повертає помилку, але живий worker може змінити файл пізніше.
 
@@ -107,7 +110,7 @@ fileAfter700ms: "LATE MUTATION\n"
 
 Пріоритет: **High**
 
-Код: [`runner/src/git.ts:82`](../runner/src/git.ts#L82), [`runner/src/fix-staged.ts:89`](../runner/src/fix-staged.ts#L89), [`runner/src/fix-staged.ts:117`](../runner/src/fix-staged.ts#L117).
+Код: [`runner/src/git.ts:82`](../../runner/src/git.ts#L82), [`runner/src/fix-staged.ts:89`](../../runner/src/fix-staged.ts#L89), [`runner/src/fix-staged.ts:117`](../../runner/src/fix-staged.ts#L117).
 
 Захист `--fix-staged` відхиляє symlink та non-regular file, але не перевіряє кількість hardlinks. Regular file у repo може ділити inode з файлом поза repo root, тому форматування за repo-шляхом змінює обидва імена.
 
@@ -128,7 +131,7 @@ outsideFileAfter: "FORMATTED\n"
 
 Пріоритет: **Medium**
 
-Код: [`deep-review/src/deadline.ts:1`](../deep-review/src/deadline.ts#L1), [`deep-review/src/descriptor.ts:23`](../deep-review/src/descriptor.ts#L23), [`deep-review/src/descriptor.ts:33`](../deep-review/src/descriptor.ts#L33), [`deep-review/src/cli.ts:375`](../deep-review/src/cli.ts#L375), [`deep-review/src/cli.ts:473`](../deep-review/src/cli.ts#L473), [`deep-review/src/cli.ts:504`](../deep-review/src/cli.ts#L504), [`deep-review/src/cli.ts:550`](../deep-review/src/cli.ts#L550), [`deep-review/src/cli.ts:603`](../deep-review/src/cli.ts#L603).
+Код: [`deep-review/src/deadline.ts:1`](../../deep-review/src/deadline.ts#L1), [`deep-review/src/descriptor.ts:23`](../../deep-review/src/descriptor.ts#L23), [`deep-review/src/descriptor.ts:33`](../../deep-review/src/descriptor.ts#L33), [`deep-review/src/cli.ts:375`](../../deep-review/src/cli.ts#L375), [`deep-review/src/cli.ts:473`](../../deep-review/src/cli.ts#L473), [`deep-review/src/cli.ts:504`](../../deep-review/src/cli.ts#L504), [`deep-review/src/cli.ts:550`](../../deep-review/src/cli.ts#L550), [`deep-review/src/cli.ts:603`](../../deep-review/src/cli.ts#L603).
 
 Коментарі та конфіг описують один budget для всього run, але кожен CLI verb працює в окремому процесі та викликає `createDeadline(config.budget.seconds)` заново. `created_at` у run descriptor не використовується для обчислення залишку.
 
@@ -148,7 +151,7 @@ classifyAfterBudgetExpired: 0
 
 Пріоритет: **Medium**
 
-Код: [`schemas/quality.schema.json:72`](../schemas/quality.schema.json#L72), [`runner/src/validate.ts:254`](../runner/src/validate.ts#L254), [`runner/src/validate.ts:404`](../runner/src/validate.ts#L404), [`runner/src/filesets.ts:21`](../runner/src/filesets.ts#L21).
+Код: [`schemas/quality.schema.json:72`](../../schemas/quality.schema.json#L72), [`runner/src/validate.ts:254`](../../runner/src/validate.ts#L254), [`runner/src/validate.ts:404`](../../runner/src/validate.ts#L404), [`runner/src/filesets.ts:21`](../../runner/src/filesets.ts#L21).
 
 Schema та hand-written validator вимагають непорожній масив `include`, але дозволяють порожній рядок як його елемент. Такий pattern не збігається зі звичайними repo-файлами. Якщо blocking check має `skip_if_empty`, він беззвучно стає `skipped`.
 
@@ -169,7 +172,7 @@ reportedResult: "skipped"
 
 Пріоритет: **Medium**
 
-Код: [`schemas/quality.schema.json:93`](../schemas/quality.schema.json#L93), [`runner/src/validate.ts:294`](../runner/src/validate.ts#L294), [`runner/src/fix-staged.ts:102`](../runner/src/fix-staged.ts#L102), [`runner/src/exec.ts:122`](../runner/src/exec.ts#L122).
+Код: [`schemas/quality.schema.json:93`](../../schemas/quality.schema.json#L93), [`runner/src/validate.ts:294`](../../runner/src/validate.ts#L294), [`runner/src/fix-staged.ts:102`](../../runner/src/fix-staged.ts#L102), [`runner/src/exec.ts:122`](../../runner/src/exec.ts#L122).
 
 Контракт schema каже, що `format.argv` — команда formatter-а, а безпечний список staged-файлів додається runner-ом. Проте validator не забороняє `{files:...}` у `format.argv`, а `fix-staged` пропускає весь масив через загальний `expandArgv`.
 
@@ -191,7 +194,7 @@ argv after internal staged-list append/expansion: ["staged.ts"]
 
 Пріоритет: **Medium**
 
-Код: [`schemas/quality.schema.json:70`](../schemas/quality.schema.json#L70), [`runner/src/validate.ts:113`](../runner/src/validate.ts#L113), [`runner/src/validate.ts:402`](../runner/src/validate.ts#L402), [`runner/src/exec.ts:106`](../runner/src/exec.ts#L106).
+Код: [`schemas/quality.schema.json:70`](../../schemas/quality.schema.json#L70), [`runner/src/validate.ts:113`](../../runner/src/validate.ts#L113), [`runner/src/validate.ts:402`](../../runner/src/validate.ts#L402), [`runner/src/exec.ts:106`](../../runner/src/exec.ts#L106).
 
 Fileset name обмежений лише `minLength: 1`, тоді як `{files:<name>}` розпізнає тільки `\w` і `-`. Тому ім'я з крапкою валідне у manifest, але не може бути використане через задокументований token.
 
@@ -210,7 +213,7 @@ expected operand: "a.ts"
 
 Пріоритет: **Medium**
 
-Код: [`runner/src/glob.ts:51`](../runner/src/glob.ts#L51), [`runner/src/validate.ts:735`](../runner/src/validate.ts#L735), [`tools/check-companion-tests.mjs:28`](../tools/check-companion-tests.mjs#L28), [`tools/diff-cover.mjs:29`](../tools/diff-cover.mjs#L29).
+Код: [`runner/src/glob.ts:51`](../../runner/src/glob.ts#L51), [`runner/src/validate.ts:735`](../../runner/src/validate.ts#L735), [`tools/check-companion-tests.mjs:28`](../../tools/check-companion-tests.mjs#L28), [`tools/diff-cover.mjs:29`](../../tools/diff-cover.mjs#L29).
 
 Validator дозволяє будь-яке розміщення `**`. Runner трактує будь-які дві сусідні зірочки як globstar, що може перетинати `/`. Два tools трактують `**` рекурсивно лише як окремий path segment.
 
@@ -230,7 +233,7 @@ Validator дозволяє будь-яке розміщення `**`. Runner т�
 
 Пріоритет: **Medium**
 
-Код: [`deep-review/src/guides.ts:120`](../deep-review/src/guides.ts#L120), [`deep-review/src/guides.ts:139`](../deep-review/src/guides.ts#L139), [`docs/ADR.md:289`](ADR.md#L289).
+Код: [`deep-review/src/guides.ts:120`](../../deep-review/src/guides.ts#L120), [`deep-review/src/guides.ts:139`](../../deep-review/src/guides.ts#L139), [`docs/ADR.md:289`](../ADR.md#L289).
 
 Enumeration overlay directory fail-closed для помилок, відмінних від `ENOENT`. Але після успішного переліку кожен `readFile` обгорнутий у порожній `catch`, який ігнорує також `EACCES`, `EIO` та інші read failures. Це суперечить ADR-016: listed-but-unreadable overlay повинен fail closed.
 
@@ -250,7 +253,7 @@ guideCount: 9
 
 Пріоритет: **Medium**
 
-Код: [`deep-review/src/config.ts:88`](../deep-review/src/config.ts#L88), [`deep-review/src/cli.ts:417`](../deep-review/src/cli.ts#L417), [`deep-review/src/cli.ts:432`](../deep-review/src/cli.ts#L432), [`deep-review/src/report.ts:145`](../deep-review/src/report.ts#L145), [`runner/src/report.ts:18`](../runner/src/report.ts#L18).
+Код: [`deep-review/src/config.ts:88`](../../deep-review/src/config.ts#L88), [`deep-review/src/cli.ts:417`](../../deep-review/src/cli.ts#L417), [`deep-review/src/cli.ts:432`](../../deep-review/src/cli.ts#L432), [`deep-review/src/report.ts:145`](../../deep-review/src/report.ts#L145), [`runner/src/report.ts:18`](../../runner/src/report.ts#L18).
 
 Runner передає в `writeConfined` repo root і відносний `paths.reports`, тому `../` та absolute escape відхиляються. Deep-review спочатку робить `resolve(cwd, reportsDir)`, а потім передає отриманий каталог як новий confinement root. Якщо manifest вказує `../outside-reports`, перевірка захищає запис усередині зовнішнього каталогу, але вже не відносно repo.
 
@@ -270,7 +273,7 @@ outsideDirectoryContents: ["deep-review-2026-07-16.md"]
 
 Пріоритет: **Low**
 
-Код: [`runner/src/cli.ts:9`](../runner/src/cli.ts#L9), [`runner/src/cli.ts:40`](../runner/src/cli.ts#L40).
+Код: [`runner/src/cli.ts:9`](../../runner/src/cli.ts#L9), [`runner/src/cli.ts:40`](../../runner/src/cli.ts#L40).
 
 `SCOPE_FLAGS` — звичайний object, а lookup не перевіряє own property. Аргументи `toString`, `constructor` тощо успадковуються від `Object.prototype` і проходять як scope.
 
@@ -307,4 +310,6 @@ expectedUsageExit: 2
 5. BUG-10 і BUG-11 як fail-closed/confinement batch для deep-review I/O.
 6. BUG-12 як малий CLI hardening fix.
 
-Цей документ є єдиною зміною, зробленою в репозиторії під час рев'ю; виправлення коду навмисно не виконувалися.
+Звіт фіксує as-found стан commit `e173320`. Виправлення й regression-тести
+приземлилися разом із публікацією звіту в `fc08200`; BUG-10 був уже незалежно
+закритий у `e654408`. Для поточної поведінки джерелом істини є код і тести.

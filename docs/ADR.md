@@ -1,5 +1,8 @@
 # Architecture Decision Records
 
+Status: **live decision log**. Accepted decisions remain current until an amendment or
+new ADR explicitly supersedes them; retired decisions are historical constraints.
+
 The canonical ADR log. Referencing a new `ADR-0NN` id from code, a skill body, or
 a plan requires a matching entry here (CLAUDE.md ADR discipline).
 
@@ -14,6 +17,31 @@ standalone record. **ADR-006** (workflow state enum + frozen transition/seat tab
 **ADR-009** (workflow locked transactions + auto-advance) were workflow-internal
 decisions retired with the `workflow/` removal (2026-07-10) and are not referenced by
 current code, so they get no standalone entry here.
+
+## Index
+
+| ADR | Status | Decision |
+| --- | --- | --- |
+| ADR-003 | Accepted | One canonical source per guide/skill body |
+| ADR-007 | Accepted | `deep_review` is an optional top-level config block |
+| ADR-008 | Retired | Autonomous write-capable Codex reviewer seat |
+| ADR-010 | Accepted | Skill wrappers are static pointers |
+| ADR-011 | Retired | Automatic cross-model review-chain workflow |
+| ADR-012 | Accepted | Landing through standalone handoff; no local merge verb |
+| ADR-013 | Accepted | Fix loop verified under the merge standard |
+| ADR-014 | Accepted | Mechanical placement rules and operational naming standards |
+| ADR-015 | Accepted | Constant/type placement stays a review judgment |
+| ADR-016 | Accepted | Transcript-backed required-guide gate |
+| ADR-017 | Accepted | Existing-dependency source-swap detection |
+| ADR-018 | Accepted | Named owners for gate floor, profiles, and recall ratchet |
+| ADR-019 | Accepted | Two-stage development |
+| ADR-020 | Accepted | Codex per-profile fan-out |
+| ADR-021 | Accepted | Test-to-source placement is a lens plus report-only assist |
+| ADR-022 | Accepted | Comparison literals become a machine gate |
+| ADR-023 | Accepted | Package boundaries require a layer worth isolating |
+| ADR-024 | Accepted | Fix every valid finding; escalate cost/benefit decisions |
+| ADR-025 | Accepted | Distinct Codex-only deep-review skill |
+| ADR-026 | Accepted | SonarJS machinery upstream, rule matrix in the consumer |
 
 ---
 
@@ -458,7 +486,7 @@ alias, or local path (a supply-chain source SWAP) passed unflagged. A v0.20.x
 attempt was backed out because a `://` regex is not a robust classifier (misses
 scp-git `git@host:` and bare `user/repo`) and because the lock-only vector,
 section precedence, and blocking posture were undecided. Design +
-Gate P/C: `docs/source-swap-detection-plan.md`.
+Gate P/C: `docs/plans/archive/2026-07-15-source-swap-detection-plan.md`.
 
 ### Decision
 
@@ -511,7 +539,7 @@ Gate P/C: `docs/source-swap-detection-plan.md`.
 
 - **Status:** Accepted
 - **Date:** 2026-07-15
-- **Plan:** `docs/review-recall-plan.md` (Gate-P-reviewed)
+- **Plan:** `docs/plans/archive/2026-07-15-review-recall-plan.md` (Gate-P-reviewed)
 - **Amended by:** ADR-020 (2026-07-16) — the standalone full-corpus Codex
   cross-run this ADR paired with the fan-out is removed; Codex is folded into the
   fan-out as a per-profile staffing mode.
@@ -742,7 +770,8 @@ parallel structure.
 - Per-profile Codex routes each read only their one profile, ending the
   full-corpus dilution the fan-out exists to prevent; concurrency requires unique
   per-route `-o`/log paths (the /tmp-collision hazard).
-- `docs/review-recall-plan.md`'s "the independent Codex cross-run stays as-is"
+- `docs/plans/archive/2026-07-15-review-recall-plan.md`'s
+  "the independent Codex cross-run stays as-is"
   bullet is superseded.
 
 ---
