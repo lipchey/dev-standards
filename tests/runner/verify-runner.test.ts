@@ -35,7 +35,14 @@ const MANIFEST = {
   filesets: [{ name: 'repo_ts', source: 'repo_all', include: ['src/**/*.ts'], exclude: [] }],
   tiers: {
     staged: [],
-    fast: [{ name: 'noop', argv: ['node', '--version'], timeout_seconds: 5 }],
+    fast: [
+      {
+        name: 'noop',
+        argv: ['node', '--version'],
+        timeout_seconds: 5,
+        skip_if_empty: 'repo_ts',
+      },
+    ],
     full: [],
     audit: [],
   },
@@ -100,10 +107,11 @@ test('isBlockingResult: error blocks in any mode; a report-only finding does not
   assert.equal(isBlockingResult(result({ status: 'fail', mode: 'blocking' })), true);
 });
 
-// Bug caught: a bypassed finding still failing the tier, or a report-only timeout blocking it.
-test('isBlockingResult: timeout blocks only when blocking; bypassed/pass/skipped never block', () => {
+// Bug caught: a hung report-only tool being treated as a non-blocking finding even though it
+// produced no usable audit result.
+test('isBlockingResult: timeout blocks in any mode; bypassed/pass/skipped never block', () => {
   assert.equal(isBlockingResult(result({ status: 'timeout', mode: 'blocking', exitCode: null })), true);
-  assert.equal(isBlockingResult(result({ status: 'timeout', mode: 'report-only', exitCode: null })), false);
+  assert.equal(isBlockingResult(result({ status: 'timeout', mode: 'report-only', exitCode: null })), true);
   assert.equal(isBlockingResult(result({ status: 'bypassed', mode: 'blocking', exitCode: 1, reason: 'x' })), false);
   assert.equal(isBlockingResult(result({ status: 'pass' })), false);
   assert.equal(isBlockingResult(result({ status: 'skipped', exitCode: null })), false);

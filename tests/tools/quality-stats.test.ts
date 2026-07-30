@@ -482,3 +482,30 @@ test('CLI: a real fixture prints every documented section, both candidate lists,
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('CLI: --repo --summary bounds output to one repository and totals only', () => {
+  const now = new Date().toISOString();
+  const fixture = [
+    JSON.stringify(ev(now, 'repoX', 'main', [{ name: 'eslint', tier: 'fast', status: 'pass', durationMs: 10, mode: 'blocking' }])),
+    JSON.stringify(ev(now, 'repoY', 'main', [{ name: 'vitest', tier: 'fast', status: 'fail', durationMs: 20, mode: 'blocking' }])),
+  ].join('\n');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-stats-summary-'));
+  const file = path.join(dir, 'events.jsonl');
+  fs.writeFileSync(file, fixture + '\n');
+  try {
+    const res = runCli(['--path', file, '--repo', 'repoX', '--summary']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /events=1/);
+    assert.match(res.stdout, /repo-filter="repoX"/);
+    assert.match(res.stdout, /## Totals/);
+    assert.doesNotMatch(res.stdout, /## Per-key|repoY|vitest/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --repo rejects an empty repository name', () => {
+  const res = runCli(['--repo', '']);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /non-empty repository name/);
+});

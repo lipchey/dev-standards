@@ -90,6 +90,14 @@ export function runTier(
   // remaining budget (never granting MORE than what is left) before it reaches a spawn.
   const remainingMs = (): number => Math.floor(deadlineMs - now());
   const assertBudget = (): void => assertWithinBudget(startedAt, budgetSeconds, now);
+  const checks = tierChecks(manifest, scope);
+
+  // `audit` is an explicit operator request, not an optional no-op. A green run with no
+  // checks falsely claims that an audit happened (and becomes especially dangerous once a
+  // consumer wires mutation/duplication gates around this tier).
+  if (scope === 'audit' && checks.length === 0) {
+    throw new Error('audit tier is not configured or has no checks');
+  }
 
   // Initialize results before setup so a deadline hit during git/fileset expansion can
   // still emit the work completed so far.
@@ -129,13 +137,18 @@ export function runTier(
   try {
     const filesByName = new Map<string, string[]>();
     for (const fileset of manifest.filesets) {
+      const referenced = checks.some(
+        (check) =>
+          check.skip_if_empty === fileset.name || check.argv.includes(`{files:${fileset.name}}`),
+      );
+      if (!referenced) continue;
       filesByName.set(fileset.name, expandFileset(fileset, { cwd: root, remainingMs }));
       // Fileset expansion (git + in-memory globbing) can itself cross the deadline; assert
       // after each so a tier with zero checks can't succeed once the budget is spent (FIX #2).
       assertBudget();
     }
 
-    for (const check of tierChecks(manifest, scope)) {
+    for (const check of checks) {
       const left = remainingMs();
       // Never spawn with a spent budget; fail the check without launching it.
       const result =
@@ -182,12 +195,11 @@ export function runTier(
   return exit;
 }
 
-/* The tier's exit decision. An 'error' (spawn fault / signal kill) is an operational failure
-   and blocks REGARDLESS of mode, so a broken report-only check still fails the tier instead of
-   passing fail-open. A blocking 'fail'/'timeout' blocks; 'bypassed', 'pass', 'skipped', and
-   report-only findings never block. */
+/* The tier's exit decision. Operational failures (`error` and `timeout`) block REGARDLESS of
+   mode, so a broken or hung report-only check cannot pass the tier fail-open. Only a genuine
+   finding (`fail`) is mode-gated; `bypassed`, `pass`, and `skipped` never block. */
 export function isBlockingResult(r: CheckResult): boolean {
-  return r.status === 'error' || (r.mode === 'blocking' && (r.status === 'fail' || r.status === 'timeout'));
+  return r.status === 'error' || r.status === 'timeout' || (r.mode === 'blocking' && r.status === 'fail');
 }
 
 // A check whose tier deadline is already spent: failed as timed-out, never spawned.

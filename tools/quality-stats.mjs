@@ -388,15 +388,35 @@ function shortSha(sha) {
   return typeof sha === 'string' ? sha.slice(0, SHA_SHORT_LEN) : '-';
 }
 
-export function formatReport(agg, meta = {}) {
-  const out = [];
-  out.push(`# quality-stats${meta.path ? ` — ${meta.path}` : ''}`);
-  out.push(
+function reportHeader(agg, meta) {
+  const repoFilter = meta.repo === undefined ? '' : ` repo-filter=${JSON.stringify(meta.repo)}`;
+  return [
+    `# quality-stats${meta.path ? ` — ${meta.path}` : ''}`,
     `# events=${agg.totals.events} malformed=${meta.malformed ?? 0} ` +
       `unsupported-version=${meta.unsupported ?? 0} ` +
-      `flip-window=${agg.sinceDays}d prune-window=${agg.pruneDays}d`,
+      `flip-window=${agg.sinceDays}d prune-window=${agg.pruneDays}d${repoFilter}`,
+  ];
+}
+
+function totalsLine(agg) {
+  const cpc = agg.totals.costPerCatchSec === null ? 'N/A (no catch-candidates)' : `${agg.totals.costPerCatchSec}s`;
+  /* perDayMs and cost-per-catch both derive from the same wall-clock span sum (finishedAt -
+     startedAt), not summed check durations. Note events that lacked a usable span. */
+  const spanless = agg.totals.spanlessEvents
+    ? ` (${agg.totals.spanlessEvents} event(s) without a usable span — summed check time used)`
+    : '';
+  return (
+    `verify wall-clock/day: ${agg.totals.perDayMs}ms over ${agg.totals.dayCount} day(s)${spanless}; ` +
+    `total catch-candidates: ${agg.totals.totalCatches}; cost per catch: ${cpc}`
   );
-  out.push('');
+}
+
+export function formatSummary(agg, meta = {}) {
+  return [...reportHeader(agg, meta), '', '## Totals', totalsLine(agg)].join('\n');
+}
+
+export function formatReport(agg, meta = {}) {
+  const out = [...reportHeader(agg, meta), ''];
 
   out.push('## Per-key');
   if (agg.keys.length === 0) {
@@ -462,23 +482,20 @@ export function formatReport(agg, meta = {}) {
   out.push('');
 
   out.push('## Totals');
-  const cpc = agg.totals.costPerCatchSec === null ? 'N/A (no catch-candidates)' : `${agg.totals.costPerCatchSec}s`;
-  /* perDayMs and cost-per-catch both derive from the same wall-clock span sum (finishedAt -
-     startedAt), not summed check durations. Note events that lacked a usable span. */
-  const spanless = agg.totals.spanlessEvents
-    ? ` (${agg.totals.spanlessEvents} event(s) without a usable span — summed check time used)`
-    : '';
-  out.push(
-    `verify wall-clock/day: ${agg.totals.perDayMs}ms over ${agg.totals.dayCount} day(s)${spanless}; ` +
-      `total catch-candidates: ${agg.totals.totalCatches}; cost per catch: ${cpc}`,
-  );
+  out.push(totalsLine(agg));
 
   return out.join('\n');
 }
 
 /* ---- CLI wrapper ----------------------------------------------------------- */
 function parseCliArgs(argv) {
-  const opts = { path: undefined, sinceDays: DEFAULT_SINCE_DAYS, pruneDays: DEFAULT_PRUNE_DAYS };
+  const opts = {
+    path: undefined,
+    sinceDays: DEFAULT_SINCE_DAYS,
+    pruneDays: DEFAULT_PRUNE_DAYS,
+    repo: undefined,
+    summary: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const value = argv[i + 1];
@@ -491,6 +508,13 @@ function parseCliArgs(argv) {
       case '--path': opts.path = need(); break;
       case '--since': opts.sinceDays = parseDays(need(), '--since'); break;
       case '--prune-window': opts.pruneDays = parseDays(need(), '--prune-window'); break;
+      case '--repo': {
+        const repo = need().trim();
+        if (repo === '') throw new Error('--repo must be a non-empty repository name');
+        opts.repo = repo;
+        break;
+      }
+      case '--summary': opts.summary = true; break;
       default: throw new Error(`unknown argument: ${arg}`);
     }
   }
@@ -517,8 +541,10 @@ function main(argv) {
   }
   const text = fs.readFileSync(filePath, 'utf8');
   const { events, malformed, unsupported } = parseLines(text);
-  const agg = aggregate(events, { sinceDays: opts.sinceDays, pruneDays: opts.pruneDays });
-  console.log(formatReport(agg, { path: filePath, malformed, unsupported }));
+  const selectedEvents = opts.repo === undefined ? events : events.filter((event) => event.repo === opts.repo);
+  const agg = aggregate(selectedEvents, { sinceDays: opts.sinceDays, pruneDays: opts.pruneDays });
+  const meta = { path: filePath, malformed, unsupported, repo: opts.repo };
+  console.log(opts.summary ? formatSummary(agg, meta) : formatReport(agg, meta));
   return 0;
 }
 

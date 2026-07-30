@@ -62,7 +62,9 @@ reasons of any origin. The deny-list is best-effort, not a full scanner, so **ke
 secrets in `DS_BYPASS_REASON`** — redaction is insurance, not permission.
 
 Two readers sit over that sink. For a calibration session use the text report
-(`node tools/quality-stats.mjs`). For a "how are the gates doing" glance, generate the
+(`node tools/quality-stats.mjs`). On a shared long-lived sink, bound it to the current
+consumer with `--repo <quality.json repo>` and add `--summary` when only aggregate
+effectiveness/cost is needed. For a "how are the gates doing" glance, generate the
 self-contained visual dashboard — one offline HTML file, no server or deps:
 
 ```
