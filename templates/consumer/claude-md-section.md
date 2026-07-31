@@ -7,11 +7,12 @@ clone or a pin bump: `scripts/ds-bootstrap.sh`.
 
 - **Verify tiers.** `./scripts/verify --staged` (pre-commit), `--fast` (local
   loop), `--full` (pre-push / CI). The gates live in root `quality.json`.
-- **Deep review is opt-in.** When feature work on a branch is complete, offer
-  `deep-review-refactor` in Claude over the branch diff (not the whole repo).
-  Never offer or infer the Codex skill; run `/deep-review-refactor-codex` in Codex
-  only after the user enters that literal slash command. The Codex skill fixes
-  confirmed safe findings by default; `review-only` must be explicit.
+- **Deep review is owner-invoked.** The runtime-specific skill —
+  `/deep-review-refactor` in Claude, `/deep-review-refactor-codex` in Codex —
+  runs only when the owner enters that literal slash command, and at no other
+  time. Never offer or infer either skill. Default scope is the branch diff, not
+  the whole repo. The Codex skill fixes confirmed safe findings by default;
+  `review-only` must be explicit.
 - **Overlays are additive-only.** The seven canonical review guides are read in
   place from the submodule; `.claude/review-guides/` may only ADD or EXTEND a
   guide, never override or delete a canonical rule.

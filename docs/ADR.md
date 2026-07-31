@@ -682,6 +682,16 @@ The checklist template frames its sections as Stage-1 (blocks commit — gates)
 vs Stage-2 (review-owned — profiles). Consumer pre-read guidance is updated at
 adoption, not retroactively by this ADR.
 
+**Amendment (2026-07-31, owner decision).** The automatic Stage-2 OFFER is
+retired. Stage 2 runs only when the owner invokes the skill by name
+(`/deep-review-refactor`, `$deep-review-refactor-codex`); an agent never
+proposes it, never asks whether to run it, and never composes a review prompt
+because feature work completed — a finished feature simply finishes. Stage 2
+remains the required quality stage of the doctrine and still runs in a FRESH
+session over the branch diff; only the automatic offer that used to start it is
+gone. Supersedes the offer wording in the 2026-07-25 amendment, the 2026-07-16
+addendum, and the Consequences bullet below.
+
 **Amendment (2026-07-25, owner decision).** The documentation convention for an
 unperformed Stage 2 is retired. A declined or postponed offer ends after the
 one-time offer and does not create a `stage-2 pending` entry, handoff note, or
@@ -708,8 +718,8 @@ tracked in BACKLOG).
 - Writing sessions carry less rule prose; standards enforcement concentrates in
   the two layers that demonstrably hold: deterministic gates and the
   high-recall Stage-2 review.
-- A declined Stage 2 does not add repository-documentation debt or a receipt;
-  the one-time offer is the complete handling for that session.
+- An uninvoked Stage 2 adds no repository-documentation debt and no receipt;
+  the feature session simply finishes.
 
 ## ADR-020 — Codex joins the review as a per-profile fan-out staffing mode, replacing the standalone full-corpus cross-run
 
