@@ -1,6 +1,6 @@
 ---
 name: deep-review-refactor
-description: Repo-local deep code/architecture review (review-only) and behavior-preserving review-driven refactor (review-and-refactor); judges by repo-local review guides, never edits the executable surface, never lands to base itself. Runs only with explicit user consent, but OFFER it automatically when feature work completes - ask once whether to review that branch's changes (scope = diff vs base, not the whole repo).
+description: Repo-local deep code/architecture review (review-only) and behavior-preserving review-driven refactor (review-and-refactor); judges by repo-local review guides, never edits the executable surface, never lands to base itself. Manual invocation only - it runs when the user types the slash command /deep-review-refactor, and at no other time.
 ---
 
 # deep-review-refactor - canonical skill body
@@ -13,30 +13,27 @@ wrappers are committed statically and guarded by `tests/runner/skill-wrappers-st
 
 ## When to use / trigger
 
-Consent-gated: the skill never RUNS without an explicit user go-ahead, never
-fires on every diff, and never on ordinary implementation or verification work.
-The OFFER, however, is automatic: when feature work completes - the feature
-branch or task is about to be committed as done, merged, or handed off - ask
-the user ONCE whether to run deep-review-refactor scoped to that work's
-changes. Scope for that offer = the files changed vs the merge base with the
-base branch (`git diff --name-only "$(git merge-base <base> HEAD)"`, default
-base `main`, plus new untracked files of the feature), NOT the whole repo;
-judge those files with enough surrounding context for the architecture calls.
-Declined = do not re-ask for the same feature. A human can still invoke the
-skill manually at any scope.
+Invocation-gated: the skill runs when the user types the slash command
+`/deep-review-refactor`, and at no other time. The automatic post-feature
+offer is retired (ADR-019 amendment 2026-07-31) - a finished feature simply
+finishes.
+
+Default scope when the user names none = the files changed vs the merge base
+with the base branch (`git diff --name-only "$(git merge-base <base> HEAD)"`,
+default base `main`, plus new untracked files of the feature), NOT the whole
+repo; judge those files with enough surrounding context for the architecture
+calls. The user can name any other scope.
 
 Under the two-stage doctrine (ADR-019) this pass IS the standard quality stage
 for feature work, not an optional extra: Stage 1 writes functional code under
 the machine gates alone; the standards corpus is applied HERE, where per-lens
-attention is engineered. Consent still gates every run - it decides WHEN the
-stage happens, not WHETHER it is part of the work. On a declined or postponed
-offer, stop after that one-time offer; do not create or update repository
-documentation solely to record that Stage 2 was not run. Two modes only:
+attention is engineered. Invocation decides WHEN the stage happens, not
+WHETHER it is part of the work. Two modes only:
 
 - `review-only` (default) - prioritized findings, change nothing.
-- `review-and-refactor` (explicit ask, e.g. `/deep-review --fix`, or upfront
-  fix consent from Run setup below) - find the issues and immediately fix the
-  fixable ones in one command.
+- `review-and-refactor` (explicit ask, e.g. `/deep-review-refactor --fix`, or
+  upfront fix consent from Run setup below) - find the issues and immediately
+  fix the fixable ones in one command.
 
 This is the on-demand, deep layer. The former always-on baseline
 (`core-code-guidelines.md`, retired) is distributed across the eight lens

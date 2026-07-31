@@ -80,15 +80,14 @@ supply-chain gate. Project-specific build/test/lint gates start empty, so
 3. Extend, don't override, via `.claude/review-guides/` — see tuning below.
 4. Wire the two-stage process (ADR-019) into the consumer's `CLAUDE.md`: a
    compact Stage-1 core (placement map, no-touch zones, secrets, security
-   boundaries, lazy-read triggers) instead of mandated pre-code reads; the
-   Stage-2 offer after a feature is a READY PROMPT for a fresh session
-   (`deep-review-refactor` for the original Claude workflow, or
-   `deep-review-refactor-codex` for the Codex-only six-stage workflow + scope =
-   diff vs base + branch/worktree). The Codex skill enables safe fixes by
-   default after consent — never run either workflow as a
-   review run inside the build session, whose context is already spent. A
-   declined/postponed offer ends without a repository-documentation entry for
-   the unperformed Stage 2.
+   boundaries, lazy-read triggers) instead of mandated pre-code reads. Stage 2
+   itself needs no wiring in `CLAUDE.md` — since the 2026-07-31 ADR-019
+   amendment the owner starts it by typing `/deep-review-refactor` (or
+   `$deep-review-refactor-codex` for the Codex-only six-stage workflow, which
+   enables safe fixes by default). It runs in a FRESH session — the build
+   session's context is already spent — over the merge-base diff plus the
+   feature's new untracked files, and an uninvoked Stage 2 leaves no
+   repository-documentation record.
 
 ### Optional gate: test-to-source placement (report-only)
 
@@ -196,12 +195,13 @@ The structure-and-boundaries review lens prompts for the boundary/import-zone pa
 on any workspace-adding diff (`profile-architecture-and-boundaries.md` §Baseline
 structural checks).
 
-## Deep review is opt-in
+## Deep review is owner-invoked
 
 Both deep-review skills review a completed feature branch's diff (not the whole
-repo) and run **only with explicit user consent**. The original Claude workflow
-remains `$deep-review-refactor` with its existing behavior. The explicitly named
-Codex workflow is `$deep-review-refactor-codex`; an accepted Codex run defaults
+repo) and start **only when the owner invokes them**, at no other time. The
+original Claude workflow is the slash command `/deep-review-refactor` with its
+existing behavior. The explicitly named
+Codex workflow is `$deep-review-refactor-codex`; an invoked Codex run defaults
 to the six-stage `review-and-refactor` pipeline and fixes confirmed
 behavior-preserving findings, while `review-only` is an explicit opt-out from
 edits.

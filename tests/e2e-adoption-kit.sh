@@ -77,9 +77,9 @@ expect "A no leftover recovery state" test ! -e "$A/.git/ds-install.state"
 expect "A node_modules exists" test -d "$A/node_modules"
 expect "A overlay dir empty" test -z "$(ls -A "$A/.claude/review-guides" 2>/dev/null)"
 expect "A CLAUDE.md managed marker" grep -q "dev-standards:managed-section" "$A/CLAUDE.md"
-expect "A CLAUDE.md keeps the original Claude skill offer" grep -q \
+expect "A CLAUDE.md names the owner-invoked Claude skill" grep -q \
   '`deep-review-refactor` in Claude' "$A/CLAUDE.md"
-expect "A CLAUDE.md offers the explicitly named Codex skill" grep -q \
+expect "A CLAUDE.md names the explicitly named Codex skill" grep -q \
   '`deep-review-refactor-codex` in Codex' "$A/CLAUDE.md"
 expect "A quality.json repo rendered" grep -q '"repo": "consumer-a"' "$A/quality.json"
 # The --full fix-verify default needs headroom inside the run deadline: the seeded
