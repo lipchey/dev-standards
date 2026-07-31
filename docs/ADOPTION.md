@@ -80,15 +80,15 @@ supply-chain gate. Project-specific build/test/lint gates start empty, so
 3. Extend, don't override, via `.claude/review-guides/` — see tuning below.
 4. Wire the two-stage process (ADR-019) into the consumer's `CLAUDE.md`: a
    compact Stage-1 core (placement map, no-touch zones, secrets, security
-   boundaries, lazy-read triggers) instead of mandated pre-code reads; the
-   Stage-2 offer after a feature is a READY PROMPT for a fresh session
-   (`deep-review-refactor` for the original Claude workflow, or
-   `deep-review-refactor-codex` for the Codex-only six-stage workflow + scope =
-   diff vs base + branch/worktree). The Codex skill enables safe fixes by
-   default after consent — never run either workflow as a
-   review run inside the build session, whose context is already spent. A
-   declined/postponed offer ends without a repository-documentation entry for
-   the unperformed Stage 2.
+   boundaries, lazy-read triggers) instead of mandated pre-code reads. Claude's
+   Stage-2 offer after a feature is a READY PROMPT for a fresh session using
+   `deep-review-refactor`. Codex never offers or infers its six-stage workflow;
+   it starts only when the user enters `/deep-review-refactor-codex`, with scope
+   = diff vs base + branch/worktree. The Codex skill enables safe fixes by
+   default after direct invocation. Never run either workflow as a review run
+   inside the build session, whose context is already spent. A declined or
+   postponed Claude offer ends without a repository-documentation entry for the
+   unperformed Stage 2.
 
 ### Optional gate: test-to-source placement (report-only)
 
@@ -200,11 +200,12 @@ structural checks).
 
 Both deep-review skills review a completed feature branch's diff (not the whole
 repo) and run **only with explicit user consent**. The original Claude workflow
-remains `$deep-review-refactor` with its existing behavior. The explicitly named
-Codex workflow is `$deep-review-refactor-codex`; an accepted Codex run defaults
-to the six-stage `review-and-refactor` pipeline and fixes confirmed
-behavior-preserving findings, while `review-only` is an explicit opt-out from
-edits.
+remains `$deep-review-refactor` with its existing behavior. The Codex workflow
+runs only after the literal `/deep-review-refactor-codex` command; natural-language
+requests, feature-completion state, and offers do not invoke it. A directly
+invoked Codex run defaults to the six-stage `review-and-refactor` pipeline and
+fixes confirmed behavior-preserving findings, while `review-only` is an explicit
+opt-out from edits.
 
 ### Guides-read enforcement (ADR-016)
 

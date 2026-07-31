@@ -92,13 +92,24 @@ function assertNoSymlinkedComponent(absPath: string, repoRoot: string): void {
 }
 
 const claudeCanonical = parseFrontmatter(readLF(path.join(repoRoot, CLAUDE_CANONICAL_SOURCE)));
-const codexCanonical = parseFrontmatter(readLF(path.join(repoRoot, CODEX_CANONICAL_SOURCE)));
+const codexCanonicalRaw = readLF(path.join(repoRoot, CODEX_CANONICAL_SOURCE));
+const codexCanonical = parseFrontmatter(codexCanonicalRaw);
 
 test('runtime-specific canonical bodies declare distinct expected skill names', () => {
   assert.equal(claudeCanonical.name, CLAUDE_SKILL);
   assert.equal(codexCanonical.name, CODEX_SKILL);
   assert.ok(claudeCanonical.description && claudeCanonical.description.length > 0);
   assert.ok(codexCanonical.description && codexCanonical.description.length > 0);
+});
+
+test('Codex canonical invocation is slash-only and never offered implicitly', () => {
+  assert.equal(
+    codexCanonical.description,
+    'Use only when the user explicitly invokes `/deep-review-refactor-codex`.',
+  );
+  assert.match(codexCanonicalRaw, /Treat a direct `\/deep-review-refactor-codex` invocation as consent/u);
+  assert.doesNotMatch(codexCanonicalRaw, /\$deep-review-refactor-codex/u);
+  assert.doesNotMatch(codexCanonicalRaw, /offered automatically|Offer once per completed feature|one-time offer/u);
 });
 
 for (const [dir, skill, expectedRuntime, canonicalSource, pointerSource] of RUNTIMES) {
@@ -202,7 +213,7 @@ test('consumer Claude wrapper matches the shared canonical body', () => {
   assert.ok(Buffer.byteLength(raw) < 1500, 'consumer Claude wrapper must stay thin (<1500 bytes)');
 });
 
-test('consumer Codex UI metadata invokes the skill and keeps implicit discovery enabled', () => {
+test('consumer Codex UI metadata invokes the slash command and disables implicit discovery', () => {
   const raw = readLF(path.join(repoRoot, CONSUMER_CODEX_UI));
   assert.equal(
     raw,
@@ -210,10 +221,10 @@ test('consumer Codex UI metadata invokes the skill and keeps implicit discovery 
       'interface:',
       '  display_name: "Deep Review & Refactor — Codex"',
       '  short_description: "Worker-led deep review with safe fixes"',
-      '  default_prompt: "Use $deep-review-refactor-codex to review the current branch diff and automatically fix every confirmed safe, behavior-preserving finding."',
+      '  default_prompt: "/deep-review-refactor-codex Review the current branch diff and automatically fix every confirmed safe, behavior-preserving finding."',
       '',
       'policy:',
-      '  allow_implicit_invocation: true',
+      '  allow_implicit_invocation: false',
       '',
     ].join('\n'),
     'consumer Codex metadata must stay a complete, package-owned discovery definition',
