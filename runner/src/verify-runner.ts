@@ -149,6 +149,9 @@ export function runTier(
     }
 
     for (const check of checks) {
+      process.stdout.write(
+        `  check ${check.name} [${check.mode ?? 'blocking'}] configured timeout ${check.timeout_seconds}s\n`,
+      );
       const left = remainingMs();
       // Never spawn with a spent budget; fail the check without launching it.
       const result =
