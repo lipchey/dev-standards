@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isBlockingResult } from '../../runner/src/verify-runner.ts';
 import { writeReport } from '../../runner/src/report.ts';
-import type { CheckResult } from '../../runner/src/types.ts';
+import type { CheckResult, Manifest } from '../../runner/src/types.ts';
 
 function result(overrides: Partial<CheckResult>): CheckResult {
   return { name: 'c', tier: 'fast', status: 'pass', exitCode: 0, durationMs: 1, mode: 'blocking', ...overrides };
@@ -92,6 +92,75 @@ test('a tier run in a non-git dir fails cleanly: non-zero exit, no stack trace',
       /error running fast tier:/,
       `stderr must include the clean error prefix, got:\n${run.stderr}`,
     );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('prints each check configured timeout before spawning it', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-runner-timeout-'));
+  try {
+    const manifestPath = path.join(tmp, 'quality.json');
+    const manifest = structuredClone(MANIFEST) as unknown as Manifest;
+    manifest.filesets = [];
+    manifest.tiers.fast = [
+      {
+        name: 'visible-noop',
+        argv: [process.execPath, '-e', 'process.stdout.write("child started\\n")'],
+        timeout_seconds: 7,
+        mode: 'report-only',
+      },
+    ];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    const run = spawnSync(process.execPath, [runnerPath, '--manifest', manifestPath, '--fast'], {
+      encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
+    });
+
+    assert.equal(run.status, 0, `runner failed:\n${run.stderr}`);
+    const configuredLine = '  check visible-noop [report-only] configured timeout 7s';
+    assert.equal(
+      run.stdout.split('\n').filter((line) => line === configuredLine).length,
+      1,
+      `expected exactly one timeout line, got:\n${run.stdout}`,
+    );
+    assert.ok(
+      run.stdout.indexOf(configuredLine) < run.stdout.indexOf('child started'),
+      `timeout line must be visible before the check spawns, got:\n${run.stdout}`,
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('configured timeout line stays truthful when an empty fileset skips the check before spawn', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-runner-skipped-timeout-'));
+  try {
+    const init = spawnSync('git', ['init', tmp], { encoding: 'utf8' });
+    assert.equal(init.status, 0, `git init failed:\n${init.stderr}`);
+
+    const manifestPath = path.join(tmp, 'quality.json');
+    const manifest = structuredClone(MANIFEST) as unknown as Manifest;
+    manifest.tiers.fast = [
+      {
+        name: 'skipped-noop',
+        argv: [process.execPath, '-e', 'process.stdout.write("child started\\n")'],
+        timeout_seconds: 7,
+        skip_if_empty: 'repo_ts',
+      },
+    ];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    const run = spawnSync(process.execPath, [runnerPath, '--manifest', manifestPath, '--fast'], {
+      encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
+    });
+
+    assert.equal(run.status, 0, `runner failed:\n${run.stderr}`);
+    assert.match(run.stdout, /^ {2}check skipped-noop \[blocking\] configured timeout 7s$/m);
+    assert.match(run.stdout, /^ {2}skipped skipped-noop \[blocking\] 0ms exit -$/m);
+    assert.doesNotMatch(run.stdout, /running skipped-noop|child started/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
