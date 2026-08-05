@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { expandArgv, runCheck, runProcess } from '../../runner/src/exec.ts';
+import { expandArgv, parseIoStallUs, runCheck, runProcess } from '../../runner/src/exec.ts';
 import type { RunCheckInput } from '../../runner/src/exec.ts';
 import { isBlockingResult } from '../../runner/src/verify-runner.ts';
 import type { Check } from '../../runner/src/types.ts';
@@ -310,4 +310,26 @@ test('runProcess: a timeout SIGKILLs the whole detached group — no grandchild 
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('parseIoStallUs reads the total of the "full" line, not "some"', () => {
+  const psi = [
+    'some avg10=0.11 avg60=0.22 avg300=0.33 total=73123456',
+    'full avg10=0.10 avg60=0.20 avg300=0.30 total=70612345',
+    '',
+  ].join('\n');
+  assert.equal(parseIoStallUs(psi), 70612345);
+});
+
+test('parseIoStallUs returns null when the "full" line is absent (PSI-less kernel)', () => {
+  assert.equal(parseIoStallUs('some avg10=0.00 avg60=0.00 avg300=0.00 total=1\n'), null);
+  assert.equal(parseIoStallUs(''), null);
+});
+
+// The wiring, not the parser: on a PSI kernel every CheckResult must carry the sampled window.
+test('runCheck attaches ioStallMs where PSI exists', { skip: !fs.existsSync('/proc/pressure/io') }, () => {
+  const result = runCheck(input(check([process.execPath, '-e', 'process.exit(0)'])));
+  assert.equal(result.status, 'pass');
+  assert.equal(typeof result.ioStallMs, 'number');
+  assert.ok((result.ioStallMs as number) >= 0, 'stall delta is monotonic, never negative');
 });

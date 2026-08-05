@@ -111,4 +111,8 @@ export interface CheckResult {
   /* For 'bypassed': the trimmed, secret-redacted, 200-capped DS_BYPASS_REASON that relaxed the finding.
      For 'error': the errno code, signal, or spawn-error message. Absent otherwise. */
   reason?: string;
+  /* Linux PSI only: milliseconds inside this check's window during which ALL tasks were stalled
+     on I/O (`/proc/pressure/io`, `full`). Absent on macOS and PSI-less kernels. Tells a check
+     killed by host I/O starvation apart from one that hung on its own. */
+  ioStallMs?: number;
 }

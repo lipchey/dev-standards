@@ -224,7 +224,11 @@ function tierChecks(manifest: Manifest, scope: TierName): Check[] {
 
 function summarize(r: CheckResult): string {
   const exit = r.exitCode === null ? '-' : String(r.exitCode);
-  return `  ${r.status.padEnd(7)} ${r.name} [${r.mode}] ${r.durationMs}ms exit ${exit}\n`;
+  /* Only on a kill: the I/O-stall share of the window is the first question asked about a
+     timeout, and printing it everywhere would bury it. Every check's sample still reaches
+     telemetry. */
+  const stall = r.status === 'timeout' && r.ioStallMs !== undefined ? ` io-stall ${r.ioStallMs}ms` : '';
+  return `  ${r.status.padEnd(7)} ${r.name} [${r.mode}] ${r.durationMs}ms exit ${exit}${stall}\n`;
 }
 
 // Keep imports test-safe.
