@@ -47,7 +47,7 @@ scripts/ds-install.sh /path/to/consumer [--ref vX.Y.Z] [--eslint]
 | `.claude/two-stage-dev.marker` | ADR-019 two-stage marker (copy-if-absent; needs no filling): write-time guide injectors (editor pre-tool hooks, delegate-launcher preambles) stay silent in repos carrying it — guides bind at Stage-2 review. Standard instance doc: `--check` requires it and bootstrap re-seeds it; two-stage is the package default (ADR-019). NOTE for pre-marker consumers: the first pin bump seeds it via bootstrap — commit it together with that pin (a gitlink-only pin commit leaves it untracked). |
 | `.claude/review-guides/` | Optional additive overlays (empty by default). |
 | `.claude/skills/deep-review-refactor/SKILL.md` | Original Claude skill, pointing to its package-owned canonical body. |
-| `.agents/skills/deep-review-refactor-codex/SKILL.md` | Distinct Codex-only six-stage skill, pointing to its package-owned canonical body. |
+| `.agents/skills/deep-review-refactor-codex/SKILL.md` | Distinct Codex-runtime skill (tiered, adaptive; ADR-028), pointing to its package-owned canonical body. |
 | `.agents/skills/deep-review-refactor-codex/agents/openai.yaml` | Codex UI metadata and default review-and-fix prompt. |
 | `.claude/settings.json` | Guides-read gate wiring (ADR-016): the `Stop` + `SubagentStop` hooks. Structurally MERGED, not copy-if-absent — a consumer's existing settings survive. |
 | `AGENTS.md` | Pointer to `CLAUDE.md` for agents that read only AGENTS.md (never a second source of truth). |
@@ -92,11 +92,13 @@ and will report its dependencies as unpinned. Project-specific build/test/lint g
    boundaries, lazy-read triggers) instead of mandated pre-code reads. Stage 2
    itself needs no wiring in `CLAUDE.md` — since the 2026-07-31 ADR-019
    amendment the owner starts it by typing `/deep-review-refactor` or
-   `/deep-review-refactor-codex`. The Codex-only six-stage workflow enables safe
-   fixes by default. Stage 2 runs in a FRESH session — the build session's
-   context is already spent — over the merge-base diff plus the feature's new
-   untracked files, and an uninvoked Stage 2 leaves no repository-documentation
-   record.
+   `/deep-review-refactor-codex`. The Codex workflow is the tiered, adaptive
+   run with one cross-family final reviewer (ADR-028); a direct invocation is
+   `STANDARD` tier and enables safe fixes by default, `LIGHT` (review-only) and
+   `DEEP` being explicit opt-ins. Stage 2 runs in a FRESH session — the build
+   session's context is already spent — over the merge-base diff plus the
+   feature's new untracked files, and an uninvoked Stage 2 leaves no
+   repository-documentation record.
 
 ### Optional gate: test-to-source placement (report-only)
 
@@ -212,7 +214,8 @@ original Claude workflow is the slash command `/deep-review-refactor` with its
 existing behavior. The Codex workflow runs only after the literal
 `/deep-review-refactor-codex` command; natural-language requests,
 feature-completion state, and offers do not invoke it. A directly invoked Codex
-run defaults to the six-stage `review-and-refactor` pipeline and fixes confirmed
+run defaults to a `STANDARD`-tier, adaptive `review-and-refactor` run (Codex
+workers with one cross-family final reviewer) and fixes confirmed
 behavior-preserving findings, while `review-only` is an explicit opt-out from
 edits.
 
@@ -225,7 +228,7 @@ mandated ANCHOR guide was actually opened with a `Read`. Since the 2026-07-16
 rescope (ADR-016 Amendment) the main-session anchor set is: the corpus contract
 `review-contract.md`, its `.claude/review-guides/` overlay if present, and every
 `deep_review.required_reads` entry — the eight `profile-*` lens bodies are read by
-the mandatory fan-out's profile routes, not gated on the main transcript (though
+the TRIGGERED profile routes (ADR-028), not gated on the main transcript (though
 the AVAILABILITY of every listed overlay stays fail-closed, and the full nine-file
 corpus still loads as a deployment check). The starter sets `required_reads` to the
 three seeded instance docs. `seed-consumer.sh --check` fails if the hooks are not wired.
@@ -306,5 +309,6 @@ never worked around in consumer code. Shared rules/guides are proposed via
   `.claude/review-guides/` may be empty.
 - Claude and Codex consumer skill files are thin pointers to distinct
   package-owned bodies: the original `deep-review-refactor` for Claude and the
-  six-stage `deep-review-refactor-codex` for Codex. `seed-consumer.sh` installs
-  both, so either runtime exposes its workflow without a per-project skill fork.
+  tiered, adaptive `deep-review-refactor-codex` for Codex. Both read the shared
+  `deep-review-core.md` and add only runtime mechanics. `seed-consumer.sh`
+  installs both, so either runtime exposes its workflow without a per-project fork.
