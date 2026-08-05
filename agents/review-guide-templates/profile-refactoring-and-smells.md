@@ -7,7 +7,7 @@ type-contract, runtime, architecture-boundary, module-depth, or security
 concerns into findings from this profile except where the full rule is
 explicitly owned here.
 
-Template-Version: 3 (review-recall 2026-07-15)
+Template-Version: 4 (sonarjs-gate-boundary 2026-07-28)
 
 Guide filenames in the provenance notes below refer to the RETIRED pre-profile
 corpus (deleted in the profile rewrite, alive in git history); `TRACEABILITY.md`
@@ -79,6 +79,16 @@ abstraction) is the refactor target.
   abstraction genuinely the same concept in every caller, or three things that
   merely look alike today? When unsure, leave duplication under the rule of
   three.
+- **Where a counted complexity form already has a machine owner, reference the
+  gate.** A repo that runs the `sonarjs` disposition matrix (ADR-026) hands the
+  mechanically-counted forms to it — the specific ones its own matrix marks
+  `enabled`, typically cognitive/cyclomatic complexity, nesting and control-flow
+  depth, switch-case count, and identical function bodies. Do not re-flag those
+  by hand; cite the rule. **Check:** is the repo's matrix `enabled` on the rule
+  that owns this exact form? Only then defer. Everything in this section that no
+  rule counts stays a finding here: essential versus accidental, change
+  amplification, cognitive load, and the duplication-versus-wrong-abstraction
+  judgment. Partial gate coverage never silently retires an uncovered ceiling.
 
 ## Code-smells taxonomy
 

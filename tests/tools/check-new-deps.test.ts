@@ -5,7 +5,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isAllowedSpec, isSourceSpec, evaluate, OperationalError } from '../../tools/check-new-deps.mjs';
+import {
+  isAllowedSpec,
+  isSourceSpec,
+  evaluate,
+  evaluatePnpm,
+  parsePnpmLock,
+  OperationalError,
+} from '../../tools/check-new-deps.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TOOL = path.join(HERE, '..', '..', 'tools', 'check-new-deps.mjs');
@@ -674,17 +681,17 @@ test('git: nothing staged → exit 0', () => {
   assert.equal(r.code, 0);
 });
 
-test('git: a tracked pnpm-lock.yaml stands the check down (D10) → exit 0', () => {
+test('git: a tracked pnpm-lock.yaml selects the pnpm path, it no longer stands the check down (D10, ADR-027)', () => {
   const { dir, env } = setupRepo();
   write(dir, 'package.json', mkManifest({ dependencies: {} }));
-  write(dir, 'pnpm-lock.yaml', "lockfileVersion: '9.0'\n");
+  write(dir, 'pnpm-lock.yaml', "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n");
   git(dir, env, 'add', '-A');
   git(dir, env, 'commit', '-q', '-m', 'base');
   write(dir, 'package.json', mkManifest({ dependencies: { a: '>=1.0.0' } }));
   git(dir, env, 'add', 'package.json');
   const r = runTool(dir, env);
-  assert.equal(r.code, 0);
-  assert.match(r.out, /pnpm\/yarn lockfile tracked/);
+  assert.equal(r.code, 1, r.err);
+  assert.match(r.out, /disallowed version spec/);
 });
 
 test('git: run outside any git repo → exit 2', () => {
@@ -740,14 +747,16 @@ test('git: file:vendor/dev-standards new dep with bound entries passes → exit 
   assert.match(r.out, /check-new-deps: ok/);
 });
 
-test('git: D10 pnpm/yarn stand-down probes the repo top-level from a subdirectory → exit 0', () => {
-  /* The ls-files pnpm/yarn probe is root-relative: reverting only it to a
-     cwd-relative pathspec leaves the existing subdir test green but misses the
-     tracked pnpm-lock.yaml from a subdir, mis-reads the repo as npm, and the
-     forbidden-spec dep false-fails (exit 1) instead of standing the check down. */
+test('git: the D10 package-manager probe reads the repo top-level from a subdirectory', () => {
+  /* The ls-files pnpm/yarn probe is root-relative: reverting it to a cwd-relative
+     pathspec leaves the existing subdir test green but misses the tracked
+     pnpm-lock.yaml from a subdir and mis-reads the repo as npm — which now shows
+     up as a bogus "without a staged package-lock.json" finding instead of the
+     pnpm grammar finding. Staged manifest paths are root-relative for the same
+     reason, so this pins both. */
   const { dir, env } = setupRepo();
   write(dir, 'package.json', mkManifest({ dependencies: {} }));
-  write(dir, 'pnpm-lock.yaml', "lockfileVersion: '9.0'\n");
+  write(dir, 'pnpm-lock.yaml', "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n");
   git(dir, env, 'add', '-A');
   git(dir, env, 'commit', '-q', '-m', 'base');
   write(dir, 'package.json', mkManifest({ dependencies: { a: '>=1.0.0' } }));
@@ -755,8 +764,8 @@ test('git: D10 pnpm/yarn stand-down probes the repo top-level from a subdirector
   const sub = path.join(dir, 'sub');
   fs.mkdirSync(sub, { recursive: true });
   const r = runTool(sub, env);
-  assert.equal(r.code, 0, r.err || r.out);
-  assert.match(r.out, /pnpm\/yarn lockfile tracked/);
+  assert.equal(r.code, 1, r.err || r.out);
+  assert.match(r.out, /package\.json: new dependency "a" \(dependencies\) has a disallowed version spec/);
 });
 
 test('git: a git child killed by a signal at the HEAD probe is operational → exit 2', () => {
@@ -801,4 +810,513 @@ test('git: stdout survives pipe backpressure — the last of ~3000 findings is n
   assert.equal(r.status, 1, r.stderr);
   assert.ok((r.stdout ?? '').length > 128 * 1024, `stdout was ${(r.stdout ?? '').length} bytes`);
   assert.match(r.stdout ?? '', /new dependency "pkg-3000"/);
+});
+
+/* ─────────────────────────────────────────────────────────────── pnpm ──── */
+
+type PnpmEntry = { specifier: string; version: string };
+type PnpmImporters = Record<string, Record<string, Record<string, PnpmEntry>>>;
+
+/* Emits the exact shape pnpm writes: 2-space steps, scoped names single-quoted,
+   an importer with no deps inlined as `{}`. */
+function mkPnpmLock(importers: PnpmImporters, opts: { version?: string; packages?: string[] } = {}): string {
+  const lines = [`lockfileVersion: '${opts.version ?? '9.0'}'`, '', 'importers:', ''];
+  for (const [dir, sections] of Object.entries(importers)) {
+    if (Object.keys(sections).length === 0) {
+      lines.push(`  ${dir}: {}`, '');
+      continue;
+    }
+    lines.push(`  ${dir}:`);
+    for (const [sec, deps] of Object.entries(sections)) {
+      lines.push(`    ${sec}:`);
+      for (const [name, entry] of Object.entries(deps)) {
+        lines.push(`      ${name.startsWith('@') ? `'${name}'` : name}:`);
+        lines.push(`        specifier: ${entry.specifier}`);
+        lines.push(`        version: ${entry.version}`);
+      }
+    }
+    lines.push('');
+  }
+  if (opts.packages) lines.push('packages:', '', ...opts.packages, '');
+  return lines.join('\n');
+}
+
+const REG = (specifier: string, version = specifier.replace(/^[\^~]/, '')): PnpmEntry => ({ specifier, version });
+
+function pnpmManifest(over: Partial<{ path: string; importer: string; base: unknown; staged: unknown }> = {}) {
+  return { path: 'package.json', importer: '.', base: {}, staged: {}, ...over };
+}
+
+test('pnpm parser: reads importers, quoted scoped keys, empty importers and nested paths', () => {
+  const lock = parsePnpmLock(
+    mkPnpmLock({
+      '.': { devDependencies: { eslint: REG('^9', '9.39.5') } },
+      'apps/client': {
+        dependencies: {
+          '@ariadne/engine': { specifier: 'workspace:*', version: 'link:../../packages/engine' },
+          'better-auth': REG('1.6.23', '1.6.23(react@19.2.8)(react-dom@19.2.8(react@19.2.8))'),
+        },
+      },
+      'packages/engine': {},
+    }),
+  );
+  assert.deepEqual([...lock.importers.keys()], ['.', 'apps/client', 'packages/engine']);
+  assert.deepEqual(lock.importers.get('.')?.get('devDependencies')?.get('eslint'), {
+    specifier: '^9',
+    version: '9.39.5',
+  });
+  assert.deepEqual(lock.importers.get('apps/client')?.get('dependencies')?.get('@ariadne/engine'), {
+    specifier: 'workspace:*',
+    version: 'link:../../packages/engine',
+  });
+  assert.equal(lock.importers.get('packages/engine')?.size, 0);
+  assert.deepEqual(lock.sourceResolutions, []);
+});
+
+test('pnpm parser: strips quotes from specifiers, including the YAML \'\' escape', () => {
+  const text = ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', "      a:", "        specifier: '>=1.2.3'", '        version: 1.2.3'].join('\n');
+  assert.equal(parsePnpmLock(text).importers.get('.')?.get('dependencies')?.get('a')?.specifier, '>=1.2.3');
+  const quoted = ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', "      'it''s':", '        specifier: 1.0.0', '        version: 1.0.0'].join('\n');
+  assert.ok(parsePnpmLock(quoted).importers.get('.')?.get('dependencies')?.has("it's"));
+});
+
+test('pnpm parser: flags a packages: resolution that is not a plain integrity', () => {
+  const lock = parsePnpmLock(
+    mkPnpmLock(
+      { '.': { dependencies: { a: REG('1.2.3') } } },
+      {
+        packages: [
+          '  a@1.2.3:',
+          '    resolution: {integrity: sha512-aaa}',
+          '  b@2.0.0:',
+          '    resolution: {tarball: https://evil.example/b.tgz}',
+        ],
+      },
+    ),
+  );
+  assert.deepEqual(
+    lock.sourceResolutions.map((r) => r.package),
+    ['b@2.0.0'],
+  );
+});
+
+/* The refusal list is the fail-open frontier: every one of these must be a loud
+   OperationalError, never a silently empty importer map that proves every dep. */
+const PARSER_REFUSALS: Array<[string, string[]]> = [
+  ['unsupported lockfileVersion', ["lockfileVersion: '10.0'", '', 'importers:', '', '  .: {}']],
+  ['missing lockfileVersion', ['importers:', '', '  .: {}']],
+  ['tab', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '\t\tdependencies: {}']],
+  ['anchor', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies: &anchor']],
+  ['alias', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies: *anchor']],
+  ['tag', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies: !!map']],
+  ['block scalar', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies: |']],
+  ['merge key', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    <<: *base']],
+  ['comment', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    # injected', '    dependencies: {}']],
+  ['sequence', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    - dependencies']],
+  ['flow collection', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .: {dependencies: {a: 1}}']],
+  ['duplicate importer', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .: {}', '  .: {}']],
+  ['duplicate section', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '      a:', '        specifier: 1.0.0', '        version: 1.0.0', '    dependencies:']],
+  ['duplicate dependency', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '      a:', '        specifier: 1.0.0', '        version: 1.0.0', '      a:', '        specifier: 9.9.9', '        version: 9.9.9']],
+  ['section before importer', ["lockfileVersion: '9.0'", '', 'importers:', '', '    dependencies:']],
+  ['dependency before section', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '      a:']],
+  ['field before dependency', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '        specifier: 1.0.0']],
+  ['unexpected indentation', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '      a:', '        specifier: 1.0.0', '          extra: x']],
+  ['unparsable line', ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '      a:', '        specifier 1.0.0']],
+];
+
+test('pnpm parser: refuses every construct it cannot model, loudly', () => {
+  for (const [label, lines] of PARSER_REFUSALS) {
+    assert.throws(() => parsePnpmLock(lines.join('\n')), OperationalError, `"${label}" must be refused`);
+  }
+});
+
+test('pnpm: a dep-bearing change with no staged lockfile is a finding', () => {
+  const findings = evaluatePnpm({
+    manifests: [pnpmManifest({ path: 'apps/client/package.json', importer: 'apps/client', staged: { dependencies: { a: '1.2.3' } } })],
+    lockfileStaged: false,
+  });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0] ?? '', /^apps\/client\/package\.json: dependency change staged without a staged pnpm-lock\.yaml/);
+});
+
+test('pnpm: a new dep pinned by its own importer and section passes', () => {
+  const findings = evaluatePnpm({
+    manifests: [pnpmManifest({ path: 'apps/client/package.json', importer: 'apps/client', staged: { dependencies: { a: '1.2.3' } } })],
+    stagedLock: parsePnpmLock(mkPnpmLock({ 'apps/client': { dependencies: { a: REG('1.2.3') } } })),
+    lockfileStaged: true,
+  });
+  assert.deepEqual(findings, []);
+});
+
+test('pnpm: a new dep proven by ANOTHER importer or ANOTHER section is not proven', () => {
+  const staged = { dependencies: { a: '1.2.3' } };
+  const wrongImporter = evaluatePnpm({
+    manifests: [pnpmManifest({ path: 'apps/client/package.json', importer: 'apps/client', staged })],
+    stagedLock: parsePnpmLock(mkPnpmLock({ '.': { dependencies: { a: REG('1.2.3') } } })),
+    lockfileStaged: true,
+  });
+  assert.match(wrongImporter[0] ?? '', /is not pinned in the staged pnpm-lock\.yaml/);
+  const wrongSection = evaluatePnpm({
+    manifests: [pnpmManifest({ staged })],
+    stagedLock: parsePnpmLock(mkPnpmLock({ '.': { devDependencies: { a: REG('1.2.3') } } })),
+    lockfileStaged: true,
+  });
+  assert.match(wrongSection[0] ?? '', /is not pinned in the staged pnpm-lock\.yaml/);
+});
+
+test('pnpm: specifier equality alone does not prove a new dep — the resolution must match too', () => {
+  /* The forgery the "non-empty version" test would have passed: the manifest asks
+     for a registry package, the hand-written lock resolves it to a local path. */
+  for (const version of ['link:../../evil', 'file:../evil.tgz', 'https://evil.example/a.tgz', '']) {
+    const findings = evaluatePnpm({
+      manifests: [pnpmManifest({ staged: { dependencies: { a: '1.2.3' } } })],
+      stagedLock: parsePnpmLock(mkPnpmLock({ '.': { dependencies: { a: { specifier: '1.2.3', version } } } })),
+      lockfileStaged: true,
+    });
+    assert.match(findings[0] ?? '', /not the resolution its spec implies/, `version ${JSON.stringify(version)}`);
+  }
+});
+
+test('pnpm: workspace:/catalog: specs are allowed but bound to the resolution they imply', () => {
+  const ok = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { dependencies: { '@a/b': 'workspace:*', c: 'catalog:default' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({
+        '.': {
+          dependencies: {
+            '@a/b': { specifier: 'workspace:*', version: 'link:packages/b' },
+            c: { specifier: 'catalog:default', version: '1.2.3' },
+          },
+        },
+      }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.deepEqual(ok, []);
+  const laundered = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { dependencies: { '@a/b': 'workspace:*' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { dependencies: { '@a/b': { specifier: 'workspace:*', version: 'link:https://evil.example/b' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.match(laundered[0] ?? '', /not the resolution its spec implies/);
+});
+
+test('pnpm: the spec grammar still applies, with workspace:/catalog: carved out', () => {
+  const findings = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { dependencies: { a: '>=1.0.0', b: 'workspace:^' } } })],
+    lockfileStaged: false,
+  });
+  assert.equal(findings.filter((f) => /disallowed version spec/.test(f)).length, 1);
+  assert.match(findings.find((f) => /disallowed/.test(f)) ?? '', /"a"/);
+});
+
+test('pnpm: an existing dep swapped to a non-registry source spec is a finding', () => {
+  const findings = evaluatePnpm({
+    manifests: [pnpmManifest({ base: { dependencies: { a: '1.2.3' } }, staged: { dependencies: { a: 'git+https://evil.example/a.git' } } })],
+    stagedLock: parsePnpmLock(mkPnpmLock({ '.': { dependencies: { a: { specifier: 'git+https://evil.example/a.git', version: '1.2.3' } } } })),
+    lockfileStaged: true,
+  });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0] ?? '', /changed to a non-registry source spec/);
+});
+
+test('pnpm: an existing registry dep whose lock resolution turned into a link is a finding', () => {
+  const findings = evaluatePnpm({
+    manifests: [pnpmManifest({ base: { dependencies: { a: '1.2.3' } }, staged: { dependencies: { a: '1.2.3' } } })],
+    stagedLock: parsePnpmLock(mkPnpmLock({ '.': { dependencies: { a: { specifier: '1.2.3', version: 'link:../evil' } } } })),
+    lockfileStaged: true,
+  });
+  assert.match(findings[0] ?? '', /not the resolution its spec implies/);
+});
+
+test('pnpm: a lock-only commit still reports a redirected packages: resolution', () => {
+  const findings = evaluatePnpm({
+    manifests: [],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { dependencies: { a: REG('1.2.3') } } }, { packages: ['  a@1.2.3:', '    resolution: {tarball: https://evil.example/a.tgz}'] }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0] ?? '', /resolves "a@1\.2\.3" from a non-registry source/);
+});
+
+test('pnpm: a non-object staged manifest is operational, not a silent pass', () => {
+  /* `null` is the sharp one: it is valid JSON, and a `filter(Boolean)` over the
+     manifest list would drop it silently instead of faulting. */
+  for (const staged of [[], 'x', 42, null] as unknown[]) {
+    assert.throws(
+      () => evaluatePnpm({ manifests: [{ path: 'package.json', importer: '.', base: {}, staged }], lockfileStaged: false }),
+      OperationalError,
+      `staged ${JSON.stringify(staged)} must be operational`,
+    );
+  }
+});
+
+function setupPnpmRepo(): { dir: string; env: NodeJS.ProcessEnv } {
+  const { dir, env } = setupRepo();
+  write(dir, 'package.json', mkManifest({ dependencies: {} }));
+  write(dir, 'apps/client/package.json', mkManifest({ dependencies: {} }));
+  write(dir, 'pnpm-lock.yaml', mkPnpmLock({ '.': {}, 'apps/client': {} }));
+  git(dir, env, 'add', '-A');
+  git(dir, env, 'commit', '-q', '-m', 'base');
+  return { dir, env };
+}
+
+test('pnpm git: a new dep in a WORKSPACE manifest with no staged lockfile → exit 1', () => {
+  /* The regression this whole path exists for: before pnpm support the tool
+     stood down here and exited 0, so any dependency reached a commit unchecked. */
+  const { dir, env } = setupPnpmRepo();
+  write(dir, 'apps/client/package.json', mkManifest({ dependencies: { 'left-pad': '1.3.0' } }));
+  git(dir, env, 'add', 'apps/client/package.json');
+  const r = runTool(dir, env);
+  assert.equal(r.code, 1, r.err);
+  assert.match(r.out, /apps\/client\/package\.json: dependency change staged without a staged pnpm-lock\.yaml/);
+});
+
+test('pnpm git: manifest + matching lockfile staged together → exit 0', () => {
+  const { dir, env } = setupPnpmRepo();
+  write(dir, 'apps/client/package.json', mkManifest({ dependencies: { 'left-pad': '1.3.0' } }));
+  write(dir, 'pnpm-lock.yaml', mkPnpmLock({ '.': {}, 'apps/client': { dependencies: { 'left-pad': REG('1.3.0') } } }));
+  git(dir, env, 'add', '-A');
+  const r = runTool(dir, env);
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.match(r.out, /check-new-deps: ok/);
+});
+
+test('pnpm git: reads the INDEX, never the working tree', () => {
+  const { dir, env } = setupPnpmRepo();
+  write(dir, 'package.json', mkManifest({ dependencies: { evil: '9.9.9' } }));
+  const r = runTool(dir, env);
+  assert.equal(r.code, 0, r.err);
+});
+
+test('pnpm git: a tracked yarn.lock still stands the gate down', () => {
+  const { dir, env } = setupPnpmRepo();
+  write(dir, 'yarn.lock', '# yarn\n');
+  git(dir, env, 'add', 'yarn.lock');
+  write(dir, 'package.json', mkManifest({ dependencies: { evil: '9.9.9' } }));
+  git(dir, env, 'add', 'package.json');
+  const r = runTool(dir, env);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /check inactive \(yarn lockfile tracked\)/);
+});
+
+test('pnpm git: a deleted manifest does not fault on a gone blob', () => {
+  const { dir, env } = setupPnpmRepo();
+  fs.rmSync(path.join(dir, 'apps/client/package.json'));
+  git(dir, env, 'add', '-A');
+  const r = runTool(dir, env);
+  assert.equal(r.code, 0, r.err + r.out);
+});
+
+test('pnpm git: a brand-new workspace manifest has no base, so all its deps must be pinned', () => {
+  const { dir, env } = setupPnpmRepo();
+  write(dir, 'packages/new/package.json', mkManifest({ dependencies: { a: '1.2.3' } }));
+  /* The lock IS staged (an importer was added) — it just never resolved `a`, so
+     the missing-importer-entry path is what fails, not the missing-lockfile one. */
+  write(dir, 'pnpm-lock.yaml', mkPnpmLock({ '.': {}, 'apps/client': {}, 'packages/new': {} }));
+  git(dir, env, 'add', '-A');
+  const r = runTool(dir, env);
+  assert.equal(r.code, 1, r.err);
+  assert.match(r.out, /packages\/new\/package\.json: new dependency "a" \(dependencies\) is not pinned/);
+});
+
+const BASE_LOCK = () => parsePnpmLock(mkPnpmLock({ 'apps/client': { dependencies: { a: REG('1.2.3') } } }));
+
+test('pnpm: a dep injected by editing ONLY the lockfile is a finding', () => {
+  const findings = evaluatePnpm({
+    manifests: [],
+    baseLock: BASE_LOCK(),
+    stagedLock: parsePnpmLock(mkPnpmLock({ 'apps/client': { dependencies: { a: REG('1.2.3'), evil: REG('9.9.9') } } })),
+    lockfileStaged: true,
+  });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0] ?? '', /adds "evil" to importers\["apps\/client"\]\.dependencies .* with no matching package\.json change/);
+});
+
+test('pnpm: a declared spec rewritten by editing ONLY the lockfile is a finding', () => {
+  const findings = evaluatePnpm({
+    manifests: [],
+    baseLock: BASE_LOCK(),
+    stagedLock: parsePnpmLock(mkPnpmLock({ 'apps/client': { dependencies: { a: REG('9.9.9') } } })),
+    lockfileStaged: true,
+  });
+  assert.match(findings[0] ?? '', /changed the declared spec of "a" .* with no matching package\.json change/);
+});
+
+test('pnpm: the same lock-only edit is NOT reported when that manifest is staged with it', () => {
+  const findings = evaluatePnpm({
+    manifests: [
+      pnpmManifest({
+        path: 'apps/client/package.json',
+        importer: 'apps/client',
+        base: { dependencies: { a: '1.2.3' } },
+        staged: { dependencies: { a: '9.9.9' } },
+      }),
+    ],
+    baseLock: BASE_LOCK(),
+    stagedLock: parsePnpmLock(mkPnpmLock({ 'apps/client': { dependencies: { a: REG('9.9.9') } } })),
+    lockfileStaged: true,
+  });
+  assert.deepEqual(findings, []);
+});
+
+test('pnpm: a plain transitive version bump under an untouched manifest stays quiet', () => {
+  const findings = evaluatePnpm({
+    manifests: [],
+    baseLock: BASE_LOCK(),
+    stagedLock: parsePnpmLock(mkPnpmLock({ 'apps/client': { dependencies: { a: { specifier: '1.2.3', version: '1.2.3(react@19.2.8)' } } } })),
+    lockfileStaged: true,
+  });
+  assert.deepEqual(findings, []);
+});
+
+test('pnpm: one packages: key resolving two different ways across the commit is a finding', () => {
+  const lock = (resolution: string) =>
+    parsePnpmLock(mkPnpmLock({ '.': { dependencies: { a: REG('1.2.3') } } }, { packages: ['  a@1.2.3:', `    resolution: {integrity: ${resolution}}`] }));
+  const findings = evaluatePnpm({
+    manifests: [],
+    baseLock: lock('sha512-good'),
+    stagedLock: lock('sha512-evil'),
+    lockfileStaged: true,
+  });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0] ?? '', /changed the resolution of "a@1\.2\.3" .* cannot resolve two ways/);
+});
+
+test('pnpm: moving an existing registry dep onto a workspace link is reported', () => {
+  const findings = evaluatePnpm({
+    manifests: [pnpmManifest({ base: { dependencies: { a: '1.2.3' } }, staged: { dependencies: { a: 'workspace:*' } } })],
+    lockfileStaged: false,
+  });
+  assert.ok(findings.some((f: string) => /changed from "1\.2\.3" to the workspace-internal spec "workspace:\*"/.test(f)), findings.join('\n'));
+});
+
+test('pnpm: an unchanged workspace dep produces no transition finding', () => {
+  const findings = evaluatePnpm({
+    manifests: [pnpmManifest({ base: { dependencies: { a: 'workspace:*' } }, staged: { dependencies: { a: 'workspace:*' } } })],
+    lockfileStaged: false,
+  });
+  assert.deepEqual(findings, []);
+});
+
+test('pnpm git: a lock-only commit that injects a dependency → exit 1', () => {
+  const { dir, env } = setupPnpmRepo();
+  write(dir, 'pnpm-lock.yaml', mkPnpmLock({ '.': {}, 'apps/client': { dependencies: { evil: REG('9.9.9') } } }));
+  git(dir, env, 'add', 'pnpm-lock.yaml');
+  const r = runTool(dir, env);
+  assert.equal(r.code, 1, r.err);
+  assert.match(r.out, /adds "evil" to importers\["apps\/client"\]\.dependencies/);
+});
+
+test('pnpm git: an unparsable HEAD lockfile is reported, not silently swallowed', () => {
+  /* The staged lock is still parsed strictly, so this commit is fully judged; what
+     is lost is the drift BASELINE. That loss is said out loud (exit 1) rather than
+     blocking the commit on a defect in history (exit 2) or passing in silence. */
+  const { dir, env } = setupPnpmRepo();
+  write(dir, 'pnpm-lock.yaml', 'lockfileVersion: nonsense\n');
+  git(dir, env, 'add', '-A');
+  git(dir, env, 'commit', '-q', '-m', 'broken base lock');
+  write(dir, 'pnpm-lock.yaml', mkPnpmLock({ '.': {}, 'apps/client': {} }));
+  git(dir, env, 'add', 'pnpm-lock.yaml');
+  const r = runTool(dir, env);
+  assert.equal(r.code, 1, r.err + r.out);
+  assert.match(r.out, /HEAD pnpm-lock\.yaml is unreadable .* have no baseline/);
+});
+
+test('pnpm parser: an unknown field parked under a dependency is refused', () => {
+  const lines = ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '      a:', '        specifier: 1.0.0', '        version: link:../evil', '        _real: 1.0.0'];
+  assert.throws(() => parsePnpmLock(lines.join('\n')), OperationalError);
+});
+
+test('pnpm: the one grammar-legal source spec cannot launder a resolution', () => {
+  /* `file:vendor/dev-standards` is the single source spec isAllowedSpec accepts,
+     so it is the only one that reaches the lock side on a NEW dep. Bind it. */
+  const findings = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { devDependencies: { 'dev-standards': 'file:vendor/dev-standards' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { devDependencies: { 'dev-standards': { specifier: 'file:vendor/dev-standards', version: 'link:../../evil' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.match(findings[0] ?? '', /not the resolution its spec implies/);
+  const honest = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { devDependencies: { 'dev-standards': 'file:vendor/dev-standards' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { devDependencies: { 'dev-standards': { specifier: 'file:vendor/dev-standards', version: 'file:vendor/dev-standards(eslint@9.39.5)' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.deepEqual(honest, []);
+});
+
+test('pnpm: staging a manifest is not cover for a name only the lockfile introduces', () => {
+  /* The importer IS staged (an unrelated dep moved), but `evil` appears nowhere
+     in the manifest — a per-importer skip would have hidden it. */
+  const findings = evaluatePnpm({
+    manifests: [
+      pnpmManifest({
+        path: 'apps/client/package.json',
+        importer: 'apps/client',
+        base: { dependencies: { a: '1.2.3' } },
+        staged: { dependencies: { a: '1.2.4' } },
+      }),
+    ],
+    baseLock: BASE_LOCK(),
+    stagedLock: parsePnpmLock(mkPnpmLock({ 'apps/client': { dependencies: { a: REG('1.2.4'), evil: REG('9.9.9') } } })),
+    lockfileStaged: true,
+  });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0] ?? '', /adds "evil" to importers\["apps\/client"\]\.dependencies/);
+});
+
+test('pnpm parser: a second importers: block is refused', () => {
+  const lines = ["lockfileVersion: '9.0'", '', 'importers:', '', '  .: {}', '', 'importers:', '', '  apps/client: {}'];
+  assert.throws(() => parsePnpmLock(lines.join('\n')), OperationalError);
+});
+
+test('pnpm parser: a BLOCK-form resolution is refused, not skimmed', () => {
+  /* The redirect hides one line below a clean-looking `resolution:` header, where
+     a line-oriented scan never looks. v9 only ever writes the flow form. */
+  const lines = [
+    "lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '      a:',
+    '        specifier: 1.2.3', '        version: 1.2.3', '', 'packages:', '', '  a@1.2.3:',
+    '    resolution:', '      tarball: https://evil.example/a.tgz',
+  ];
+  assert.throws(() => parsePnpmLock(lines.join('\n')), OperationalError);
+});
+
+test('pnpm parser: a lockfile with no importers block is refused', () => {
+  assert.throws(() => parsePnpmLock("lockfileVersion: '9.0'\n"), OperationalError);
+});
+
+test('pnpm: a workspace link that climbs out of the repository is a finding', () => {
+  const escaping = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { dependencies: { '@a/b': 'workspace:*' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { dependencies: { '@a/b': { specifier: 'workspace:*', version: 'link:../../../../tmp/evil' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.match(escaping[0] ?? '', /not the resolution its spec implies/);
+  /* The same climb is legitimate from a nested importer that has the depth for it. */
+  const nested = evaluatePnpm({
+    manifests: [pnpmManifest({ path: 'apps/client/package.json', importer: 'apps/client', staged: { dependencies: { '@a/b': 'workspace:*' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ 'apps/client': { dependencies: { '@a/b': { specifier: 'workspace:*', version: 'link:../../packages/b' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.deepEqual(nested, []);
+  const absolute = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { dependencies: { '@a/b': 'workspace:*' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { dependencies: { '@a/b': { specifier: 'workspace:*', version: 'link:/tmp/evil' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.match(absolute[0] ?? '', /not the resolution its spec implies/);
 });

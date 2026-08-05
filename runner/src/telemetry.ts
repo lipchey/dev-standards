@@ -6,7 +6,8 @@ import type { CheckResult } from './types.ts';
 import { BYPASS_REASON_MAX } from './redact.ts';
 
 /* Effectiveness telemetry: one append-only JSONL line per verify run, home-dir sunk
-   and fail-open (see docs/effectiveness-plan.md §1/§2). Deliberately simpler than
+   and fail-open (see docs/plans/archive/2026-07-10-effectiveness-plan.md §1/§2).
+   Deliberately simpler than
    report.ts's confined atomic write — the sink is a single trusted home-dir file, so
    there is no repo-controlled path to confine, only a directory to provision. */
 

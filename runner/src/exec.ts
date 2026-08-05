@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncOptions, SpawnSyncReturns } from 'node:child_process';
+import fs from 'node:fs';
 import type { Check, CheckMode, CheckResult, TierName } from './types.ts';
 import { capAndRedactBypassReason } from './redact.ts';
 
@@ -193,6 +194,29 @@ export function expandArgv(argv: string[], filesByName: Map<string, string[]>): 
   return expanded;
 }
 
+/* Linux PSI (`/proc/pressure/io`, `full` line): cumulative microseconds during which EVERY
+   runnable task was stalled on I/O. Sampled around each check so a killed check carries the
+   stall accrued inside its own window. Without it a check SIGKILLed at its timeout is
+   indistinguishable from a check hung on its own: a near-full stall means the host was
+   I/O-starved (parallel runs sharing one machine), a near-zero one means the process hung on
+   something of its own and the stack is worth chasing. Format:
+   `full avg10=0.00 avg60=0.00 avg300=0.00 total=70612345`. */
+export function parseIoStallUs(text: string): number | null {
+  const match = /^full .* total=(\d+)/m.exec(text);
+  const total = match?.[1];
+  return total === undefined ? null : Number(total);
+}
+
+/* Absent on macOS, and on a kernel booted `psi=0` the file EXISTS but reads EOPNOTSUPP — a
+   missing sample is not an error, so every failure mode collapses to null. */
+function readIoStallUs(): number | null {
+  try {
+    return parseIoStallUs(fs.readFileSync('/proc/pressure/io', 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function skipped(name: string, tier: TierName, mode: CheckMode): CheckResult {
   return { name, tier, status: 'skipped', exitCode: null, durationMs: 0, mode };
 }
@@ -212,6 +236,7 @@ export function runCheck(input: RunCheckInput): CheckResult {
   if (file === undefined) return skipped(check.name, tier, mode);
 
   const startedAt = Date.now();
+  const stallBefore = readIoStallUs();
   // Cap the check at whatever tier budget is left, but never longer than its own timeout.
   const timeoutMs = Math.min(check.timeout_seconds * 1000, remainingMs ?? Number.POSITIVE_INFINITY);
   // `stdio: 'inherit'` streams check output live to the terminal (a check IS the user-facing
@@ -219,13 +244,16 @@ export function runCheck(input: RunCheckInput): CheckResult {
   // shared via `spawnGroup`; the timeout/error/status classification below is unchanged.
   const { result, timedOut } = spawnGroup(expanded, cwd, timeoutMs, 'inherit');
   const durationMs = Date.now() - startedAt;
+  const stallAfter = readIoStallUs();
+  const ioStallMs =
+    stallBefore === null || stallAfter === null ? undefined : Math.round((stallAfter - stallBefore) / 1000);
 
   /* Ordered, mutually exclusive classification, checked top to bottom. The first five rungs
      are operational or clean outcomes; only the last rung is a genuine finding-fail, and only
      there may a bypassable check be relaxed. This keeps a broken/missing/killed check — or a tool
      signalling its own operational failure via a declared exit code — from ever collapsing into a
      plain 'fail' (which would let it be bypassed or silently pass a tier). */
-  const base = { name: check.name, tier, durationMs, mode };
+  const base = { name: check.name, tier, durationMs, mode, ...(ioStallMs === undefined ? {} : { ioStallMs }) };
 
   // A reaped timeout comes back through spawnGroup's flag; classify it BEFORE the raw
   // ETIMEDOUT error (still set on `result`) so it is not mistaken for a spawn fault.

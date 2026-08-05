@@ -89,6 +89,17 @@ export default tseslint.config(
     files: ["src/**/*.ts", "src/**/*.tsx"],
     ignores: ["**/src/contracts/wire/**", "**/generated/**", "**/*.d.ts"],
   }),
+  /* SonarJS — OPT-IN, and deliberately not seeded active (ADR-026): the factory
+     ships no rule list, so it only builds once this repo owns a disposition for
+     EVERY rule of the installed plugin. Add `sonarjs` to the dev-standards/eslint
+     import, put the matrix in its own module, and uncomment:
+       ...sonarjs({ dispositions, files: ["src/**\/*.ts", "src/**\/*.tsx"] }),
+     Each entry is { disposition: "error" | "off", reason, note?, options? }.
+     `reason` is closed: enabled | overlap:<ruleId> | owned-elsewhere:<gate> |
+     hotspot-review | unproven | style-not-defect | cost-exceeds-value; every
+     reason but `enabled` needs a non-empty note. An ENABLED rule must restate
+     every value the plugin would merge in from meta.defaultOptions — a partial
+     options object still inherits the rest. `warn` is rejected. */
   /* JS config files sit outside tsconfig — typed rules crash on them. globals.node
      keeps no-undef quiet on `process` etc.; merge the languageOptions so this block
      does not clobber disableTypeChecked's parser reset (bare `languageOptions: { globals }`

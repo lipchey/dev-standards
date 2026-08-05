@@ -1,5 +1,8 @@
 # Architecture Decision Records
 
+Status: **live decision log**. Accepted decisions remain current until an amendment or
+new ADR explicitly supersedes them; retired decisions are historical constraints.
+
 The canonical ADR log. Referencing a new `ADR-0NN` id from code, a skill body, or
 a plan requires a matching entry here (CLAUDE.md ADR discipline).
 
@@ -14,6 +17,33 @@ standalone record. **ADR-006** (workflow state enum + frozen transition/seat tab
 **ADR-009** (workflow locked transactions + auto-advance) were workflow-internal
 decisions retired with the `workflow/` removal (2026-07-10) and are not referenced by
 current code, so they get no standalone entry here.
+
+## Index
+
+| ADR | Status | Decision |
+| --- | --- | --- |
+| ADR-003 | Accepted | One canonical source per guide/skill body |
+| ADR-007 | Accepted | `deep_review` is an optional top-level config block |
+| ADR-008 | Retired | Autonomous write-capable Codex reviewer seat |
+| ADR-010 | Accepted | Skill wrappers are static pointers |
+| ADR-011 | Retired | Automatic cross-model review-chain workflow |
+| ADR-012 | Accepted | Landing through standalone handoff; no local merge verb |
+| ADR-013 | Accepted | Fix loop verified under the merge standard |
+| ADR-014 | Accepted | Mechanical placement rules and operational naming standards |
+| ADR-015 | Accepted | Constant/type placement stays a review judgment |
+| ADR-016 | Accepted | Transcript-backed required-guide gate |
+| ADR-017 | Accepted | Existing-dependency source-swap detection |
+| ADR-018 | Accepted | Named owners for gate floor, profiles, and recall ratchet |
+| ADR-019 | Accepted | Two-stage development |
+| ADR-020 | Accepted | Codex per-profile fan-out |
+| ADR-021 | Accepted | Test-to-source placement is a lens plus report-only assist |
+| ADR-022 | Accepted | Comparison literals become a machine gate |
+| ADR-023 | Accepted | Package boundaries require a layer worth isolating |
+| ADR-024 | Accepted | Fix every valid finding; escalate cost/benefit decisions |
+| ADR-025 | Accepted | Distinct Codex-only deep-review skill |
+| ADR-026 | Accepted | SonarJS machinery upstream, rule matrix in the consumer |
+| ADR-027 | Accepted | `check-new-deps` proves pnpm workspaces |
+| ADR-028 | Accepted | Shared deep-review core with adaptive tiered topology |
 
 ---
 
@@ -458,7 +488,7 @@ alias, or local path (a supply-chain source SWAP) passed unflagged. A v0.20.x
 attempt was backed out because a `://` regex is not a robust classifier (misses
 scp-git `git@host:` and bare `user/repo`) and because the lock-only vector,
 section precedence, and blocking posture were undecided. Design +
-Gate P/C: `docs/source-swap-detection-plan.md`.
+Gate P/C: `docs/plans/archive/2026-07-15-source-swap-detection-plan.md`.
 
 ### Decision
 
@@ -511,7 +541,7 @@ Gate P/C: `docs/source-swap-detection-plan.md`.
 
 - **Status:** Accepted
 - **Date:** 2026-07-15
-- **Plan:** `docs/review-recall-plan.md` (Gate-P-reviewed)
+- **Plan:** `docs/plans/archive/2026-07-15-review-recall-plan.md` (Gate-P-reviewed)
 - **Amended by:** ADR-020 (2026-07-16) — the standalone full-corpus Codex
   cross-run this ADR paired with the fan-out is removed; Codex is folded into the
   fan-out as a per-profile staffing mode.
@@ -654,6 +684,16 @@ The checklist template frames its sections as Stage-1 (blocks commit — gates)
 vs Stage-2 (review-owned — profiles). Consumer pre-read guidance is updated at
 adoption, not retroactively by this ADR.
 
+**Amendment (2026-07-31, owner decision).** The automatic Stage-2 OFFER is
+retired. Stage 2 runs only when the owner invokes the skill by name
+(`/deep-review-refactor`, `$deep-review-refactor-codex`); an agent never
+proposes it, never asks whether to run it, and never composes a review prompt
+because feature work completed — a finished feature simply finishes. Stage 2
+remains the required quality stage of the doctrine and still runs in a FRESH
+session over the branch diff; only the automatic offer that used to start it is
+gone. Supersedes the offer wording in the 2026-07-25 amendment, the 2026-07-16
+addendum, and the Consequences bullet below.
+
 **Amendment (2026-07-25, owner decision).** The documentation convention for an
 unperformed Stage 2 is retired. A declined or postponed offer ends after the
 one-time offer and does not create a `stage-2 pending` entry, handoff note, or
@@ -680,8 +720,8 @@ tracked in BACKLOG).
 - Writing sessions carry less rule prose; standards enforcement concentrates in
   the two layers that demonstrably hold: deterministic gates and the
   high-recall Stage-2 review.
-- A declined Stage 2 does not add repository-documentation debt or a receipt;
-  the one-time offer is the complete handling for that session.
+- An uninvoked Stage 2 adds no repository-documentation debt and no receipt;
+  the feature session simply finishes.
 
 ## ADR-020 — Codex joins the review as a per-profile fan-out staffing mode, replacing the standalone full-corpus cross-run
 
@@ -742,7 +782,8 @@ parallel structure.
 - Per-profile Codex routes each read only their one profile, ending the
   full-corpus dilution the fan-out exists to prevent; concurrency requires unique
   per-route `-o`/log paths (the /tmp-collision hazard).
-- `docs/review-recall-plan.md`'s "the independent Codex cross-run stays as-is"
+- `docs/plans/archive/2026-07-15-review-recall-plan.md`'s
+  "the independent Codex cross-run stays as-is"
   bullet is superseded.
 
 ---
@@ -1045,10 +1086,177 @@ Codex without copying or forking its body.
 
 ---
 
-## ADR-026 — Shared deep-review core with adaptive tiered topology
+## ADR-026 — Ship the SonarJS machinery upstream; the consumer owns the rule matrix
 
 - **Status:** Accepted
-- **Date:** 2026-07-25
+- **Date:** 2026-07-28
+- **Supersedes:** the `eslint/README.md` §"Deliberately opt-in / not shipped (v1)"
+  bullet that held `sonarjs` out of the package entirely.
+- **Amends:** ADR-018 (review-owned rule classes get named owners) by moving a
+  bounded slice of the complexity class from the review profile to a machine gate.
+
+### Context
+
+`eslint-plugin-sonarjs` was held out of v1 because its value is real but its
+curation is heavy: 279 rules in 4.2.0, of which `recommended` leaves 217
+non-`off` — a set that, in the first adopting repo, was measured to overlap
+dozens of rules already enabled by core/`typescript-eslint`/`vitest`/`react`,
+and that folds the security "hotspot" family (review-not-CI semantics) in with
+real bug rules. Which of those collisions apply is a property of the consuming
+repo, not of this package. At the same time the roadmap requires the plugin
+dev-standards-first, and names `rule disposition` a per-repo output.
+The two are only in conflict if upstream ships opinions. They are compatible if
+upstream ships machinery: the original README reasoning — "add a small bug
+subset per repo, not a universal inheritance" — is preserved exactly by making
+the per-repo subset the mandatory input rather than an optional override.
+
+A second, weaker temptation was to let the plugin's own defaults stand for the
+24 configurable rules. That would make a patch upgrade silently redefine what
+the repo considers too complex, with no key changing in any repo file.
+
+### Decision
+
+1. **Upstream owns machinery only.** `eslint-plugin-sonarjs` becomes a
+   `dependency` at an exact pin, and `eslint/sonarjs.js` exports a factory that
+   takes the consumer's complete disposition map and returns a flat config. The
+   factory contains no rule list, no thresholds, and never spreads
+   `recommended`. Its whole job is to refuse a matrix that is incomplete or
+   incoherent.
+2. **The matrix is validated against the runtime catalog, not a number.** The
+   map's key set must equal `Object.keys(plugin.rules)` of the installed
+   version exactly — an unknown rule id and a missing disposition are equally
+   red. A plugin upgrade therefore becomes an explicit dispositioning task
+   instead of a silent behavior change.
+3. **`error` or `off`, never `warn`.** Lifelong warnings are banned by the
+   standard, and ESLint bulk suppressions act on `error` alone.
+4. **Every disposition carries a closed-vocabulary reason.** `enabled`,
+   `overlap:<ruleId>`, `owned-elsewhere:<gate>`, `hotspot-review`, `unproven`,
+   `style-not-defect`, `cost-exceeds-value` — anything else is red, and every
+   reason but `enabled` requires a non-empty note.
+5. **Enabled rules restate every value the plugin would default.** Schema
+   validity is not explicitness: ESLint merges `meta.defaultOptions` into
+   whatever the consumer supplies, so `[]`, `[{}]`, and a partial object all
+   validate while the built-in threshold silently survives. The factory reads
+   the defaulted positions and properties off the installed plugin and requires
+   an own, defined value for each; supplied options are additionally validated
+   against the rule's own schema, so a typo'd key cannot pass as a threshold.
+6. **The complexity-class transfer is bounded (DQ1-D15).**
+   `profile-refactoring-and-smells.md` hands the machine gate only the counted
+   forms a repo's matrix actually marks `enabled`. Essential-versus-accidental
+   judgment, change amplification, cognitive load, and the
+   duplication-versus-wrong-abstraction call stay with the review profile.
+
+### Consequences
+
+- The plugin is installed for every consumer, but inert until that consumer
+  writes a matrix — the cost is install weight, not lint noise. Part of that
+  weight is a `typescript` **runtime** dependency (`>=5 <6.1.0`, not a peer), so
+  a consumer can end up resolving a TypeScript copy beside its own; it also
+  peers `eslint ^8 || ^9 || ^10`, so it adds no new ESLint-10 blocker.
+- Options validation needs a JSON-Schema validator at config-build time, so
+  `ajv` moves from `devDependencies` to `dependencies`.
+- Writing the first matrix is deliberately expensive: 279 reasoned entries. That
+  is the price of the ADR-018 invariant, and it is paid once per repo, plus the
+  delta on each upgrade.
+- Because the transfer in (6) is partial, a class the matrix leaves `off` keeps
+  its review-profile ceiling. A future decision that enables more rules must
+  narrow the profile again, in the same batch — silence is not a transfer.
+
+## ADR-027 — `check-new-deps` proves pnpm workspaces instead of standing down
+
+- **Status:** Accepted
+- **Date:** 2026-08-05
+- **Amends:** D10 (the pnpm/yarn stand-down predicate) — pnpm is no longer
+  silenced; yarn still is.
+- **Amends:** the v1 scope statement in `tools/check-new-deps.mjs` and
+  `docs/ADOPTION.md` §"After install", which both declared pnpm out of scope.
+
+### Context
+
+The stand-down was written when the gate had no pnpm proof model: a tracked
+`pnpm-lock.yaml` made the tool print `npm-only check inactive` and exit 0. In
+the only live consumer — a pnpm workspace — that meant the supply-chain gate
+had been a no-op since adoption: every dependency it exists to inspect reached
+a commit with no signal at all, while the tier reported the check green. A
+silent stand-down in the single repo the gate runs in is indistinguishable from
+having no gate, and it is worse than a loud one because the manifest, the
+report and the tier all say the check ran.
+
+pnpm v9 does carry a proof model, it is just not npm's. Each importer records
+`specifier` (verbatim from the manifest) and `version` (what it resolved to)
+per direct dependency, and `packages:` records one `resolution:` per
+name@version. That is enough to bind a declared dependency to a resolution
+without any registry or network access — and, unlike npm's `resolved` URL
+fingerprints, it is a per-importer fact, so it extends to workspace
+sub-manifests that the npm path never covered.
+
+The constraint that shapes the implementation is that this tool imports only
+`node:` builtins, in every consumer, from `vendor/`. There is no YAML parser
+available and adding one is not an option; shelling out to `pnpm` would read
+the working tree and break the DATA SOURCE INVARIANT.
+
+### Decision
+
+1. A tracked `pnpm-lock.yaml` selects a pnpm evaluation path. A tracked
+   `yarn.lock` still stands the whole gate down — yarn has no proof model here,
+   and mis-flagging is worse than a documented absence.
+2. The npm path (`evaluate`) is left byte-identical and keeps its tests. pnpm
+   gets a sibling evaluator reusing only the format-agnostic helpers. No
+   abstraction over two lockfile-proof models is introduced for two
+   implementations that share no shape; a third package manager may revisit it.
+3. `pnpm-lock.yaml` is read by a hand-written parser restricted to an explicit
+   v9 subset. Its refusal list — unknown `lockfileVersion`, tabs, anchors,
+   aliases, tags, block scalars, merge keys, flow collections other than the
+   empty-importer `{}`, duplicate importer/section/dependency keys, comments,
+   and ANY line it cannot classify — throws `OperationalError` (exit 2). The
+   refusal list is pinned by tests, not only by the header: skipping an
+   unrecognised line is the one change that would convert this gate into a
+   silent pass, so a future format shift must break commits loudly.
+4. The proof is two-sided. Manifest side: an allowed spec plus a matching
+   importer declaration. Lock side, requiring no manifest at all: every entry
+   must have resolved to what its own specifier implies, an entry added or
+   re-specified while its package.json stayed put is a lockfile-only injection,
+   a `packages:` key whose resolution moved is the same version pointed
+   elsewhere, and a `resolution:` carrying a `tarball:` or a URL is a
+   redirection. The lock side is what makes a lock-only commit provable.
+5. `workspace:` and `catalog:` specs are accepted by the grammar — they cannot
+   reach outside the repository — but bound to the resolution each really
+   produces. Moving an EXISTING dependency from a registry range onto
+   `workspace:`/`catalog:` is still reported: it replaces published code with
+   repo-local code, which is a review question even though it is not a remote
+   swap.
+
+### Consequences
+
+- pnpm mode is only as strong as the consumer fileset that triggers it. A
+  fileset listing a hand-maintained subset of manifests leaves the rest
+  unchecked while the tier still reports green — exactly the failure this ADR
+  removes. `**/package.json` plus `pnpm-lock.yaml` is therefore the required
+  trigger, seeded in `templates/consumer/quality.starter.json` and stated in
+  `docs/ADOPTION.md`.
+- A tracked `package.json` that is NOT a pnpm workspace member gets its new
+  deps reported as unpinned, because the tool cannot distinguish it from a
+  workspace package whose lockfile was never regenerated. Such paths are
+  excluded consumer-side, in the fileset.
+- An unparsable HEAD lockfile is a FINDING, not exit 2 and not silence: the
+  object under test is the STAGED lock, which is still read strictly, so the
+  commit is fully judged; what is lost is the drift baseline, and a defect in
+  history must not block every commit until history is rewritten.
+- `link:` targets are confined lexically to the repository (the DATA SOURCE
+  INVARIANT forbids asking the filesystem, and a path that escapes lexically
+  escapes in fact), so a `workspace:` spec cannot be resolved to a directory
+  outside the repo by editing the lock.
+- The gate now reads one extra blob (the HEAD lockfile) on any commit that
+  stages the lockfile. Measured on a 13-importer, ~310 KB lockfile the parse is
+  ~3 ms and the whole check stays in its ~0.2 s class.
+
+---
+
+## ADR-028 — Shared deep-review core with adaptive tiered topology
+
+- **Status:** Accepted
+- **Date:** 2026-07-25 (renumbered from ADR-026 on merge; 026/027 were taken on
+  `main` while this work was on its branch)
 - **Owner decision** (repo owner, 2026-07-25)
 - **Scope:** Both deep-review runtimes (Claude and Codex).
 - **Amends:** ADR-003/010 (one shared core body now sits under both canonical
@@ -1087,8 +1295,10 @@ scaling its cost to the diff actually under review.
    its inputs in the run artifacts: LIGHT (1-2 workers, review-only),
    STANDARD (3-5, review-and-refactor), DEEP (7-9, full topology, explicit
    opt-in only — never auto-selected, never silently escalated mid-run).
-   Direct Codex invocation = STANDARD; the automatic post-feature offer =
-   LIGHT review-only; the Claude runtime keeps its run-setup ask.
+   Direct Codex invocation = STANDARD; LIGHT is an explicit choice for a small,
+   low-risk diff; the Claude runtime keeps its run-setup ask. The process is
+   invocation-gated throughout — the ADR-019 amendment of 2026-07-31 retired the
+   automatic post-feature offer, so no tier is ever entered by an offer.
 3. **Adaptive discovery.** The unconditional 8-route fan-out is replaced by a
    deterministic trigger table; ANY uncertainty triggers the route. Risk
    routes (security, correctness/lifecycle, tests-quality) stay

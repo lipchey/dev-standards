@@ -1,6 +1,6 @@
 ---
 name: deep-review-refactor
-description: Repo-local deep code/architecture review (review-only) and behavior-preserving review-driven refactor (review-and-refactor); judges by repo-local review guides, never edits the executable surface, never lands to base itself. Runs only with explicit user consent, but OFFER it automatically when feature work completes - ask once whether to review that branch's changes (scope = diff vs base, not the whole repo).
+description: Repo-local deep code/architecture review (review-only) and behavior-preserving review-driven refactor (review-and-refactor); judges by repo-local review guides, never edits the executable surface, never lands to base itself. Manual invocation only - it runs when the user types the slash command /deep-review-refactor, and at no other time.
 ---
 
 # deep-review-refactor - Claude runtime adapter
@@ -30,8 +30,13 @@ runtime does it: the tier+mode run-setup asks, the discovery-route hosting and i
 worker-route floor, the ADR-016 transcript gate, the external-Codex mechanics, the
 effort-ladder mapping, and the main-session fix mechanics. Claude default mode is
 `review-only`; fix requires an explicit ask (`/deep-review --fix`) or upfront
-Run-setup fix consent. Under the two-stage doctrine (ADR-019) this pass IS the
-standard quality stage for feature work; consent decides WHEN, not WHETHER.
+Run-setup fix consent.
+
+The core's invocation gate (C0) binds here to the slash command: this skill runs
+when the user types `/deep-review-refactor`, and at no other time; the automatic
+post-feature offer is retired (ADR-019 amendment 2026-07-31). Under the two-stage
+doctrine (ADR-019) this pass IS the standard quality stage for feature work;
+invocation decides WHEN the stage happens, not WHETHER it is part of the work.
 
 ## Orchestration - the main session delegates the direct work, keeps the judgment
 
@@ -91,10 +96,9 @@ MAIN-SESSION lens passes under the worker-route floor (single-model, no external
 Codex), report-only - and say so in the report.
 
 1. ONE user prompt (AskUserQuestion or equivalent) carrying BOTH questions:
-   - **Tier** (core C0): `LIGHT` / `STANDARD` / `DEEP`. Default to the context -
-     `LIGHT` when arriving from the automatic post-feature offer, `STANDARD` for a
-     direct invocation; `DEEP` is explicit-only, never a default and never
-     auto-escalated mid-run.
+   - **Tier** (core C0): `LIGHT` / `STANDARD` / `DEEP`. Default `STANDARD`;
+     offer `LIGHT` for a small, low-risk diff. `DEEP` is explicit-only, never a
+     default and never auto-escalated mid-run.
    - **Mode**: `report only` (default) or `fix all confirmed fixable findings` -
      "all" means every severity, not only P1 (see `classify`, ADR-024);
      high-effort/low-benefit findings escalate to you for a go/no-go. An explicit
@@ -107,7 +111,7 @@ Codex), report-only - and say so in the report.
    (top effort for security/correctness discovery and final review; medium for the
    structural/hygiene route and mechanical chunks; `ultra` only on explicit
    per-run request) - the ladder deliberately supersedes the former fixed-xhigh
-   pin for dual-fleet Codex routes (ADR-026). Every review route is read-only
+   pin for dual-fleet Codex routes (ADR-028). Every review route is read-only
    regardless of the fix answer.
    FIRST action, both modes: `TodoWrite` one item per mandated anchor read PLUS one
    per TRIGGERED route and one for the coverage-matrix merge, each done only after

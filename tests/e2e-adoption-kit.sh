@@ -77,10 +77,10 @@ expect "A no leftover recovery state" test ! -e "$A/.git/ds-install.state"
 expect "A node_modules exists" test -d "$A/node_modules"
 expect "A overlay dir empty" test -z "$(ls -A "$A/.claude/review-guides" 2>/dev/null)"
 expect "A CLAUDE.md managed marker" grep -q "dev-standards:managed-section" "$A/CLAUDE.md"
-expect "A CLAUDE.md keeps the original Claude skill offer" grep -q \
-  '`deep-review-refactor` in Claude' "$A/CLAUDE.md"
-expect "A CLAUDE.md offers the explicitly named Codex skill" grep -q \
-  '`deep-review-refactor-codex` in Codex' "$A/CLAUDE.md"
+expect "A CLAUDE.md names the owner-invoked Claude skill" grep -q \
+  '`/deep-review-refactor` in Claude' "$A/CLAUDE.md"
+expect "A CLAUDE.md keeps the Codex skill slash-only" grep -q \
+  '`/deep-review-refactor-codex` in Codex' "$A/CLAUDE.md"
 expect "A quality.json repo rendered" grep -q '"repo": "consumer-a"' "$A/quality.json"
 # The --full fix-verify default needs headroom inside the run deadline: the seeded
 # budget must stay 1800 (a silent revert to 900 starves the deep-review full tier).
@@ -96,8 +96,11 @@ expect "A Codex deep-review skill wrapper seeded under explicit name" grep -q \
   "$A/.agents/skills/deep-review-refactor-codex/SKILL.md"
 expect "A Codex deep-review skill pointer resolves" test -f \
   "$A/.agents/skills/deep-review-refactor-codex/../../../vendor/dev-standards/agents/skill-sources/deep-review-refactor-codex.md"
-expect "A Codex deep-review skill metadata seeded" grep -q \
-  '\$deep-review-refactor-codex' \
+expect "A Codex deep-review slash command metadata seeded" grep -q \
+  '/deep-review-refactor-codex' \
+  "$A/.agents/skills/deep-review-refactor-codex/agents/openai.yaml"
+expect "A Codex deep-review implicit invocation disabled" grep -q \
+  'allow_implicit_invocation: false' \
   "$A/.agents/skills/deep-review-refactor-codex/agents/openai.yaml"
 # The guides-read gate (ADR-016) is only armed if its hooks are wired + required_reads seeded.
 expect "A settings.json guides-read Stop/SubagentStop hooks wired" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); h=s.get('hooks',{}); cmd=lambda e: any(x.get('command')=='\"\$CLAUDE_PROJECT_DIR\"/scripts/deep-review guides-read --hook-stdin' for g in h.get(e,[]) for x in g.get('hooks',[])); sys.exit(0 if cmd('Stop') and cmd('SubagentStop') else 1)" "$A/.claude/settings.json"

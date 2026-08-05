@@ -65,7 +65,13 @@ function main(argv: string[]): number {
     return runTier(manifest, root, scope);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    /* The abort record closes the terminal grammar: a tier that threw never reached its exit
+       decision, so it is neither passed nor failed, and a reader must not have to tell the
+       difference by recognizing the prose above. Detail first, record last — the run's last
+       line is a VERIFY RESULT whichever way it ended. Both stay on stderr: unlike the normal
+       outcomes this is a fault, and the detail line is already stderr and tested for. */
     process.stderr.write(`error running ${scope} tier: ${detail}\n`);
+    process.stderr.write(`VERIFY RESULT: scope=${scope} outcome=aborted\n`);
     return 1;
   }
 }
@@ -90,6 +96,14 @@ export function runTier(
   // remaining budget (never granting MORE than what is left) before it reaches a spawn.
   const remainingMs = (): number => Math.floor(deadlineMs - now());
   const assertBudget = (): void => assertWithinBudget(startedAt, budgetSeconds, now);
+  const checks = tierChecks(manifest, scope);
+
+  // `audit` is an explicit operator request, not an optional no-op. A green run with no
+  // checks falsely claims that an audit happened (and becomes especially dangerous once a
+  // consumer wires mutation/duplication gates around this tier).
+  if (scope === 'audit' && checks.length === 0) {
+    throw new Error('audit tier is not configured or has no checks');
+  }
 
   // Initialize results before setup so a deadline hit during git/fileset expansion can
   // still emit the work completed so far.
@@ -129,13 +143,21 @@ export function runTier(
   try {
     const filesByName = new Map<string, string[]>();
     for (const fileset of manifest.filesets) {
+      const referenced = checks.some(
+        (check) =>
+          check.skip_if_empty === fileset.name || check.argv.includes(`{files:${fileset.name}}`),
+      );
+      if (!referenced) continue;
       filesByName.set(fileset.name, expandFileset(fileset, { cwd: root, remainingMs }));
       // Fileset expansion (git + in-memory globbing) can itself cross the deadline; assert
       // after each so a tier with zero checks can't succeed once the budget is spent (FIX #2).
       assertBudget();
     }
 
-    for (const check of tierChecks(manifest, scope)) {
+    for (const check of checks) {
+      process.stdout.write(
+        `  check ${check.name} [${check.mode ?? 'blocking'}] configured timeout ${check.timeout_seconds}s\n`,
+      );
       const left = remainingMs();
       // Never spawn with a spent budget; fail the check without launching it.
       const result =
@@ -173,21 +195,41 @@ export function runTier(
 
   /* Telemetry before the report write: the two sinks are independent by contract, so a
      normal-path report failure (which still fails the run loudly) must not lose the event. */
-  const exit = results.some(isBlockingResult) ? EXIT_CHECK_FAILED : 0;
+  const blocking = results.filter(isBlockingResult);
+  const exit = blocking.length > 0 ? EXIT_CHECK_FAILED : 0;
   emitTelemetry(exit, false);
 
   const reportPath = emitReport();
   process.stdout.write(`report: ${reportPath}\n`);
 
+  /* The tier's terminal record — always the run's LAST line, one grammar for every outcome.
+     Until now a blocking failure was announced only by its inline summarize() line, so a long run
+     buried it under every later passing check and ended byte-identically to a green one: a real
+     full run put its single failure at line 750 of 1316 and still signed off with `report: <path>`
+     (owner, 2026-08-05). The exit code stays the machine contract; this is for the log, which for
+     a remote run is the only artifact that reaches the caller at all. Re-print exactly the set
+     that decided `exit`, so the record cites its own evidence and cannot drift from it — names go
+     on those lines, never inside the record, whose vocabulary stays fixed and parseable. Both
+     normal outcomes go to STDOUT, beside the per-check lines they summarize; stderr is reserved
+     for the exceptional abort record main() writes. `passed` means the exit decision was zero,
+     NOT that every result was `pass` — report-only findings, bypassed and skipped checks all
+     legitimately survive it, which is why `blockers` is derived only from isBlockingResult. */
+  if (blocking.length > 0) {
+    process.stdout.write(`blocking failures:\n${blocking.map(summarize).join('')}`);
+  }
+  process.stdout.write(
+    `VERIFY RESULT: scope=${scope} outcome=${exit === 0 ? 'passed' : 'failed'}` +
+      `${blocking.length > 0 ? ` blockers=${blocking.length}` : ''} checks=${results.length}\n`,
+  );
+
   return exit;
 }
 
-/* The tier's exit decision. An 'error' (spawn fault / signal kill) is an operational failure
-   and blocks REGARDLESS of mode, so a broken report-only check still fails the tier instead of
-   passing fail-open. A blocking 'fail'/'timeout' blocks; 'bypassed', 'pass', 'skipped', and
-   report-only findings never block. */
+/* The tier's exit decision. Operational failures (`error` and `timeout`) block REGARDLESS of
+   mode, so a broken or hung report-only check cannot pass the tier fail-open. Only a genuine
+   finding (`fail`) is mode-gated; `bypassed`, `pass`, and `skipped` never block. */
 export function isBlockingResult(r: CheckResult): boolean {
-  return r.status === 'error' || (r.mode === 'blocking' && (r.status === 'fail' || r.status === 'timeout'));
+  return r.status === 'error' || r.status === 'timeout' || (r.mode === 'blocking' && r.status === 'fail');
 }
 
 // A check whose tier deadline is already spent: failed as timed-out, never spawned.
@@ -207,12 +249,19 @@ function tierChecks(manifest: Manifest, scope: TierName): Check[] {
   return manifest.tiers[scope];
 }
 
-function summarize(r: CheckResult): string {
+export function summarize(r: CheckResult): string {
   const exit = r.exitCode === null ? '-' : String(r.exitCode);
-  return `  ${r.status.padEnd(7)} ${r.name} [${r.mode}] ${r.durationMs}ms exit ${exit}\n`;
+  /* Only on a kill: the I/O-stall share of the window is the first question asked about a
+     timeout, and printing it everywhere would bury it. Every check's sample still reaches
+     telemetry. */
+  const stall = r.status === 'timeout' && r.ioStallMs !== undefined ? ` io-stall ${r.ioStallMs}ms` : '';
+  return `  ${r.status.padEnd(7)} ${r.name} [${r.mode}] ${r.durationMs}ms exit ${exit}${stall}\n`;
 }
 
-// Keep imports test-safe.
+/* Keep imports test-safe. `process.exitCode` rather than `process.exit()`: pipe-backed stdout
+   flushes asynchronously, and an immediate exit drops whatever is still buffered — which is
+   exactly the terminal record this run just wrote. remote-runner spawns the shim with piped
+   stdio, so a remote `--full` is precisely the case that would have lost it. */
 if (isMainModule(import.meta.url)) {
-  process.exit(main(process.argv.slice(2)));
+  process.exitCode = main(process.argv.slice(2));
 }

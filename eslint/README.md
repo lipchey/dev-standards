@@ -96,6 +96,7 @@ export default tseslint.config(
 | `typesHome({files, ignores, allowNamePattern})` | all | custom `dev-standards/types-home` (error): exported top-level interfaces and type aliases belong in the consumer's types home. `allowNamePattern` defaults to `"Props$"` |
 | `propertyNaming({files, ignores})` | all | custom `dev-standards/property-naming` (error): non-computed identifier keys on TypeScript property signatures must be at least three characters; `_` remains the discard convention |
 | `naming({files, ignores, exemptNamedImports, extraRestrictedSyntax})` | all | the identifier floor: `no-restricted-syntax` min-3-chars over every name the repo's authors choose (vars, functions, classes, params, catch/destructured bindings, class members, ALL import locals incl. aliases) + `id-match` ASCII-only. `_` discard and object PROPERTY keys exempt. **Owns `no-restricted-syntax` in its scope** (see below) |
+| `sonarjs({dispositions, files})` | all (opt-in) | `eslint-plugin-sonarjs`, wired **only** by an explicit consumer disposition map — the factory ships no rule list, no thresholds and never spreads `recommended`. The map must cover `Object.keys(plugin.rules)` of the installed version exactly, carry a closed-vocabulary reason per rule (`enabled`, `overlap:<ruleId>`, `owned-elsewhere:<gate>`, `hotspot-review`, `unproven`, `style-not-defect`, `cost-exceeds-value`) with a non-empty note for every non-`enabled` one, use `error`/`off` only (no `warn`), and — on every enabled rule — restate each value the plugin would otherwise merge in from `meta.defaultOptions`; anything short of that throws at config-build time. See ADR-026 |
 | `devStandardsPlugin` | advanced composition | the single plugin object containing `constants-home`, `types-home`, `property-naming`, and `comparison-literals`; preset factories already register it |
 
 The factory presets (`node`, `frontend*`, `constantsHome`, `inlineLiterals`,
@@ -284,8 +285,12 @@ Add per-repo only where the trigger is real; none belong in the shared default:
 - **`import-x/no-cycle`** (circular deps) — graph-wide and resolver-sensitive (needs
   the TS resolver pointed at the repo's tsconfig); enable only where cycles are a
   demonstrated risk. Held out of v1 pending a stable resolver wiring.
-- **`eslint-plugin-unicorn`, `sonarjs`** — real value but heavy curation; add a small
+- **`eslint-plugin-unicorn`** — real value but heavy curation; add a small
   bug subset per repo, not a universal inheritance.
+- ~~**`sonarjs`**~~ — superseded by **ADR-026**. The plugin is now a `dependency` and
+  the `sonarjs({dispositions, files})` factory above is shipped, but the original
+  reasoning stands: the curation is still per repo. Upstream owns only the machinery
+  that refuses an incomplete or unreasoned matrix; the consumer owns which rules run.
 - **`@eslint-react`** — its render-safety overlaps `react-hooks@6` (already shipped by
   `frontend`), and it needs Node 22; add only for its effect-leak family.
 - **`@tanstack/eslint-plugin-query`** (if react-query), **`eslint-plugin-tailwindcss`**

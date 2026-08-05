@@ -9,7 +9,8 @@ import { parseLines, resolveTelemetryPath } from '../../tools/quality-stats.mjs'
 import { buildReportModel, renderHtml, runOutcome, writeAtomic } from '../../tools/quality-report.mjs';
 
 /* The .mjs tools are dep-free and export no types; these builders mirror the RunEvent
-   emitter contract (docs/effectiveness-plan.md §2 + runner telemetry) so fixtures stay
+   emitter contract (docs/plans/archive/2026-07-10-effectiveness-plan.md §2 +
+   runner telemetry) so fixtures stay
    readable. exit/aborted are explicit here because the report's run outcome is derived from
    them, never from a re-computed isBlockingResult. */
 type Result = {

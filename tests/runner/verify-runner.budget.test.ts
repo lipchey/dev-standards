@@ -87,3 +87,59 @@ test('runTier completes and returns 0 when comfortably within budget', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a report-only check timeout is an operational failure and returns non-zero', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-budget-'));
+  try {
+    const m = manifest({
+      budgets: { staged_seconds: 300, fast_seconds: 3, full_seconds: 300, audit_seconds: 300 },
+      tiers: {
+        staged: [],
+        fast: [
+          {
+            name: 'report-only-slow',
+            argv: [process.execPath, stub('sleep.mjs'), '5'],
+            timeout_seconds: 1,
+            mode: 'report-only',
+          },
+        ],
+        full: [],
+        audit: [],
+      },
+    });
+    assert.equal(runTier(m, root, 'fast'), 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an invoked empty audit tier fails instead of reporting a false-green audit', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-budget-'));
+  try {
+    assert.throws(() => runTier(manifest(), root, 'audit'), /audit tier is not configured|no checks/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a tier does not expand filesets that none of its checks reference', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-budget-'));
+  try {
+    const m = manifest({
+      filesets: [
+        {
+          name: 'unused-staged',
+          source: 'git_staged',
+          include: ['**/*.ts'],
+          exclude: [],
+        },
+      ],
+      tiers: { staged: [], fast: [noopCheck()], full: [], audit: [] },
+    });
+    // `root` is deliberately not a Git repository. Expanding the unused git_staged fileset
+    // would fail; a selected tier should touch only the filesets its checks consume.
+    assert.equal(runTier(m, root, 'fast'), 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

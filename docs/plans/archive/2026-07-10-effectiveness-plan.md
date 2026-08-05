@@ -1,6 +1,11 @@
 # План: телеметрія ефективності + петля файнтюну (Фаза 8)
 
-Статус: затверджено 2026-07-10. Gate P пройдено (Codex xhigh + власний
+Status: **historical (implemented)**. Steps 8.1–8.6 are present in the runner,
+tooling, templates, and calibration workflow. Current behavior is documented in
+`README.md` and `docs/CALIBRATION.md`; remaining work lives in
+`docs/plans/backlog.md`.
+
+Original status: затверджено 2026-07-10. Gate P пройдено (Codex xhigh + власний
 прохід; 11 знахідок верифіковано, план виправлено).
 Доповнює `post-workflow-removal-plan.md` (не змінює Фази 1–7).
 

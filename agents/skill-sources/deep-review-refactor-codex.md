@@ -1,6 +1,6 @@
 ---
 name: deep-review-refactor-codex
-description: Run a repo-local, consent-gated deep code and architecture review through Codex workers, then fix confirmed behavior-preserving findings by default. Use when the user explicitly invokes $deep-review-refactor-codex, asks Codex for a deep review/refactor against this repository's review guides, or accepts the one-time post-feature review-and-fix offer. Use review-only mode only when the user explicitly requests no edits. Never edit protected executable or policy surfaces and never land changes to the base branch.
+description: Use only when the user explicitly invokes `/deep-review-refactor-codex`.
 ---
 
 # Deep review and refactor
@@ -32,19 +32,17 @@ prohibitions, the conflict-worker binding, and the cross-family final reviewer.
 
 ## Default behavior and consent
 
-- Default to `review-and-refactor` at `STANDARD` tier: a direct
-  `$deep-review-refactor-codex` invocation consents to the default review-and-fix
-  workflow over the requested scope.
+- Default to `review-and-refactor` at `STANDARD` tier: review the requested scope
+  and immediately fix every confirmed, safe, behavior-preserving finding.
+- Treat a direct `/deep-review-refactor-codex` invocation as consent for the
+  default review-and-fix workflow over the requested scope.
 - Enter `review-only` only when the user explicitly asks for a report without
-  edits. The automatic post-feature offer defaults to `LIGHT` review-only (core
-  C0): accepting it consents to a report, NOT to edits - a fix run requires an
-  explicit `STANDARD`/fix upgrade, and the offer itself is not consent even for
-  that. `DEEP` is explicit opt-in only.
-- Offer once per completed feature, scoped to its branch diff plus new untracked
-  feature files. Do not re-ask after a decline or postponement, and do not create
-  or update repository documentation solely to record that the review was not run.
+  edits. `LIGHT` (review-only) and `DEEP` are explicit opt-ins only.
+- The skill runs only after that literal slash command (core C0). Do not invoke
+  it from natural-language review requests, completed-feature state, or any
+  automatic offer.
 - Except for the Stage-0 conflict preflight (core C1), never merge, rebase, push,
-  open a PR, or land changes to the base branch.
+  open a PR, or land changes to the base branch as part of this workflow.
 
 ## Use only Codex workers
 

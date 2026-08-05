@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
       phrase, and each adapter must fail closed on the core read.
    A corpus file added without catalog provenance, a catalog entry pointing at
    a missing file, or a renamed/dropped corpus file all fail here.
-   Pin OWNERSHIP mirrors rule ownership (ADR-026): corpus enumeration is
+   Pin OWNERSHIP mirrors rule ownership (ADR-028): corpus enumeration is
    asserted on each composition, shared contract rules on the core alone, and
    runtime mechanics on each raw adapter — so neither an emptied adapter nor a
    mis-homed shared rule can pass on the other file's text. */
@@ -115,7 +115,7 @@ test('each runtime composition (core + adapter) enumerates every corpus file by 
   }
 });
 
-/* The resource-redesign contract (ADR-026). Rule OWNERSHIP is part of the
+/* The resource-redesign contract (ADR-028). Rule OWNERSHIP is part of the
    contract — every shared rule lives in the CORE (a rule surviving only via an
    adapter mention is a mis-homed rule) — so these pins assert on the core file
    ALONE, not the composition. Each pins a known silent-regression boundary:

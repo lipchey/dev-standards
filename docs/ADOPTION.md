@@ -1,5 +1,8 @@
 # Adopting dev-standards
 
+Status: **live reference**. Code, templates, and the end-to-end adoption suite are the
+implemented contract; update this document in the same batch when that contract moves.
+
 dev-standards is vendored into a consumer as a git submodule at
 `vendor/dev-standards` (pinned by SHA). The consumer builds the runner bundles
 locally and runs thin `scripts/verify` / `scripts/deep-review` shims over them.
@@ -44,7 +47,7 @@ scripts/ds-install.sh /path/to/consumer [--ref vX.Y.Z] [--eslint]
 | `.claude/two-stage-dev.marker` | ADR-019 two-stage marker (copy-if-absent; needs no filling): write-time guide injectors (editor pre-tool hooks, delegate-launcher preambles) stay silent in repos carrying it — guides bind at Stage-2 review. Standard instance doc: `--check` requires it and bootstrap re-seeds it; two-stage is the package default (ADR-019). NOTE for pre-marker consumers: the first pin bump seeds it via bootstrap — commit it together with that pin (a gitlink-only pin commit leaves it untracked). |
 | `.claude/review-guides/` | Optional additive overlays (empty by default). |
 | `.claude/skills/deep-review-refactor/SKILL.md` | Original Claude skill, pointing to its package-owned canonical body. |
-| `.agents/skills/deep-review-refactor-codex/SKILL.md` | Distinct Codex-runtime skill (tiered, adaptive; ADR-026), pointing to its package-owned canonical body. |
+| `.agents/skills/deep-review-refactor-codex/SKILL.md` | Distinct Codex-runtime skill (tiered, adaptive; ADR-028), pointing to its package-owned canonical body. |
 | `.agents/skills/deep-review-refactor-codex/agents/openai.yaml` | Codex UI metadata and default review-and-fix prompt. |
 | `.claude/settings.json` | Guides-read gate wiring (ADR-016): the `Stop` + `SubagentStop` hooks. Structurally MERGED, not copy-if-absent — a consumer's existing settings survive. |
 | `AGENTS.md` | Pointer to `CLAUDE.md` for agents that read only AGENTS.md (never a second source of truth). |
@@ -56,9 +59,21 @@ missing.
 
 ## After install — make the gates real
 
-The starter `quality.json` ships with `stack: "meta-docs"` and only the seeded
-`instance-docs-seeded` check (in the `fast` and `full` tiers); the
-project-specific gates start empty, so `./scripts/verify` passes immediately.
+The starter `quality.json` ships with `stack: "meta-docs"`, a report-only
+`check-new-deps` check in `staged`, and the `instance-docs-seeded` check in
+`fast` and `full`. The dependency check covers npm (package-lock v3, root
+manifest only) and pnpm (lockfile v9, every workspace manifest — ADR-027); it
+stands down for yarn and it is not a generic cross-package-manager
+supply-chain gate. **In pnpm repositories the gate is only as strong as the
+`manifests_staged` fileset that triggers it**: it must be
+`["**/package.json", "pnpm-lock.yaml"]` (plus `pnpm-workspace.yaml` if you want
+membership changes to surface), never a hand-maintained list of manifests —
+a manifest missing from the fileset is never checked while the tier still
+reports the gate green. Exclude any tracked `package.json` that is deliberately
+NOT a pnpm workspace member (a fixture, a vendored sample): the gate cannot
+tell it apart from a workspace package whose lockfile was never regenerated,
+and will report its dependencies as unpinned. Project-specific build/test/lint gates start empty, so
+`./scripts/verify` passes immediately.
 
 1. Switch `stack` (and each workspace `stack`) from `meta-docs` to your real
    stack, then add your project's checks (typecheck, tests, lint, …) to the
@@ -74,17 +89,16 @@ project-specific gates start empty, so `./scripts/verify` passes immediately.
 3. Extend, don't override, via `.claude/review-guides/` — see tuning below.
 4. Wire the two-stage process (ADR-019) into the consumer's `CLAUDE.md`: a
    compact Stage-1 core (placement map, no-touch zones, secrets, security
-   boundaries, lazy-read triggers) instead of mandated pre-code reads; the
-   Stage-2 offer after a feature is a READY PROMPT for a fresh session
-   (`deep-review-refactor` for the original Claude workflow, or
-   `deep-review-refactor-codex` for the tiered, adaptive Codex-run workflow with
-   one cross-family final reviewer + scope = diff vs base + branch/worktree).
-   Accepting the automatic offer runs a LIGHT review-only report; default
-   fixing is reserved for a direct STANDARD invocation (ADR-026) — never run
-   either workflow as a review run inside the build session, whose context is
-   already spent. A
-   declined/postponed offer ends without a repository-documentation entry for
-   the unperformed Stage 2.
+   boundaries, lazy-read triggers) instead of mandated pre-code reads. Stage 2
+   itself needs no wiring in `CLAUDE.md` — since the 2026-07-31 ADR-019
+   amendment the owner starts it by typing `/deep-review-refactor` or
+   `/deep-review-refactor-codex`. The Codex workflow is the tiered, adaptive
+   run with one cross-family final reviewer (ADR-028); a direct invocation is
+   `STANDARD` tier and enables safe fixes by default, `LIGHT` (review-only) and
+   `DEEP` being explicit opt-ins. Stage 2 runs in a FRESH session — the build
+   session's context is already spent — over the merge-base diff plus the
+   feature's new untracked files, and an uninvoked Stage 2 leaves no
+   repository-documentation record.
 
 ### Optional gate: test-to-source placement (report-only)
 
@@ -192,15 +206,18 @@ The structure-and-boundaries review lens prompts for the boundary/import-zone pa
 on any workspace-adding diff (`profile-architecture-and-boundaries.md` §Baseline
 structural checks).
 
-## Deep review is opt-in
+## Deep review is owner-invoked
 
 Both deep-review skills review a completed feature branch's diff (not the whole
-repo) and run **only with explicit user consent**. The original Claude workflow
-remains `$deep-review-refactor` with its existing behavior. The explicitly named
-Codex workflow is `$deep-review-refactor-codex`; a direct Codex invocation
-defaults to a `STANDARD`-tier, adaptive `review-and-refactor` run (Codex workers
-with one cross-family final reviewer) and fixes confirmed behavior-preserving
-findings, while `review-only` is an explicit opt-out from edits.
+repo) and start **only when the owner invokes them**, at no other time. The
+original Claude workflow is the slash command `/deep-review-refactor` with its
+existing behavior. The Codex workflow runs only after the literal
+`/deep-review-refactor-codex` command; natural-language requests,
+feature-completion state, and offers do not invoke it. A directly invoked Codex
+run defaults to a `STANDARD`-tier, adaptive `review-and-refactor` run (Codex
+workers with one cross-family final reviewer) and fixes confirmed
+behavior-preserving findings, while `review-only` is an explicit opt-out from
+edits.
 
 ### Guides-read enforcement (ADR-016)
 
@@ -211,7 +228,7 @@ mandated ANCHOR guide was actually opened with a `Read`. Since the 2026-07-16
 rescope (ADR-016 Amendment) the main-session anchor set is: the corpus contract
 `review-contract.md`, its `.claude/review-guides/` overlay if present, and every
 `deep_review.required_reads` entry — the eight `profile-*` lens bodies are read by
-the TRIGGERED profile routes (ADR-026), not gated on the main transcript (though
+the TRIGGERED profile routes (ADR-028), not gated on the main transcript (though
 the AVAILABILITY of every listed overlay stays fail-closed, and the full nine-file
 corpus still loads as a deployment check). The starter sets `required_reads` to the
 three seeded instance docs. `seed-consumer.sh --check` fails if the hooks are not wired.

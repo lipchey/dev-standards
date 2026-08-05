@@ -6,25 +6,26 @@ rule that governs BOTH runtimes identically (the Claude body
 adapter reads this file first, then adds ONLY its own runtime mechanics; a rule
 lives in exactly one place - shared here, runtime-specific in an adapter. This
 file has no frontmatter and is not an invokable skill - the adapters read it,
-never dispatch it. It is the resource redesign of record (ADR-026, superseding
+never dispatch it. It is the resource redesign of record (ADR-028, superseding
 ADR-025's six-stage/reviewer-family topology): tiered entry, adaptive discovery,
 a deterministic Stage 0. It names NO worker model, dispatch mechanics, or
 transcript-gate specifics - those are adapter content. The ADR-016 Stop gate does
 NOT enforce a Read of THIS file; each adapter enforces its own core read as its
 first executable instruction (fail closed if missing).
 
-## C0 - Consent, scope, tiering, and the once-only offer
+## C0 - Invocation, scope, and tiering
 
-Consent-gated: the process never RUNS without an explicit user go-ahead, never
-fires on every diff, never on ordinary implementation or verification work. The
-OFFER is automatic and once-only: when feature work completes - the branch/task
-is about to be committed as done, merged, or handed off - ask ONCE whether to
-run it, scoped to that work's changes. A declined or postponed offer ends the
-offer for that feature; do not re-ask, and do not create or update repository
-documentation solely to record that the review was not run. A human can still
-invoke it manually at any scope.
+Invocation-gated: the process runs ONLY when the user invokes the skill by name
+(each adapter binds its command), and at no other time. It never fires on every
+diff, never on ordinary implementation or verification work, and there is no
+automatic post-feature offer - an agent never proposes the run, never asks
+whether to do it, and never composes a review prompt because feature work
+completed (ADR-019 amendment 2026-07-31); a finished feature simply finishes.
+Do not create or update repository documentation solely to record that the
+review was not run.
 
-Default offer scope = files changed vs the merge base with the base branch
+Default scope when the user names none = files changed vs the merge base with
+the base branch
 (`git diff --name-only "$(git merge-base <base> HEAD)"`, default base `main`)
 PLUS the feature's new untracked files - NOT the whole repo. Use surrounding
 context only to judge architecture; never widen to the whole repo without an
@@ -40,12 +41,12 @@ reviewer count, effort - before any dispatch; it never silently escalates
 mid-run, and the selected tier plus its inputs are recorded in the run
 artifacts:
 
-- **LIGHT** - 1-2 workers, review-only. The automatic post-feature offer's
-  default: small, low-risk diffs.
+- **LIGHT** - 1-2 workers, review-only. Explicit choice for a small, low-risk
+  diff.
 - **STANDARD** - 3-5 workers, review-and-refactor. What a direct skill
   invocation consents to.
 - **DEEP** - 7-9 workers, full discovery + review topology. Explicit opt-in
-  ONLY; never auto-selected, never the offer default.
+  ONLY; never auto-selected, never a default.
 
 Each adapter states its DEFAULT mode and what a direct invocation consents to
 (they differ per runtime). This is the on-demand deep layer: the retired

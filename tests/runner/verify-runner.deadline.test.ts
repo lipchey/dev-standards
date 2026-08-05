@@ -136,14 +136,19 @@ test('FIX #5 control: the grandchild marker really writes when the git probe is 
   }
 });
 
-test('an empty tier with a slow git trips the deadline instead of hanging (RUN-02)', () => {
+test('a referenced fileset with a slow git trips the deadline instead of hanging (RUN-02)', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-deadline-'));
   try {
     withFakeGitOnPath(() => {
       const m = manifest({
         budgets: { staged_seconds: 300, fast_seconds: 0.2, full_seconds: 300, audit_seconds: 300 },
         filesets: [{ name: 'repo_ts', source: 'repo_all', include: ['**/*.ts'], exclude: [] }],
-        tiers: { staged: [], fast: [], full: [], audit: [] },
+        tiers: {
+          staged: [],
+          fast: [{ name: 'noop', argv: ['true'], timeout_seconds: 1, skip_if_empty: 'repo_ts' }],
+          full: [],
+          audit: [],
+        },
       });
       const started = Date.now();
       assert.throws(() => runTier(m, root, 'fast'), /timed out|budget|deadline/i);
@@ -154,11 +159,11 @@ test('an empty tier with a slow git trips the deadline instead of hanging (RUN-0
   }
 });
 
-// FIX #2: a tier with ZERO checks whose fileset expansion succeeds but crosses the
-// deadline must fail closed, not write a report and return 0. The injected clock lets
+// FIX #2: a referenced fileset whose expansion succeeds but crosses the deadline must fail
+// closed, not write a report and return 0. The injected clock lets
 // git succeed (huge remaining) yet reports the deadline already spent right after the
 // expansion, isolating the post-expansion budget check from real timing.
-test('FIX #2: a 0-check tier fails closed once the deadline is spent after fileset expansion', () => {
+test('FIX #2: a tier fails closed once the deadline is spent after referenced fileset expansion', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-emptytier-'));
   try {
     execFileSync('git', ['init', root], { stdio: 'ignore' }); // real repo → git ls-files exits 0
@@ -169,7 +174,12 @@ test('FIX #2: a 0-check tier fails closed once the deadline is spent after files
     const clock = (): number => (n++ < 2 ? 0 : budgetMs + 1);
     const m = manifest({
       filesets: [{ name: 'repo_ts', source: 'repo_all', include: ['**/*.ts'], exclude: [] }],
-      tiers: { staged: [], fast: [], full: [], audit: [] }, // ZERO checks
+      tiers: {
+        staged: [],
+        fast: [{ name: 'noop', argv: ['true'], timeout_seconds: 1, skip_if_empty: 'repo_ts' }],
+        full: [],
+        audit: [],
+      },
     });
     assert.throws(() => runTier(m, root, 'fast', clock), /budget exceeded|deadline/i);
   } finally {

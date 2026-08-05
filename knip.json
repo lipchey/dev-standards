@@ -9,6 +9,6 @@
     "tests/eslint/*.test.mjs"
   ],
   "ignore": ["tests/fixtures/**", "tests/eslint/fixtures/**", "tests/stubs/**"],
-  "ignoreBinaries": ["tests/e2e-adoption-kit.sh"],
+  "ignoreBinaries": ["tests/e2e-adoption-kit.sh", "mkfifo"],
   "ignoreUnresolved": ["runner/src/verify-runner.ts"]
 }
