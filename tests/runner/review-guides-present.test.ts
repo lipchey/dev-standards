@@ -175,7 +175,10 @@ test('each raw adapter pins its own runtime mechanics', () => {
   for (const adapter of RUNTIME_ADAPTERS) {
     const adapterPath = fileURLToPath(new URL(`../../agents/skill-sources/${adapter}`, import.meta.url));
     const normalizedAdapter = readFileSync(adapterPath, 'utf8').replace(/\s+/g, ' ');
-    const missing = ADAPTER_CONTRACT_PINS[adapter].filter((phrase) => !normalizedAdapter.includes(phrase));
+    /* Non-empty, so a renamed adapter key cannot make this assertion vacuous. */
+    const pins = ADAPTER_CONTRACT_PINS[adapter] ?? [];
+    assert.ok(pins.length > 0, `no runtime-mechanic pins declared for ${adapter}`);
+    const missing = pins.filter((phrase) => !normalizedAdapter.includes(phrase));
     assert.deepEqual(missing, [], `${adapter} missing runtime-mechanic phrases: ${missing.join(' | ')}`);
   }
 });
