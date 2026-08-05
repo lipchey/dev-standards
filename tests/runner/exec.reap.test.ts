@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runProcess } from '../../runner/src/exec.ts';
+import { isGroupGone, runProcess } from '../../runner/src/exec.ts';
 
 /* BUG-03 regression: the detached process group must be SIGKILLed AND drained on EVERY abnormal
    outcome — not just a timeout — so no grandchild survives to mutate the tree after runProcess (and
@@ -66,4 +66,17 @@ test('BUG-03: a signal-kill of the child reaps the whole group — no grandchild
 
 test('BUG-03: an ENOBUFS (maxBuffer overflow) reaps the whole group — no grandchild survives', async () => {
   await assertNoSurvivor('enobuf', 30_000);
+});
+
+/* The reap's give-up predicate. EPERM only reaches it once the group we killed has drained and its
+   ID was recycled to a process we may not signal — staging that race is not feasible, so the
+   predicate is pinned directly. Treating EPERM as a hard error made reapGroup throw under parallel
+   test load and red a whole verify tier. */
+test('the reap treats an unsignalable group as gone, and still surfaces real faults', () => {
+  for (const code of ['ESRCH', 'EPERM']) {
+    assert.equal(isGroupGone(Object.assign(new Error('kill'), { code })), true, code);
+  }
+  for (const code of ['EINVAL', undefined]) {
+    assert.equal(isGroupGone(Object.assign(new Error('kill'), { code })), false, String(code));
+  }
 });

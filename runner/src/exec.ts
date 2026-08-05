@@ -45,6 +45,12 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+// Exported for the reap unit test: the EPERM branch is a PID-recycle race no test can stage.
+export function isGroupGone(e: unknown): boolean {
+  const code = (e as NodeJS.ErrnoException).code;
+  return code === 'ESRCH' || code === 'EPERM';
+}
+
 /* Kill the whole detached process group led by `pid` with SIGKILL, then WAIT (bounded) until no
    group member remains. The wait is the point: after this returns, a caller that rolls back cannot
    race a still-living descendant that writes to the tree. `process.kill(-pid, 0)` is an existence
@@ -52,12 +58,16 @@ function sleepSync(ms: number): void {
    exec.ts (runCheck/runProcess) and git.ts so the kill+wait mechanic lives in ONE place.
    Ceiling: once spawnSync has reaped the immediate child the leader PID is freed and could in
    theory be recycled — the same window the timeout path already accepted; fine for this trusted
-   local pilot. */
+   local pilot. That recycle is also why EPERM counts as drained: the kernel raises it when a group
+   with this ID exists but holds nothing WE may signal, and every descendant we spawned is ours by
+   definition — so EPERM means the group we were reaping is gone and the ID now belongs to someone
+   else's (observed under parallel test load, where PID churn is fast). Throwing there turned a
+   benign race into a red verify tier. */
 export function reapGroup(pid: number): void {
   try {
     process.kill(-pid, 'SIGKILL');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ESRCH') return; // group already empty
+    if (isGroupGone(e)) return; // group already empty, or the ID is no longer ours
     throw e;
   }
   const deadline = Date.now() + REAP_DRAIN_TIMEOUT_MS;
@@ -65,7 +75,7 @@ export function reapGroup(pid: number): void {
     try {
       process.kill(-pid, 0); // succeeds while at least one group member is still alive
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ESRCH') return; // drained
+      if (isGroupGone(e)) return; // drained
       throw e;
     }
     if (Date.now() >= deadline) return; // bounded: give up rather than hang forever
