@@ -205,22 +205,33 @@ test('diff-cover CLI: a failing run names only the files with uncovered changed 
 
     write(repo, 'src/covered.ts', 'export const a = 1;\nexport const b = 2;\n');
     write(repo, 'src/gap.ts', 'export const c = 3;\nexport const d = 4;\n');
+    write(repo, 'src/worse.ts', 'export const e = 5;\nconst f = 6;\nconst g = 7;\nconst h = 8;\n');
     commitAll(repo, 'add src');
 
-    /* covered.ts 2/2, gap.ts 1/2 → total 3/4 = 75%, under the 90 threshold. */
-    const twoLines = {
-      0: { start: { line: 1 }, end: { line: 1 } },
-      1: { start: { line: 2 }, end: { line: 2 } },
-    };
+    const lineMap = (n: number): Record<number, unknown> =>
+      Object.fromEntries(
+        Array.from({ length: n }, (_, i) => [i, { start: { line: i + 1 }, end: { line: i + 1 } }]),
+      );
+    /* 4 covered of 8 changed executable lines → 50% total, well under the 90 threshold. */
     writeCoverage(repo, {
-      'src/covered.ts': { statementMap: twoLines, s: { 0: 1, 1: 1 } },
-      'src/gap.ts': { statementMap: twoLines, s: { 0: 1, 1: 0 } },
+      'src/covered.ts': { statementMap: lineMap(2), s: { 0: 1, 1: 1 } },
+      'src/gap.ts': { statementMap: lineMap(2), s: { 0: 1, 1: 0 } },
+      'src/worse.ts': { statementMap: lineMap(4), s: { 0: 1, 1: 0, 2: 0, 3: 0 } },
     });
 
     const r = runTool(repo, ['--base-ref', baseSha, '--threshold', '90']);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.match(r.stdout, /^ {2}uncovered: src\/gap\.ts 1\/2 changed lines \(50%\)$/m);
+    assert.match(r.stdout, /^ {2}uncovered: src\/worse\.ts 1\/4 changed lines \(25%\)$/m);
     assert.equal(r.stdout.includes('src/covered.ts'), false, r.stdout);
+    /* TWO shortfall files, and the worse one first. Both halves are load-bearing: with a single
+       uncovered file in the fixture, a `.slice(0, 1)` cap would pass the test while contradicting
+       the "not capped" contract, and nothing would pin the worst-first ordering that makes the
+       list scannable. */
+    assert.ok(
+      r.stdout.indexOf('src/worse.ts') < r.stdout.indexOf('src/gap.ts'),
+      `worst shortfall must be listed first:\n${r.stdout}`,
+    );
   } finally {
     cleanup(repo);
   }

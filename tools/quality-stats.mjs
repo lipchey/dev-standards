@@ -395,13 +395,17 @@ function reportHeader(agg, meta) {
     `# events=${agg.totals.events} malformed=${meta.malformed ?? 0} ` +
       `unsupported-version=${meta.unsupported ?? 0} ` +
       `flip-window=${agg.sinceDays}d prune-window=${agg.pruneDays}d${repoFilter}`,
-    /* A run appends its event to the sink of the machine that EXECUTED it, so this report is a
-       view of one machine, never of a project's whole history. That distinction stopped being
-       academic the moment a consumer moved a tier to a remote build host: those runs append to
-       the remote home sink and are simply absent here, with nothing in the numbers to show it —
-       a tier can go quiet in this report while running many times a day. Said in the header
-       rather than the docs because the misreading happens while looking at the totals. */
-    '# scope: this machine only — runs executed elsewhere (remote build host, CI) are absent',
+    /* A run appends its event to the sink of the machine that EXECUTED it, so a report is a view
+       of the runs that reached one file, never of a project's whole history. That distinction
+       stopped being academic the moment a consumer moved a tier to a remote build host: those
+       runs append to the remote machine's sink and are simply absent here, with nothing in the
+       numbers to show it — a tier can go quiet in this report while running many times a day.
+       The wording states the WRITE rule rather than "this machine", because --path and
+       DS_TELEMETRY_PATH can point the reader at any file (resolveTelemetryPath above), so
+       "this machine" would be a promise the tool does not keep. Said in the header rather than
+       in docs because the misreading happens while looking at the totals. */
+    '# scope: a run appends only to the sink of the machine that executed it — runs from',
+    '#        elsewhere (remote build host, CI) are absent from this file',
   ];
 }
 
