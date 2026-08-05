@@ -34,7 +34,7 @@
     {
       "name": "manifests_staged",
       "source": "git_staged",
-      "include": ["package.json", "package-lock.json"]
+      "include": ["**/package.json", "package-lock.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
     }
   ],
   "tiers": {

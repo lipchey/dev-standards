@@ -61,9 +61,18 @@ missing.
 
 The starter `quality.json` ships with `stack: "meta-docs"`, a report-only
 `check-new-deps` check in `staged`, and the `instance-docs-seeded` check in
-`fast` and `full`. The dependency check is npm/package-lock-v3 only and stands
-down for pnpm/yarn repositories; it is not a generic cross-package-manager
-supply-chain gate. Project-specific build/test/lint gates start empty, so
+`fast` and `full`. The dependency check covers npm (package-lock v3, root
+manifest only) and pnpm (lockfile v9, every workspace manifest — ADR-027); it
+stands down for yarn and it is not a generic cross-package-manager
+supply-chain gate. **In pnpm repositories the gate is only as strong as the
+`manifests_staged` fileset that triggers it**: it must be
+`["**/package.json", "pnpm-lock.yaml"]` (plus `pnpm-workspace.yaml` if you want
+membership changes to surface), never a hand-maintained list of manifests —
+a manifest missing from the fileset is never checked while the tier still
+reports the gate green. Exclude any tracked `package.json` that is deliberately
+NOT a pnpm workspace member (a fixture, a vendored sample): the gate cannot
+tell it apart from a workspace package whose lockfile was never regenerated,
+and will report its dependencies as unpinned. Project-specific build/test/lint gates start empty, so
 `./scripts/verify` passes immediately.
 
 1. Switch `stack` (and each workspace `stack`) from `meta-docs` to your real

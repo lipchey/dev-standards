@@ -1159,3 +1159,83 @@ the repo considers too complex, with no key changing in any repo file.
 - Because the transfer in (6) is partial, a class the matrix leaves `off` keeps
   its review-profile ceiling. A future decision that enables more rules must
   narrow the profile again, in the same batch — silence is not a transfer.
+
+## ADR-027 — `check-new-deps` proves pnpm workspaces instead of standing down
+
+- **Status:** Accepted
+- **Date:** 2026-08-05
+- **Amends:** D10 (the pnpm/yarn stand-down predicate) — pnpm is no longer
+  silenced; yarn still is.
+- **Amends:** the v1 scope statement in `tools/check-new-deps.mjs` and
+  `docs/ADOPTION.md` §"After install", which both declared pnpm out of scope.
+
+### Context
+
+The stand-down was written when the gate had no pnpm proof model: a tracked
+`pnpm-lock.yaml` made the tool print `npm-only check inactive` and exit 0. In
+the only live consumer — a pnpm workspace — that meant the supply-chain gate
+had been a no-op since adoption: every dependency it exists to inspect reached
+a commit with no signal at all, while the tier reported the check green. A
+silent stand-down in the single repo the gate runs in is indistinguishable from
+having no gate, and it is worse than a loud one because the manifest, the
+report and the tier all say the check ran.
+
+pnpm v9 does carry a proof model, it is just not npm's. Each importer records
+`specifier` (verbatim from the manifest) and `version` (what it resolved to)
+per direct dependency, and `packages:` records one `resolution:` per
+name@version. That is enough to bind a declared dependency to a resolution
+without any registry or network access — and, unlike npm's `resolved` URL
+fingerprints, it is a per-importer fact, so it extends to workspace
+sub-manifests that the npm path never covered.
+
+The constraint that shapes the implementation is that this tool imports only
+`node:` builtins, in every consumer, from `vendor/`. There is no YAML parser
+available and adding one is not an option; shelling out to `pnpm` would read
+the working tree and break the DATA SOURCE INVARIANT.
+
+### Decision
+
+1. A tracked `pnpm-lock.yaml` selects a pnpm evaluation path. A tracked
+   `yarn.lock` still stands the whole gate down — yarn has no proof model here,
+   and mis-flagging is worse than a documented absence.
+2. The npm path (`evaluate`) is left byte-identical and keeps its tests. pnpm
+   gets a sibling evaluator reusing only the format-agnostic helpers. No
+   abstraction over two lockfile-proof models is introduced for two
+   implementations that share no shape; a third package manager may revisit it.
+3. `pnpm-lock.yaml` is read by a hand-written parser restricted to an explicit
+   v9 subset. Its refusal list — unknown `lockfileVersion`, tabs, anchors,
+   aliases, tags, block scalars, merge keys, flow collections other than the
+   empty-importer `{}`, duplicate importer/section/dependency keys, comments,
+   and ANY line it cannot classify — throws `OperationalError` (exit 2). The
+   refusal list is pinned by tests, not only by the header: skipping an
+   unrecognised line is the one change that would convert this gate into a
+   silent pass, so a future format shift must break commits loudly.
+4. The proof is two-sided. Manifest side: an allowed spec plus a matching
+   importer declaration. Lock side, requiring no manifest at all: every entry
+   must have resolved to what its own specifier implies, an entry added or
+   re-specified while its package.json stayed put is a lockfile-only injection,
+   a `packages:` key whose resolution moved is the same version pointed
+   elsewhere, and a `resolution:` carrying a `tarball:` or a URL is a
+   redirection. The lock side is what makes a lock-only commit provable.
+5. `workspace:` and `catalog:` specs are accepted by the grammar — they cannot
+   reach outside the repository — but bound to the resolution each really
+   produces. Moving an EXISTING dependency from a registry range onto
+   `workspace:`/`catalog:` is still reported: it replaces published code with
+   repo-local code, which is a review question even though it is not a remote
+   swap.
+
+### Consequences
+
+- pnpm mode is only as strong as the consumer fileset that triggers it. A
+  fileset listing a hand-maintained subset of manifests leaves the rest
+  unchecked while the tier still reports green — exactly the failure this ADR
+  removes. `**/package.json` plus `pnpm-lock.yaml` is therefore the required
+  trigger, seeded in `templates/consumer/quality.starter.json` and stated in
+  `docs/ADOPTION.md`.
+- A tracked `package.json` that is NOT a pnpm workspace member gets its new
+  deps reported as unpinned, because the tool cannot distinguish it from a
+  workspace package whose lockfile was never regenerated. Such paths are
+  excluded consumer-side, in the fileset.
+- The gate now reads one extra blob (the HEAD lockfile) on any commit that
+  stages the lockfile. Measured on a 13-importer, ~310 KB lockfile the parse is
+  ~3 ms and the whole check stays in its ~0.2 s class.

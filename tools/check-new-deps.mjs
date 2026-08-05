@@ -36,12 +36,36 @@
  * ANY mode, never a silent pass. Not `bypassable`: a process-global bypass
  * reason must not silence a supply-chain finding.
  *
- * v1 scope (npm only): root package.json <-> root package-lock.json,
- * lockfileVersion 3. Out of scope, by design: workspace sub-manifests,
- * pnpm/yarn (detected and stood down, not mis-flagged — see D10), `overrides`
- * / `bundleDependencies`, and any registry/network heuristic. Known ceiling:
- * an npm repo carrying a stray legacy yarn.lock trips the pnpm/yarn predicate
- * and silences this gate.
+ * npm scope: root package.json <-> root package-lock.json, lockfileVersion 3.
+ * Out of scope there, by design: workspace sub-manifests, `overrides` /
+ * `bundleDependencies`, and any registry/network heuristic. Known ceiling: an
+ * npm repo carrying a stray legacy yarn.lock stands the gate down.
+ *
+ * pnpm scope (ADR-027): EVERY staged package.json (root and workspace
+ * sub-manifests) <-> the root pnpm-lock.yaml, lockfileVersion '9.0'.
+ * Manifest side, per staged manifest: a NEW dep must carry an allowed spec and
+ * be DECLARED by an importer entry under the same importer path + section with
+ * the same `specifier`; an EXISTING dep whose spec changed to a non-registry
+ * source, or from a registry range to `workspace:`/`catalog:`, is a swap.
+ * Lock side, needing no manifest (so it holds on a lock-ONLY commit): every
+ * importer entry must have RESOLVED to what its own specifier implies (a
+ * `link:` for `workspace:`, a registry version otherwise) — specifier equality
+ * alone is forgeable by pairing `specifier: 1.2.3` with `version: link:../evil`;
+ * an entry added or re-specified while its package.json stayed put came from
+ * editing the lockfile; a `packages:` key whose `resolution:` line moved is the
+ * same name@version pointed somewhere else; and a `resolution:` carrying a
+ * `tarball:` or any URL is a redirection, since v9 writes only `{integrity}`
+ * for a registry dep.
+ * Known pnpm ceilings: `overrides`, `patchedDependencies` and
+ * `packageExtensions` are not inspected; a lock-only change to an already
+ * source-declared spec's resolution is only caught by the drift signals above;
+ * an unparsable HEAD lockfile costs those baselines (not the staged read);
+ * importer paths are assumed relative to the git root (true whenever
+ * pnpm-lock.yaml sits at the git root, the only layout this tool detects).
+ * pnpm mode is only as strong as the consumer fileset that triggers it — see
+ * docs/ADOPTION.md.
+ *
+ * yarn is detected and stood down, not mis-flagged (D10).
  */
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -96,6 +120,43 @@ export function isSourceSpec(spec) {
   if (spec.includes(':') || spec.includes('/')) return true; /* proto / scp / shorthand / path / alias */
   const low = spec.toLowerCase();
   return low.endsWith('.tgz') || low.endsWith('.tar') || low.endsWith('.tar.gz');
+}
+
+/* pnpm-only spec families that are NOT registry specs and NOT remote sources:
+   `workspace:*|^|~|<range>` resolves to a package declared in
+   pnpm-workspace.yaml, `catalog:` to a version pinned there. Both stay inside
+   the repository — and the target package's own manifest is itself gated once
+   the consumer fileset covers every staged package.json — so they are exempt
+   from the version grammar and from the source-swap classifier. The exemption
+   is BOUND, not free: the lock must show the resolution each family really
+   produces — a `link:` for `workspace:`, a registry version for `catalog:` —
+   so neither can launder a remote resolution. */
+export function isPnpmInternalSpec(spec) {
+  return typeof spec === 'string' && (spec.startsWith('workspace:') || spec.startsWith('catalog:'));
+}
+
+/* An importer `version` that actually came from a registry: pnpm writes the
+   resolved semver, optionally followed by a parenthesised peer suffix
+   (`1.2.3(react@19.2.8)`). Anything carrying a URL or a `link:`/`file:` marker —
+   at the head OR inside the peer suffix — is a source resolution. Fail-closed:
+   a non-string or anything not starting with a digit is not registry-shaped. */
+export function isPnpmRegistryVersion(version) {
+  if (typeof version !== 'string' || !/^\d/.test(version)) return false;
+  return !version.includes('://') && !version.includes('link:') && !version.includes('file:');
+}
+
+/* The resolution pnpm writes for a `workspace:` spec — a relative path into the
+   repository. A `link:` that is a URL is not a local link (fail-closed). */
+export function isPnpmLinkVersion(version) {
+  return typeof version === 'string' && version.startsWith('link:') && !version.includes('://');
+}
+
+/* The lock resolution required for `spec`: `workspace:` links, everything else
+   (registry ranges, `catalog:`) resolves to a registry version. */
+function pnpmVersionOk(spec, version) {
+  return typeof spec === 'string' && spec.startsWith('workspace:')
+    ? isPnpmLinkVersion(version)
+    : isPnpmRegistryVersion(version);
 }
 
 /* A manifest section as a plain object; a missing or non-object section (e.g.
@@ -427,6 +488,354 @@ export function evaluate({
   return findings;
 }
 
+/* ─────────────────────────────────────────────────────────────── pnpm ──── */
+
+/* The ONLY lockfileVersion this parser claims to understand. A lock written by
+   a future pnpm major must fail LOUD (exit 2) and be reviewed, never be parsed
+   on the assumption the shape held — the npm path takes the same line on
+   `lockfileVersion !== 3`. */
+const PNPM_LOCKFILE_VERSIONS = new Set(['9.0']);
+
+/* Split `key: value` where the key may be single- or double-quoted (pnpm quotes
+   scoped names and specifiers that would otherwise be ambiguous YAML). Returns
+   null when the line is not a mapping entry at all. Values keep their quotes —
+   `unquoteScalar` strips them. */
+function splitYamlEntry(trimmed) {
+  const quote = trimmed[0];
+  if (quote === "'" || quote === '"') {
+    let i = 1;
+    let key = '';
+    while (i < trimmed.length) {
+      if (trimmed[i] === quote) {
+        /* YAML single-quote escaping: '' inside a single-quoted scalar is one '. */
+        if (quote === "'" && trimmed[i + 1] === "'") {
+          key += "'";
+          i += 2;
+          continue;
+        }
+        i += 1;
+        break;
+      }
+      key += trimmed[i];
+      i += 1;
+    }
+    if (trimmed[i] !== ':') return null;
+    return { key, value: trimmed.slice(i + 1).trim() };
+  }
+  const colon = trimmed.indexOf(':');
+  if (colon === -1) return null;
+  return { key: trimmed.slice(0, colon), value: trimmed.slice(colon + 1).trim() };
+}
+
+function unquoteScalar(value) {
+  const quote = value[0];
+  if (value.length >= 2 && (quote === "'" || quote === '"') && value[value.length - 1] === quote) {
+    const inner = value.slice(1, -1);
+    return quote === "'" ? inner.replaceAll("''", "'") : inner;
+  }
+  return value;
+}
+
+/* Every YAML construct this parser refuses inside `importers:`. Skipping an
+   unrecognised line is THE fail-open trap: a future format tweak would quietly
+   empty the importer map and prove every dependency. Refusing means a format
+   change breaks commits loudly, which is the correct failure for a gate. */
+function assertPlainYamlLine(line, trimmed, lineNo) {
+  if (/^ *\t/.test(line) || line.includes('\t')) {
+    throw new OperationalError(`pnpm-lock.yaml line ${lineNo}: tab in the importers block`);
+  }
+  if (/^[#&*!|>-]|^<<:/.test(trimmed)) {
+    throw new OperationalError(
+      `pnpm-lock.yaml line ${lineNo}: unsupported YAML construct in the importers block ` +
+        `(${JSON.stringify(trimmed.slice(0, 40))})`,
+    );
+  }
+}
+
+/**
+ * Parse the parts of a pnpm-lock.yaml this gate proves things with:
+ *   - `lockfileVersion`
+ *   - the `importers:` block, strictly, as
+ *     Map<importerDir, Map<section, Map<depName, {specifier, version}>>>
+ *   - every `packages:` entry's `resolution:` line, for drift comparison, and
+ *     separately those carrying a tarball or any URL —
+ *     v9 writes only `{integrity: …}` for a registry dep, so such a line is the
+ *     lock-side source-redirection signal (the importer entry can look clean
+ *     while the source is redirected one block down).
+ * Throws OperationalError on anything it cannot classify.
+ *
+ * @param {string} text
+ * @returns {{ importers: Map<string, Map<string, Map<string, {specifier?: string, version?: string}>>>,
+ *   sourceResolutions: Array<{ package: string, resolution: string }>,
+ *   resolutions: Map<string, string> }}
+ */
+export function parsePnpmLock(text) {
+  if (typeof text !== 'string') throw new OperationalError('staged pnpm-lock.yaml is not text');
+  const lines = text.split('\n');
+  const importers = new Map();
+  const sourceResolutions = [];
+  const resolutions = new Map();
+  let lockfileVersion;
+  let block = null;
+  let importer = null;
+  let sectionMap = null;
+  let dep = null;
+  let packageKey = null;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (trimmed === '') continue;
+    const indent = line.length - line.trimStart().length;
+
+    if (indent === 0) {
+      const entry = splitYamlEntry(trimmed);
+      if (entry === null) throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: unparsable top-level line`);
+      block = entry.key;
+      importer = null;
+      sectionMap = null;
+      dep = null;
+      packageKey = null;
+      if (entry.key === 'lockfileVersion') lockfileVersion = unquoteScalar(entry.value);
+      continue;
+    }
+
+    if (block === 'packages') {
+      /* Deliberately loose: this block is scanned, not modelled. Only the
+         resolution signal is extracted; everything else is ignored. */
+      if (indent === 2) {
+        const entry = splitYamlEntry(trimmed);
+        packageKey = entry === null ? null : entry.key;
+      } else if (trimmed.startsWith('resolution:')) {
+        if (packageKey !== null) resolutions.set(packageKey, trimmed);
+        if (trimmed.includes('tarball:') || trimmed.includes('://')) {
+          sourceResolutions.push({ package: packageKey ?? '(unknown)', resolution: trimmed });
+        }
+      }
+      continue;
+    }
+
+    if (block !== 'importers') continue;
+
+    assertPlainYamlLine(line, trimmed, i + 1);
+    const entry = splitYamlEntry(trimmed);
+    if (entry === null) {
+      throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: unparsable line in the importers block`);
+    }
+    const { key, value } = entry;
+    /* Same refusal, value side: an anchor/alias/tag/block-scalar/sequence as the
+       VALUE of an otherwise ordinary mapping entry. Checked here rather than on
+       the raw line so a legitimate `workspace:*` specifier is not mistaken for an
+       alias. */
+    if (/^[&*!|>[]/.test(value)) {
+      throw new OperationalError(
+        `pnpm-lock.yaml line ${i + 1}: unsupported YAML construct in the importers block ` +
+          `(${JSON.stringify(trimmed.slice(0, 40))})`,
+      );
+    }
+
+    if (indent === 2) {
+      if (value !== '' && value !== '{}') {
+        throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: unsupported inline importer value`);
+      }
+      if (importers.has(key)) throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: duplicate importer "${key}"`);
+      importer = new Map();
+      importers.set(key, importer);
+      sectionMap = null;
+      dep = null;
+    } else if (indent === 4) {
+      if (importer === null) throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: section outside an importer`);
+      if (value !== '' && value !== '{}') {
+        throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: unsupported inline section value`);
+      }
+      if (importer.has(key)) throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: duplicate section "${key}"`);
+      sectionMap = new Map();
+      importer.set(key, sectionMap);
+      dep = null;
+    } else if (indent === 6) {
+      if (sectionMap === null) throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: dependency outside a section`);
+      if (value !== '') throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: unsupported inline dependency value`);
+      if (sectionMap.has(key)) throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: duplicate dependency "${key}"`);
+      dep = {};
+      sectionMap.set(key, dep);
+    } else if (indent === 8) {
+      if (dep === null) throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: field outside a dependency`);
+      if (key === 'specifier' || key === 'version') dep[key] = unquoteScalar(value);
+    } else {
+      throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: unexpected indentation ${indent} in the importers block`);
+    }
+  }
+
+  if (!PNPM_LOCKFILE_VERSIONS.has(lockfileVersion)) {
+    throw new OperationalError(
+      `unsupported lockfileVersion ${JSON.stringify(lockfileVersion)} in staged pnpm-lock.yaml — ` +
+        `this check requires one of ${[...PNPM_LOCKFILE_VERSIONS].join(', ')}`,
+    );
+  }
+  return { importers, sourceResolutions, resolutions };
+}
+
+/* Lock-side proofs that need NO manifest — so they still hold on a lock-ONLY
+   commit, where nothing else has anything to compare against. `stagedImporters`
+   names the importers whose manifest is staged in this same commit; an importer
+   outside that set had no manifest change, so any change to its declared
+   specifiers came from the lockfile alone. */
+function evaluatePnpmLock(stagedLock, baseLock, stagedImporters) {
+  const findings = [];
+  if (stagedLock === null || stagedLock === undefined) return findings;
+
+  for (const hit of stagedLock.sourceResolutions) {
+    findings.push(
+      `staged pnpm-lock.yaml resolves "${hit.package}" from a non-registry source ` +
+        `(${JSON.stringify(hit.resolution)}) — a registry package resolves to {integrity: …}`,
+    );
+  }
+
+  /* A `packages:` key IS name@version, so an identical key whose resolution line
+     changed is the same package pointed somewhere else — never legitimate. */
+  for (const [key, resolution] of stagedLock.resolutions) {
+    const before = baseLock?.resolutions.get(key);
+    if (before !== undefined && before !== resolution) {
+      findings.push(
+        `staged pnpm-lock.yaml changed the resolution of "${key}" (${JSON.stringify(before)} → ` +
+          `${JSON.stringify(resolution)}) — the same package version cannot resolve two ways`,
+      );
+    }
+  }
+
+  for (const [importerPath, sections] of stagedLock.importers) {
+    for (const [sec, deps] of sections) {
+      for (const [name, entry] of deps) {
+        /* A specifier that is itself a declared source resolves to that source
+           by definition; whether declaring it was legitimate is the manifest-side
+           question (ADR-017), and a lock-only change to it is caught just below.
+           `workspace:`/`catalog:` look source-like to `isSourceSpec` (they carry a
+           colon) but are NOT declared sources — they have an exact required
+           resolution, so they must stay inside the check. */
+        const declaredSource = isSourceSpec(entry.specifier) && !isPnpmInternalSpec(entry.specifier);
+        if (!declaredSource && !pnpmVersionOk(entry.specifier, entry.version)) {
+          findings.push(
+            `staged pnpm-lock.yaml importers["${importerPath}"].${sec}."${name}" ` +
+              `(${JSON.stringify(entry.specifier)}) resolves to ${JSON.stringify(entry.version)} — ` +
+              'not the resolution its spec implies; possible lockfile source swap',
+          );
+          continue;
+        }
+        if (baseLock === null || baseLock === undefined || stagedImporters.has(importerPath)) continue;
+        /* pnpm never rewrites an importer's specifier without a manifest edit, so
+           a specifier that appeared or changed while its manifest stayed put is a
+           dependency introduced by editing the lockfile. */
+        const before = baseLock.importers.get(importerPath)?.get(sec)?.get(name);
+        if (before === undefined) {
+          findings.push(
+            `staged pnpm-lock.yaml adds "${name}" to importers["${importerPath}"].${sec} ` +
+              `(${JSON.stringify(entry.specifier)}) with no change to its package.json`,
+          );
+        } else if (before.specifier !== entry.specifier) {
+          findings.push(
+            `staged pnpm-lock.yaml changed the declared spec of "${name}" in importers["${importerPath}"].${sec} ` +
+              `(${JSON.stringify(before.specifier)} → ${JSON.stringify(entry.specifier)}) with no change to its package.json`,
+          );
+        }
+      }
+    }
+  }
+  return findings;
+}
+
+/**
+ * Pure decision core for pnpm — no git, no I/O.
+ *
+ * @param {{ manifests?: Array<{ path: string, importer: string, base?: unknown, staged?: unknown }>,
+ *   stagedLock?: ReturnType<typeof parsePnpmLock> | null,
+ *   baseLock?: ReturnType<typeof parsePnpmLock> | null,
+ *   lockfileStaged?: boolean, exactOnly?: boolean }} [input]
+ * @returns {string[]}
+ */
+export function evaluatePnpm({
+  manifests = [],
+  stagedLock = null,
+  baseLock = null,
+  lockfileStaged = false,
+  exactOnly = false,
+} = {}) {
+  const stagedManifests = manifests.filter((m) => m.staged !== null && m.staged !== undefined);
+  const findings = lockfileStaged
+    ? evaluatePnpmLock(stagedLock, baseLock, new Set(stagedManifests.map((m) => m.importer)))
+    : [];
+
+  for (const manifest of stagedManifests) {
+    const { path, importer: importerPath } = manifest;
+    if (typeof manifest.staged !== 'object' || Array.isArray(manifest.staged)) {
+      throw new OperationalError(`staged ${path} is not a JSON object`);
+    }
+    const current = manifest.staged;
+    const base = manifest.base ?? {};
+    const baseNames = baseNameSet(base);
+    const importer = stagedLock?.importers.get(importerPath);
+
+    for (const sec of SECTIONS) {
+      for (const [name, spec] of Object.entries(section(current, sec))) {
+        if (baseNames.has(name)) continue;
+        if (!isPnpmInternalSpec(spec) && !isAllowedSpec(spec, { exactOnly })) {
+          findings.push(
+            `${path}: new dependency "${name}" (${sec}) has a disallowed version spec ${JSON.stringify(spec)} — ` +
+              `allowed: exact X.Y.Z, ^/~ ranges over X[.Y[.Z]], workspace:/catalog:, or ${FILE_SPEC}`,
+          );
+        }
+        /* The lock must DECLARE this exact spec under this exact importer and
+           section. That the declaration also RESOLVED to the right kind of source
+           is proven lock-side above, for every entry, not just the new ones. */
+        if (!lockfileStaged) continue;
+        const entry = importer?.get(sec)?.get(name);
+        if (entry === undefined || entry.specifier !== spec) {
+          findings.push(
+            `${path}: new dependency "${name}" (${sec}) is not pinned in the staged pnpm-lock.yaml ` +
+              `(missing/mismatched importers["${importerPath}"].${sec} entry for ${JSON.stringify(spec)})`,
+          );
+        }
+      }
+    }
+
+    if (hasDepBearingDelta(base, current) && !lockfileStaged) {
+      findings.push(
+        `${path}: dependency change staged without a staged pnpm-lock.yaml — stage the updated ` +
+          'lockfile so added/changed deps are pinned',
+      );
+    }
+
+    /* Existing deps, manifest side (ADR-017): a spec that CHANGED to a
+       non-registry source is a swap. `workspace:`/`catalog:` are internal rather
+       than remote, but moving a dep registry → internal still replaces published
+       code with repo-local code, so the TRANSITION is reported even though the
+       resulting spec is exempt from the grammar. */
+    const currentEff = effectiveSpecs(current);
+    const baseEff = effectiveSpecs(base);
+    for (const [name, spec] of currentEff) {
+      if (!baseNames.has(name)) continue;
+      const before = baseEff.get(name);
+      if (before === spec) continue;
+      if (isPnpmInternalSpec(spec)) {
+        if (!isPnpmInternalSpec(before)) {
+          findings.push(
+            `${path}: existing dependency "${name}" changed from ${JSON.stringify(before)} to the workspace-internal ` +
+              `spec ${JSON.stringify(spec)} — published code replaced by repo-local code; review the linked package`,
+          );
+        }
+      } else if (isSourceSpec(spec)) {
+        findings.push(
+          `${path}: existing dependency "${name}" changed to a non-registry source spec ${JSON.stringify(spec)} — ` +
+            'a source swap (git/URL/tarball/npm: alias/local path); only registry version/range/tag changes are allowed',
+        );
+      }
+    }
+  }
+
+  return findings;
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+
 function git(args, cwd) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (r.error) throw new OperationalError(`failed to run git ${args.join(' ')}: ${r.error.message}`);
@@ -480,10 +889,22 @@ function parseNameStatus(out) {
       i += 2;
     }
   }
-  return {
-    manifestStagedChange: targets.has('package.json'),
-    lockfileStaged: targets.has('package-lock.json'),
-  };
+  return targets;
+}
+
+/* Staged manifests for the pnpm path, from the INDEX only (never a
+   pnpm-workspace.yaml glob expansion, which would need the working tree and
+   break the DATA SOURCE INVARIANT). A deleted manifest never reaches here —
+   parseNameStatus drops `D` records — so no `git show :path` on a gone blob.
+   Importer keys in the lock are repo-root-relative with the root spelled `.`. */
+function stagedPnpmManifests(targets) {
+  const manifests = [];
+  for (const path of targets) {
+    if (path !== 'package.json' && !path.endsWith('/package.json')) continue;
+    if (path.split('/').includes('node_modules')) continue;
+    manifests.push({ path, importer: path === 'package.json' ? '.' : path.slice(0, -'/package.json'.length) });
+  }
+  return manifests.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 function parseArgs(argv) {
@@ -493,6 +914,15 @@ function parseArgs(argv) {
     else throw new OperationalError(`unrecognized argument: ${arg}`);
   }
   return { exactOnly };
+}
+
+function report(findings) {
+  if (findings.length === 0) {
+    process.stdout.write('check-new-deps: ok\n');
+    return 0;
+  }
+  for (const f of findings) process.stdout.write(`check-new-deps: ${f}\n`);
+  return 1;
 }
 
 export function main(argv) {
@@ -512,16 +942,51 @@ export function main(argv) {
        (base = {}). `git diff --cached` handles the empty tree natively. */
     const hasHead = gitStatus(['rev-parse', '--verify', '--quiet', 'HEAD'], root) === 0;
 
-    /* D10: a tracked pnpm/yarn lockfile means this is not an npm repo → stand
-       down (else every dep change false-fails on a missing package-lock.json). */
-    if (git(['ls-files', '-z', '--', 'pnpm-lock.yaml', 'yarn.lock'], root).length > 0) {
-      process.stdout.write('check-new-deps: npm-only check inactive (pnpm/yarn lockfile tracked)\n');
+    /* D10 (amended, ADR-027): yarn still stands the gate down — it has no proof
+       model here. pnpm now has one, so a tracked pnpm-lock.yaml selects the pnpm
+       path instead of silencing the check. */
+    if (git(['ls-files', '-z', '--', 'yarn.lock'], root).length > 0) {
+      process.stdout.write('check-new-deps: check inactive (yarn lockfile tracked)\n');
       return 0;
     }
+    const pnpmRepo = git(['ls-files', '-z', '--', 'pnpm-lock.yaml'], root).length > 0;
 
-    const { manifestStagedChange, lockfileStaged } = parseNameStatus(
-      git(['diff', '--cached', '--name-status', '-z', '-M'], root),
-    );
+    const targets = parseNameStatus(git(['diff', '--cached', '--name-status', '-z', '-M'], root));
+
+    /* Read a staged/HEAD blob only when git says it is there — `ls-tree` lists
+       nothing (exit 0) for an absent path, and absence is not a git failure. */
+    const headJson = (path, label) =>
+      hasHead && git(['ls-tree', 'HEAD', '--', path], root).trim() !== ''
+        ? parseJson(git(['show', `HEAD:${path}`], root), label)
+        : null;
+
+    if (pnpmRepo) {
+      const lockfileStaged = targets.has('pnpm-lock.yaml');
+      const manifests = stagedPnpmManifests(targets);
+      if (manifests.length === 0 && !lockfileStaged) return 0;
+      const stagedLock = lockfileStaged ? parsePnpmLock(git(['show', ':pnpm-lock.yaml'], root)) : null;
+      /* The base lock is the ONLY baseline for lock-only tampering (a specifier
+         or a resolution that moved without its manifest). A HEAD lock this parser
+         rejects leaves those signals without a baseline rather than blocking the
+         commit — the staged lock is still parsed strictly, so the fail-closed
+         reading of THIS commit is unaffected. */
+      let baseLock = null;
+      if (lockfileStaged && hasHead && git(['ls-tree', 'HEAD', '--', 'pnpm-lock.yaml'], root).trim() !== '') {
+        try {
+          baseLock = parsePnpmLock(git(['show', 'HEAD:pnpm-lock.yaml'], root));
+        } catch (error) {
+          if (!(error instanceof OperationalError)) throw error;
+        }
+      }
+      for (const manifest of manifests) {
+        manifest.staged = parseJson(git(['show', `:${manifest.path}`], root), `staged ${manifest.path}`);
+        manifest.base = headJson(manifest.path, `base ${manifest.path}`);
+      }
+      return report(evaluatePnpm({ manifests, stagedLock, baseLock, lockfileStaged, exactOnly }));
+    }
+
+    const manifestStagedChange = targets.has('package.json');
+    const lockfileStaged = targets.has('package-lock.json');
     if (!manifestStagedChange && !lockfileStaged) return 0;
 
     const stagedLockfile = lockfileStaged
@@ -534,16 +999,7 @@ export function main(argv) {
     /* Base manifest is read on a lock-ONLY commit too (not just a manifest
        change): the existing-dep source-swap inspection enumerates existing deps
        from the base when the manifest itself is unchanged (ADR-017). */
-    let baseManifest = null;
-    if (
-      (manifestStagedChange || lockfileStaged) &&
-      hasHead &&
-      /* ls-tree lists nothing (exit 0) when the path is absent — absence is not
-         a git failure, a distinction the base read depends on. */
-      git(['ls-tree', 'HEAD', '--', 'package.json'], root).trim() !== ''
-    ) {
-      baseManifest = parseJson(git(['show', 'HEAD:package.json'], root), 'base package.json');
-    }
+    const baseManifest = headJson('package.json', 'base package.json');
 
     /* Base lockfile powers signal 3 (resolved identity-drift). A git READ failure
        stays operational (the git() call throws → exit 2); only a malformed/legacy
@@ -561,13 +1017,7 @@ export function main(argv) {
       }
     }
 
-    const findings = evaluate({ baseManifest, stagedManifest, stagedLockfile, baseLockfile, lockfileStaged, exactOnly });
-    if (findings.length === 0) {
-      process.stdout.write('check-new-deps: ok\n');
-      return 0;
-    }
-    for (const f of findings) process.stdout.write(`check-new-deps: ${f}\n`);
-    return 1;
+    return report(evaluate({ baseManifest, stagedManifest, stagedLockfile, baseLockfile, lockfileStaged, exactOnly }));
   } catch (error) {
     if (error instanceof OperationalError) {
       process.stderr.write(`check-new-deps: ${error.message}\n`);
