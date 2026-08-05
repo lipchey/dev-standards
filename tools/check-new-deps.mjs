@@ -59,7 +59,8 @@
  * Known pnpm ceilings: `overrides`, `patchedDependencies` and
  * `packageExtensions` are not inspected; a lock-only change to an already
  * source-declared spec's resolution is only caught by the drift signals above;
- * an unparsable HEAD lockfile costs those baselines (not the staged read);
+ * an unparsable HEAD lockfile costs those baselines (not the staged read) and
+ * says so as a finding;
  * importer paths are assumed relative to the git root (true whenever
  * pnpm-lock.yaml sits at the git root, the only layout this tool detects).
  * pnpm mode is only as strong as the consumer fileset that triggers it — see
@@ -145,17 +146,36 @@ export function isPnpmRegistryVersion(version) {
   return !version.includes('://') && !version.includes('link:') && !version.includes('file:');
 }
 
-/* The resolution pnpm writes for a `workspace:` spec — a relative path into the
-   repository. A `link:` that is a URL is not a local link (fail-closed). */
-export function isPnpmLinkVersion(version) {
-  return typeof version === 'string' && version.startsWith('link:') && !version.includes('://');
+/* The resolution pnpm writes for a `workspace:` spec: a RELATIVE path that lands
+   inside the repository, resolved against the importer's own directory. Rejecting
+   only URLs is not enough — `link:../../../../tmp/evil` carries no URL and still
+   leaves the repo, and a workspace package by definition does not. Lexical
+   resolution is the right tool here: the DATA SOURCE INVARIANT forbids asking the
+   filesystem, and a path that escapes lexically escapes in fact. */
+export function isPnpmLinkVersion(version, importerPath = '.') {
+  if (typeof version !== 'string' || !version.startsWith('link:')) return false;
+  const target = version.slice('link:'.length).replaceAll('\\', '/');
+  /* No URL, no absolute path, no drive letter — every legitimate target is a
+     plain relative POSIX path. */
+  if (target === '' || target.startsWith('/') || target.includes(':')) return false;
+  const segments = importerPath === '.' ? [] : importerPath.split('/');
+  for (const segment of target.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment !== '..') {
+      segments.push(segment);
+      continue;
+    }
+    if (segments.length === 0) return false; /* climbed above the repo root */
+    segments.pop();
+  }
+  return true;
 }
 
 /* The lock resolution required for `spec`: `workspace:` links, everything else
    (registry ranges, `catalog:`) resolves to a registry version. */
-function pnpmVersionOk(spec, version) {
+function pnpmVersionOk(spec, version, importerPath) {
   return typeof spec === 'string' && spec.startsWith('workspace:')
-    ? isPnpmLinkVersion(version)
+    ? isPnpmLinkVersion(version, importerPath)
     : isPnpmRegistryVersion(version);
 }
 
@@ -612,8 +632,17 @@ export function parsePnpmLock(text) {
         const entry = splitYamlEntry(trimmed);
         packageKey = entry === null ? null : entry.key;
       } else if (trimmed.startsWith('resolution:')) {
+        /* v9 writes the resolution as a one-line flow map. A BLOCK mapping would
+           put `tarball:` on a following line this scan never reads — the exact
+           shape that would hide a redirect behind a clean-looking header. */
+        const value = trimmed.slice('resolution:'.length).trim();
+        if (!value.startsWith('{')) {
+          throw new OperationalError(
+            `pnpm-lock.yaml line ${i + 1}: unsupported "resolution:" form in the packages block`,
+          );
+        }
         if (packageKey !== null) resolutions.set(packageKey, trimmed);
-        if (trimmed.includes('tarball:') || trimmed.includes('://')) {
+        if (value.includes('tarball:') || value.includes('://')) {
           sourceResolutions.push({ package: packageKey ?? '(unknown)', resolution: trimmed });
         }
       }
@@ -677,6 +706,9 @@ export function parsePnpmLock(text) {
     }
   }
 
+  if (!seenBlocks.has('importers')) {
+    throw new OperationalError('pnpm-lock.yaml has no "importers" block');
+  }
   if (!PNPM_LOCKFILE_VERSIONS.has(lockfileVersion)) {
     throw new OperationalError(
       `unsupported lockfileVersion ${JSON.stringify(lockfileVersion)} in staged pnpm-lock.yaml — ` +
@@ -727,7 +759,7 @@ function evaluatePnpmLock(stagedLock, baseLock, stagedNames) {
         const declaredSource = isSourceSpec(entry.specifier) && !isPnpmInternalSpec(entry.specifier);
         const resolutionOk = declaredSource
           ? entry.specifier !== FILE_SPEC || String(entry.version ?? '').startsWith(FILE_SPEC)
-          : pnpmVersionOk(entry.specifier, entry.version);
+          : pnpmVersionOk(entry.specifier, entry.version, importerPath);
         if (!resolutionOk) {
           findings.push(
             `staged pnpm-lock.yaml importers["${importerPath}"].${sec}."${name}" ` +
@@ -776,12 +808,16 @@ export function evaluatePnpm({
   lockfileStaged = false,
   exactOnly = false,
 } = {}) {
-  const stagedManifests = manifests.filter((m) => m.staged !== null && m.staged !== undefined);
-  for (const { path, staged } of stagedManifests) {
-    if (typeof staged !== 'object' || Array.isArray(staged)) {
+  /* Validated BEFORE any filtering: `null` is valid JSON and a plain
+     `filter(Boolean)` would drop a staged manifest that parsed to it, turning a
+     malformed manifest into a silent pass. Only `undefined` means "not staged". */
+  for (const { path, staged } of manifests) {
+    if (staged === undefined) continue;
+    if (staged === null || typeof staged !== 'object' || Array.isArray(staged)) {
       throw new OperationalError(`staged ${path} is not a JSON object`);
     }
   }
+  const stagedManifests = manifests.filter((m) => m.staged !== undefined);
 
   const stagedNames = new Map();
   for (const manifest of stagedManifests) {
@@ -996,18 +1032,27 @@ export function main(argv) {
          commit — the staged lock is still parsed strictly, so the fail-closed
          reading of THIS commit is unaffected. */
       let baseLock = null;
+      const baselineFindings = [];
       if (lockfileStaged && hasHead && git(['ls-tree', 'HEAD', '--', 'pnpm-lock.yaml'], root).trim() !== '') {
         try {
           baseLock = parsePnpmLock(git(['show', 'HEAD:pnpm-lock.yaml'], root));
         } catch (error) {
           if (!(error instanceof OperationalError)) throw error;
+          /* A finding, not exit 2 and not silence: the object under test — the
+             STAGED lock — was read strictly, so this commit is still fully judged.
+             What is lost is the drift baseline, and losing it must be said out
+             loud rather than blocking on a defect in history. */
+          baselineFindings.push(
+            `HEAD pnpm-lock.yaml is unreadable (${error.message}) — lock-only drift signals ` +
+              'have no baseline for this commit',
+          );
         }
       }
       for (const manifest of manifests) {
         manifest.staged = parseJson(git(['show', `:${manifest.path}`], root), `staged ${manifest.path}`);
         manifest.base = headJson(manifest.path, `base ${manifest.path}`);
       }
-      return report(evaluatePnpm({ manifests, stagedLock, baseLock, lockfileStaged, exactOnly }));
+      return report([...baselineFindings, ...evaluatePnpm({ manifests, stagedLock, baseLock, lockfileStaged, exactOnly })]);
     }
 
     const manifestStagedChange = targets.has('package.json');

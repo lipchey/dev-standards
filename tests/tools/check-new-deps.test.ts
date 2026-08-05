@@ -984,7 +984,7 @@ test('pnpm: workspace:/catalog: specs are allowed but bound to the resolution th
       mkPnpmLock({
         '.': {
           dependencies: {
-            '@a/b': { specifier: 'workspace:*', version: 'link:../b' },
+            '@a/b': { specifier: 'workspace:*', version: 'link:packages/b' },
             c: { specifier: 'catalog:default', version: '1.2.3' },
           },
         },
@@ -1044,10 +1044,15 @@ test('pnpm: a lock-only commit still reports a redirected packages: resolution',
 });
 
 test('pnpm: a non-object staged manifest is operational, not a silent pass', () => {
-  assert.throws(
-    () => evaluatePnpm({ manifests: [pnpmManifest({ staged: [] })], lockfileStaged: false }),
-    OperationalError,
-  );
+  /* `null` is the sharp one: it is valid JSON, and a `filter(Boolean)` over the
+     manifest list would drop it silently instead of faulting. */
+  for (const staged of [[], 'x', 42, null] as unknown[]) {
+    assert.throws(
+      () => evaluatePnpm({ manifests: [{ path: 'package.json', importer: '.', base: {}, staged }], lockfileStaged: false }),
+      OperationalError,
+      `staged ${JSON.stringify(staged)} must be operational`,
+    );
+  }
 });
 
 function setupPnpmRepo(): { dir: string; env: NodeJS.ProcessEnv } {
@@ -1207,9 +1212,10 @@ test('pnpm git: a lock-only commit that injects a dependency → exit 1', () => 
   assert.match(r.out, /adds "evil" to importers\["apps\/client"\]\.dependencies/);
 });
 
-test('pnpm git: an unparsable HEAD lockfile disables the baseline but never blocks on its own', () => {
-  /* The staged lock is still parsed strictly — only the lock-only-drift baseline
-     is lost, so this must be exit 0, not the exit 2 a strict base read would give. */
+test('pnpm git: an unparsable HEAD lockfile is reported, not silently swallowed', () => {
+  /* The staged lock is still parsed strictly, so this commit is fully judged; what
+     is lost is the drift BASELINE. That loss is said out loud (exit 1) rather than
+     blocking the commit on a defect in history (exit 2) or passing in silence. */
   const { dir, env } = setupPnpmRepo();
   write(dir, 'pnpm-lock.yaml', 'lockfileVersion: nonsense\n');
   git(dir, env, 'add', '-A');
@@ -1217,7 +1223,8 @@ test('pnpm git: an unparsable HEAD lockfile disables the baseline but never bloc
   write(dir, 'pnpm-lock.yaml', mkPnpmLock({ '.': {}, 'apps/client': {} }));
   git(dir, env, 'add', 'pnpm-lock.yaml');
   const r = runTool(dir, env);
-  assert.equal(r.code, 0, r.err + r.out);
+  assert.equal(r.code, 1, r.err + r.out);
+  assert.match(r.out, /HEAD pnpm-lock\.yaml is unreadable .* have no baseline/);
 });
 
 test('pnpm parser: an unknown field parked under a dependency is refused', () => {
@@ -1269,4 +1276,47 @@ test('pnpm: staging a manifest is not cover for a name only the lockfile introdu
 test('pnpm parser: a second importers: block is refused', () => {
   const lines = ["lockfileVersion: '9.0'", '', 'importers:', '', '  .: {}', '', 'importers:', '', '  apps/client: {}'];
   assert.throws(() => parsePnpmLock(lines.join('\n')), OperationalError);
+});
+
+test('pnpm parser: a BLOCK-form resolution is refused, not skimmed', () => {
+  /* The redirect hides one line below a clean-looking `resolution:` header, where
+     a line-oriented scan never looks. v9 only ever writes the flow form. */
+  const lines = [
+    "lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '      a:',
+    '        specifier: 1.2.3', '        version: 1.2.3', '', 'packages:', '', '  a@1.2.3:',
+    '    resolution:', '      tarball: https://evil.example/a.tgz',
+  ];
+  assert.throws(() => parsePnpmLock(lines.join('\n')), OperationalError);
+});
+
+test('pnpm parser: a lockfile with no importers block is refused', () => {
+  assert.throws(() => parsePnpmLock("lockfileVersion: '9.0'\n"), OperationalError);
+});
+
+test('pnpm: a workspace link that climbs out of the repository is a finding', () => {
+  const escaping = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { dependencies: { '@a/b': 'workspace:*' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { dependencies: { '@a/b': { specifier: 'workspace:*', version: 'link:../../../../tmp/evil' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.match(escaping[0] ?? '', /not the resolution its spec implies/);
+  /* The same climb is legitimate from a nested importer that has the depth for it. */
+  const nested = evaluatePnpm({
+    manifests: [pnpmManifest({ path: 'apps/client/package.json', importer: 'apps/client', staged: { dependencies: { '@a/b': 'workspace:*' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ 'apps/client': { dependencies: { '@a/b': { specifier: 'workspace:*', version: 'link:../../packages/b' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.deepEqual(nested, []);
+  const absolute = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { dependencies: { '@a/b': 'workspace:*' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { dependencies: { '@a/b': { specifier: 'workspace:*', version: 'link:/tmp/evil' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.match(absolute[0] ?? '', /not the resolution its spec implies/);
 });

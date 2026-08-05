@@ -1236,6 +1236,14 @@ the working tree and break the DATA SOURCE INVARIANT.
   deps reported as unpinned, because the tool cannot distinguish it from a
   workspace package whose lockfile was never regenerated. Such paths are
   excluded consumer-side, in the fileset.
+- An unparsable HEAD lockfile is a FINDING, not exit 2 and not silence: the
+  object under test is the STAGED lock, which is still read strictly, so the
+  commit is fully judged; what is lost is the drift baseline, and a defect in
+  history must not block every commit until history is rewritten.
+- `link:` targets are confined lexically to the repository (the DATA SOURCE
+  INVARIANT forbids asking the filesystem, and a path that escapes lexically
+  escapes in fact), so a `workspace:` spec cannot be resolved to a directory
+  outside the repo by editing the lock.
 - The gate now reads one extra blob (the HEAD lockfile) on any commit that
   stages the lockfile. Measured on a 13-importer, ~310 KB lockfile the parse is
   ~3 ms and the whole check stays in its ~0.2 s class.
