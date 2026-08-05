@@ -166,6 +166,106 @@ test('configured timeout line stays truthful when an empty fileset skips the che
   }
 });
 
+function lastLine(stream: string): string {
+  return stream.trimEnd().split('\n').at(-1) ?? '';
+}
+
+/* A red run used to end byte-identically to a green one: the only failure marker was the inline
+   summarize() line, which every later passing check pushes out of a `tail`. The checks below are
+   ordered so the failure is NOT last inline — the terminal record has to bring it back. */
+test('a blocking failure ends the run with a failed record that re-prints only the blockers', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-runner-record-fail-'));
+  try {
+    const init = spawnSync('git', ['init', tmp], { encoding: 'utf8' });
+    assert.equal(init.status, 0, `git init failed:\n${init.stderr}`);
+
+    const manifestPath = path.join(tmp, 'quality.json');
+    const manifest = structuredClone(MANIFEST) as unknown as Manifest;
+    manifest.tiers.fast = [
+      { name: 'failing-check', argv: [process.execPath, '-e', 'process.exit(3)'], timeout_seconds: 30 },
+      { name: 'later-pass', argv: [process.execPath, '--version'], timeout_seconds: 30 },
+    ];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    const run = spawnSync(process.execPath, [runnerPath, '--manifest', manifestPath, '--fast'], {
+      encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
+    });
+
+    assert.equal(run.status, 1, `a blocking failure must exit 1, got ${run.status}:\n${run.stderr}`);
+    assert.equal(lastLine(run.stdout), 'VERIFY RESULT: scope=fast outcome=failed blockers=1 checks=2');
+    // The record cites the same summarize() line the inline pass emitted — for the blocker only.
+    const reprint = run.stdout.slice(run.stdout.indexOf('blocking failures:\n'));
+    assert.match(reprint, /^ {2}fail\s+failing-check \[blocking\] \d+ms exit 3$/m);
+    assert.doesNotMatch(reprint, /later-pass/);
+    assert.ok(
+      run.stdout.indexOf('report: ') < run.stdout.indexOf('blocking failures:'),
+      `the record must follow the report line, got:\n${run.stdout}`,
+    );
+    assert.doesNotMatch(run.stderr, /VERIFY RESULT/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a green run ends with a passed record on stdout, after the report line', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-runner-record-ok-'));
+  try {
+    const init = spawnSync('git', ['init', tmp], { encoding: 'utf8' });
+    assert.equal(init.status, 0, `git init failed:\n${init.stderr}`);
+
+    const manifestPath = path.join(tmp, 'quality.json');
+    const manifest = structuredClone(MANIFEST) as unknown as Manifest;
+    manifest.tiers.fast = [
+      { name: 'passing-check', argv: [process.execPath, '--version'], timeout_seconds: 30 },
+    ];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    const run = spawnSync(process.execPath, [runnerPath, '--manifest', manifestPath, '--fast'], {
+      encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
+    });
+
+    assert.equal(run.status, 0, `runner failed:\n${run.stderr}`);
+    assert.equal(lastLine(run.stdout), 'VERIFY RESULT: scope=fast outcome=passed checks=1');
+    assert.doesNotMatch(run.stdout, /blocking failures:/);
+    assert.ok(
+      run.stdout.indexOf('report: ') < run.stdout.indexOf('VERIFY RESULT'),
+      `the record must follow the report line, got:\n${run.stdout}`,
+    );
+    assert.doesNotMatch(run.stderr, /VERIFY RESULT/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/* A tier that throws never reaches its exit decision, so it is neither passed nor failed. Without
+   its own record the grammar would have a hole exactly where a reader most needs one: `aborted`
+   and `failed` mean different things (a spent deadline hides the checks that never ran). */
+test('an aborted tier ends with an aborted record on stderr, after the detail line', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-runner-record-abort-'));
+  try {
+    // No git init: the tier aborts while resolving filesets, the same path a spent deadline takes.
+    const manifestPath = path.join(tmp, 'quality.json');
+    fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST), 'utf8');
+
+    const run = spawnSync(process.execPath, [runnerPath, '--manifest', manifestPath, '--fast'], {
+      encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
+    });
+
+    assert.equal(run.status, 1, `an aborted tier must exit 1, got ${run.status}:\n${run.stderr}`);
+    assert.equal(lastLine(run.stderr), 'VERIFY RESULT: scope=fast outcome=aborted');
+    assert.ok(
+      run.stderr.indexOf('error running fast tier:') < run.stderr.indexOf('VERIFY RESULT'),
+      `the detail line must survive above the record, got:\n${run.stderr}`,
+    );
+    assert.doesNotMatch(run.stdout, /VERIFY RESULT/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // isBlockingResult IS the tier's exit decision (`results.some(isBlockingResult) ? 1 : 0`).
 // Bug caught: a broken report-only check passing its tier fail-open because 'error' was
 // treated as mode-gated like an ordinary finding.
