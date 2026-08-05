@@ -34,7 +34,7 @@ const REQUIRED_TEMPLATE_NAMES = [
    name is reserved in BOTH source kinds — the template lister and the overlay loader
    (realLoadOverlaySources) each skip it, so it never becomes a corpus guide or a
    required-read tail. */
-export const NON_GUIDE_TEMPLATE_NAMES: ReadonlySet<string> = new Set(['TRACEABILITY.md']);
+const NON_GUIDE_TEMPLATE_NAMES: ReadonlySet<string> = new Set(['TRACEABILITY.md']);
 
 export const REVIEW_GUIDE_TEMPLATES_DIR = join(
   fileURLToPath(PACKAGE_ROOT_URL),
@@ -62,7 +62,7 @@ export type ReviewGuideLoadOutcome =
 
 /* An overlay guide read fail-closed from the consumer-controlled dir: name, absolute
    path, and the body read through a no-follow descriptor. */
-export interface OverlaySource {
+interface OverlaySource {
   name: string;
   path: string;
   body: string;
