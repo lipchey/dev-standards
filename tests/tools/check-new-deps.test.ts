@@ -1129,7 +1129,7 @@ test('pnpm: a dep injected by editing ONLY the lockfile is a finding', () => {
     lockfileStaged: true,
   });
   assert.equal(findings.length, 1);
-  assert.match(findings[0] ?? '', /adds "evil" to importers\["apps\/client"\]\.dependencies .* with no change to its package\.json/);
+  assert.match(findings[0] ?? '', /adds "evil" to importers\["apps\/client"\]\.dependencies .* with no matching package\.json change/);
 });
 
 test('pnpm: a declared spec rewritten by editing ONLY the lockfile is a finding', () => {
@@ -1139,7 +1139,7 @@ test('pnpm: a declared spec rewritten by editing ONLY the lockfile is a finding'
     stagedLock: parsePnpmLock(mkPnpmLock({ 'apps/client': { dependencies: { a: REG('9.9.9') } } })),
     lockfileStaged: true,
   });
-  assert.match(findings[0] ?? '', /changed the declared spec of "a" .* with no change to its package\.json/);
+  assert.match(findings[0] ?? '', /changed the declared spec of "a" .* with no matching package\.json change/);
 });
 
 test('pnpm: the same lock-only edit is NOT reported when that manifest is staged with it', () => {
@@ -1222,5 +1222,51 @@ test('pnpm git: an unparsable HEAD lockfile disables the baseline but never bloc
 
 test('pnpm parser: an unknown field parked under a dependency is refused', () => {
   const lines = ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '      a:', '        specifier: 1.0.0', '        version: link:../evil', '        _real: 1.0.0'];
+  assert.throws(() => parsePnpmLock(lines.join('\n')), OperationalError);
+});
+
+test('pnpm: the one grammar-legal source spec cannot launder a resolution', () => {
+  /* `file:vendor/dev-standards` is the single source spec isAllowedSpec accepts,
+     so it is the only one that reaches the lock side on a NEW dep. Bind it. */
+  const findings = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { devDependencies: { 'dev-standards': 'file:vendor/dev-standards' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { devDependencies: { 'dev-standards': { specifier: 'file:vendor/dev-standards', version: 'link:../../evil' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.match(findings[0] ?? '', /not the resolution its spec implies/);
+  const honest = evaluatePnpm({
+    manifests: [pnpmManifest({ staged: { devDependencies: { 'dev-standards': 'file:vendor/dev-standards' } } })],
+    stagedLock: parsePnpmLock(
+      mkPnpmLock({ '.': { devDependencies: { 'dev-standards': { specifier: 'file:vendor/dev-standards', version: 'file:vendor/dev-standards(eslint@9.39.5)' } } } }),
+    ),
+    lockfileStaged: true,
+  });
+  assert.deepEqual(honest, []);
+});
+
+test('pnpm: staging a manifest is not cover for a name only the lockfile introduces', () => {
+  /* The importer IS staged (an unrelated dep moved), but `evil` appears nowhere
+     in the manifest — a per-importer skip would have hidden it. */
+  const findings = evaluatePnpm({
+    manifests: [
+      pnpmManifest({
+        path: 'apps/client/package.json',
+        importer: 'apps/client',
+        base: { dependencies: { a: '1.2.3' } },
+        staged: { dependencies: { a: '1.2.4' } },
+      }),
+    ],
+    baseLock: BASE_LOCK(),
+    stagedLock: parsePnpmLock(mkPnpmLock({ 'apps/client': { dependencies: { a: REG('1.2.4'), evil: REG('9.9.9') } } })),
+    lockfileStaged: true,
+  });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0] ?? '', /adds "evil" to importers\["apps\/client"\]\.dependencies/);
+});
+
+test('pnpm parser: a second importers: block is refused', () => {
+  const lines = ["lockfileVersion: '9.0'", '', 'importers:', '', '  .: {}', '', 'importers:', '', '  apps/client: {}'];
   assert.throws(() => parsePnpmLock(lines.join('\n')), OperationalError);
 });

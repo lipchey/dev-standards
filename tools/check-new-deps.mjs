@@ -576,6 +576,7 @@ export function parsePnpmLock(text) {
   const sourceResolutions = [];
   const resolutions = new Map();
   let lockfileVersion;
+  const seenBlocks = new Set();
   let block = null;
   let importer = null;
   let sectionMap = null;
@@ -591,6 +592,10 @@ export function parsePnpmLock(text) {
     if (indent === 0) {
       const entry = splitYamlEntry(trimmed);
       if (entry === null) throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: unparsable top-level line`);
+      if (entry.key === 'importers' && seenBlocks.has('importers')) {
+        throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: a second "importers:" block`);
+      }
+      seenBlocks.add(entry.key);
       block = entry.key;
       importer = null;
       sectionMap = null;
@@ -683,10 +688,10 @@ export function parsePnpmLock(text) {
 
 /* Lock-side proofs that need NO manifest — so they still hold on a lock-ONLY
    commit, where nothing else has anything to compare against. `stagedImporters`
-   names the importers whose manifest is staged in this same commit; an importer
-   outside that set had no manifest change, so any change to its declared
-   specifiers came from the lockfile alone. */
-function evaluatePnpmLock(stagedLock, baseLock, stagedImporters) {
+   maps each staged manifest's importer path to the dependency names it declares;
+   a name outside that set was not touched by any manifest in this commit, so a
+   change to its declared specifier came from the lockfile alone. */
+function evaluatePnpmLock(stagedLock, baseLock, stagedNames) {
   const findings = [];
   if (stagedLock === null || stagedLock === undefined) return findings;
 
@@ -712,14 +717,18 @@ function evaluatePnpmLock(stagedLock, baseLock, stagedImporters) {
   for (const [importerPath, sections] of stagedLock.importers) {
     for (const [sec, deps] of sections) {
       for (const [name, entry] of deps) {
-        /* A specifier that is itself a declared source resolves to that source
-           by definition; whether declaring it was legitimate is the manifest-side
-           question (ADR-017), and a lock-only change to it is caught just below.
-           `workspace:`/`catalog:` look source-like to `isSourceSpec` (they carry a
-           colon) but are NOT declared sources — they have an exact required
-           resolution, so they must stay inside the check. */
+        /* A specifier that is itself a declared source resolves to that source by
+           definition, so its resolution is not checked against a shape — EXCEPT
+           FILE_SPEC, the one source spec the manifest grammar accepts and
+           therefore the one that can carry a NEW dep past the manifest side.
+           `workspace:`/`catalog:` look source-like to `isSourceSpec` (they carry
+           a colon) but are NOT declared sources — they have an exact required
+           resolution, so they stay inside the ordinary check. */
         const declaredSource = isSourceSpec(entry.specifier) && !isPnpmInternalSpec(entry.specifier);
-        if (!declaredSource && !pnpmVersionOk(entry.specifier, entry.version)) {
+        const resolutionOk = declaredSource
+          ? entry.specifier !== FILE_SPEC || String(entry.version ?? '').startsWith(FILE_SPEC)
+          : pnpmVersionOk(entry.specifier, entry.version);
+        if (!resolutionOk) {
           findings.push(
             `staged pnpm-lock.yaml importers["${importerPath}"].${sec}."${name}" ` +
               `(${JSON.stringify(entry.specifier)}) resolves to ${JSON.stringify(entry.version)} — ` +
@@ -727,20 +736,22 @@ function evaluatePnpmLock(stagedLock, baseLock, stagedImporters) {
           );
           continue;
         }
-        if (baseLock === null || baseLock === undefined || stagedImporters.has(importerPath)) continue;
+        /* Skipped per NAME, not per importer: staging a manifest for an unrelated
+           edit must not become cover for a name the lockfile alone introduces. */
+        if (baseLock === null || baseLock === undefined || stagedNames.get(importerPath)?.has(name)) continue;
         /* pnpm never rewrites an importer's specifier without a manifest edit, so
-           a specifier that appeared or changed while its manifest stayed put is a
-           dependency introduced by editing the lockfile. */
+           a specifier that appeared or changed while its manifest did not declare
+           it is a dependency introduced by editing the lockfile. */
         const before = baseLock.importers.get(importerPath)?.get(sec)?.get(name);
         if (before === undefined) {
           findings.push(
             `staged pnpm-lock.yaml adds "${name}" to importers["${importerPath}"].${sec} ` +
-              `(${JSON.stringify(entry.specifier)}) with no change to its package.json`,
+              `(${JSON.stringify(entry.specifier)}) with no matching package.json change`,
           );
         } else if (before.specifier !== entry.specifier) {
           findings.push(
             `staged pnpm-lock.yaml changed the declared spec of "${name}" in importers["${importerPath}"].${sec} ` +
-              `(${JSON.stringify(before.specifier)} → ${JSON.stringify(entry.specifier)}) with no change to its package.json`,
+              `(${JSON.stringify(before.specifier)} → ${JSON.stringify(entry.specifier)}) with no matching package.json change`,
           );
         }
       }
@@ -766,15 +777,23 @@ export function evaluatePnpm({
   exactOnly = false,
 } = {}) {
   const stagedManifests = manifests.filter((m) => m.staged !== null && m.staged !== undefined);
-  const findings = lockfileStaged
-    ? evaluatePnpmLock(stagedLock, baseLock, new Set(stagedManifests.map((m) => m.importer)))
-    : [];
+  for (const { path, staged } of stagedManifests) {
+    if (typeof staged !== 'object' || Array.isArray(staged)) {
+      throw new OperationalError(`staged ${path} is not a JSON object`);
+    }
+  }
+
+  const stagedNames = new Map();
+  for (const manifest of stagedManifests) {
+    const names = stagedNames.get(manifest.importer) ?? new Set();
+    for (const sec of SECTIONS) for (const name of Object.keys(section(manifest.staged, sec))) names.add(name);
+    stagedNames.set(manifest.importer, names);
+  }
+
+  const findings = lockfileStaged ? evaluatePnpmLock(stagedLock, baseLock, stagedNames) : [];
 
   for (const manifest of stagedManifests) {
     const { path, importer: importerPath } = manifest;
-    if (typeof manifest.staged !== 'object' || Array.isArray(manifest.staged)) {
-      throw new OperationalError(`staged ${path} is not a JSON object`);
-    }
     const current = manifest.staged;
     const base = manifest.base ?? {};
     const baseNames = baseNameSet(base);
