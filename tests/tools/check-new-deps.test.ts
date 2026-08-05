@@ -1219,3 +1219,8 @@ test('pnpm git: an unparsable HEAD lockfile disables the baseline but never bloc
   const r = runTool(dir, env);
   assert.equal(r.code, 0, r.err + r.out);
 });
+
+test('pnpm parser: an unknown field parked under a dependency is refused', () => {
+  const lines = ["lockfileVersion: '9.0'", '', 'importers:', '', '  .:', '    dependencies:', '      a:', '        specifier: 1.0.0', '        version: link:../evil', '        _real: 1.0.0'];
+  assert.throws(() => parsePnpmLock(lines.join('\n')), OperationalError);
+});

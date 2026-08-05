@@ -660,7 +660,13 @@ export function parsePnpmLock(text) {
       sectionMap.set(key, dep);
     } else if (indent === 8) {
       if (dep === null) throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: field outside a dependency`);
-      if (key === 'specifier' || key === 'version') dep[key] = unquoteScalar(value);
+      /* v9 writes exactly these two per direct dependency. Ignoring an unknown
+         third field would let a format shift — or a hand-edit — park data the
+         proof never looks at, so refuse instead. */
+      if (key !== 'specifier' && key !== 'version') {
+        throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: unexpected dependency field "${key}"`);
+      }
+      dep[key] = unquoteScalar(value);
     } else {
       throw new OperationalError(`pnpm-lock.yaml line ${i + 1}: unexpected indentation ${indent} in the importers block`);
     }
