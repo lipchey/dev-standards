@@ -221,6 +221,12 @@ test('diff-cover CLI: a failing run names only the files with uncovered changed 
 
     const r = runTool(repo, ['--base-ref', baseSha, '--threshold', '90']);
     assert.equal(r.status, 1, r.stdout + r.stderr);
+    /* The aggregate's parenthetical counts are derived separately from `result.total` (one reduces
+       `result.files`, the other comes out of computeCoverage), so nothing stopped the two halves of
+       the same line from disagreeing: narrowing that reduce to the shortfall files alone prints
+       `50% (4/6 changed lines)` — arithmetic that cannot be true — with every other assertion in
+       the suite still green. Pin the whole line, not just the percentage. */
+    assert.match(r.stdout, /^diff-coverage: 50% \(4\/8 changed lines\) threshold 90 — FAIL$/m);
     assert.match(r.stdout, /^ {2}uncovered: src\/gap\.ts 1\/2 changed lines \(50%\)$/m);
     assert.match(r.stdout, /^ {2}uncovered: src\/worse\.ts 1\/4 changed lines \(25%\)$/m);
     assert.equal(r.stdout.includes('src/covered.ts'), false, r.stdout);
