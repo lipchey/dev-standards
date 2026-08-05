@@ -166,6 +166,10 @@ export function runFixStaged(
 
   const skipped = partial.length + nonRegular.length + hardlinked.length;
   const tail = skipped > 0 ? `, skipped ${skipped}` : '';
-  write(out, `fix-staged: formatted and re-staged ${safe.length} file(s)${tail}`);
+  /* The count is what the formatter was HANDED, not what it changed — every safe file is passed to
+     `format.argv` and re-staged unconditionally. "formatted N file(s)" read as "N files were
+     rewritten" and sent a reader hunting for a phantom reformat of an already-clean commit, so the
+     line says what actually happened instead. */
+  write(out, `fix-staged: ran the formatter over ${safe.length} staged file(s), re-staged${tail}`);
   return 0;
 }
