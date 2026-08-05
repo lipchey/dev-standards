@@ -207,7 +207,8 @@ export function parseIoStallUs(text: string): number | null {
   return total === undefined ? null : Number(total);
 }
 
-// Absent on macOS and on kernels built without PSI — a missing sample is not an error.
+/* Absent on macOS, and on a kernel booted `psi=0` the file EXISTS but reads EOPNOTSUPP — a
+   missing sample is not an error, so every failure mode collapses to null. */
 function readIoStallUs(): number | null {
   try {
     return parseIoStallUs(fs.readFileSync('/proc/pressure/io', 'utf8'));

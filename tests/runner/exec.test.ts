@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expandArgv, parseIoStallUs, runCheck, runProcess } from '../../runner/src/exec.ts';
 import type { RunCheckInput } from '../../runner/src/exec.ts';
-import { isBlockingResult } from '../../runner/src/verify-runner.ts';
+import { isBlockingResult, summarize } from '../../runner/src/verify-runner.ts';
 import type { Check } from '../../runner/src/types.ts';
 
 function stub(name: string): string {
@@ -326,10 +326,35 @@ test('parseIoStallUs returns null when the "full" line is absent (PSI-less kerne
   assert.equal(parseIoStallUs(''), null);
 });
 
-// The wiring, not the parser: on a PSI kernel every CheckResult must carry the sampled window.
-test('runCheck attaches ioStallMs where PSI exists', { skip: !fs.existsSync('/proc/pressure/io') }, () => {
+/* Probe the sampler the way runCheck does — `existsSync` is not enough: a kernel booted
+   `psi=0` has the file but reads EOPNOTSUPP, and the runner deliberately degrades to an
+   absent field there, so the two branches below must split on a real read, not on the path. */
+function psiSample(): number | null {
+  try {
+    return parseIoStallUs(fs.readFileSync('/proc/pressure/io', 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// The wiring, not the parser: where PSI reads, every CheckResult carries the sampled window.
+test('runCheck attaches ioStallMs where PSI is readable', { skip: psiSample() === null }, () => {
   const result = runCheck(input(check([process.execPath, '-e', 'process.exit(0)'])));
   assert.equal(result.status, 'pass');
   assert.equal(typeof result.ioStallMs, 'number');
   assert.ok((result.ioStallMs as number) >= 0, 'stall delta is monotonic, never negative');
+});
+
+// The fail-open half: no readable PSI must leave the field absent, never throw or emit a zero.
+test('runCheck omits ioStallMs where PSI is unavailable', { skip: psiSample() !== null }, () => {
+  const result = runCheck(input(check([process.execPath, '-e', 'process.exit(0)'])));
+  assert.equal(result.status, 'pass');
+  assert.ok(!('ioStallMs' in result), 'absent field, not a fabricated 0');
+});
+
+test('the stall sample is printed on a timeout and nowhere else', () => {
+  const killed = { name: 'c', tier: 'fast', status: 'timeout', exitCode: null, durationMs: 60_124, mode: 'blocking' } as const;
+  assert.match(summarize({ ...killed, ioStallMs: 55_000 }), /io-stall 55000ms$/m);
+  assert.doesNotMatch(summarize({ ...killed, status: 'pass', exitCode: 0, ioStallMs: 55_000 }), /io-stall/);
+  assert.doesNotMatch(summarize(killed), /io-stall/);
 });

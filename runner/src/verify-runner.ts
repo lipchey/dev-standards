@@ -222,7 +222,7 @@ function tierChecks(manifest: Manifest, scope: TierName): Check[] {
   return manifest.tiers[scope];
 }
 
-function summarize(r: CheckResult): string {
+export function summarize(r: CheckResult): string {
   const exit = r.exitCode === null ? '-' : String(r.exitCode);
   /* Only on a kill: the I/O-stall share of the window is the first question asked about a
      timeout, and printing it everywhere would bury it. Every check's sample still reaches
