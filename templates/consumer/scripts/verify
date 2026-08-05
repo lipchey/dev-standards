@@ -33,9 +33,16 @@ fi
 verify_on_exit() {
   local verify_status=$?
   trap - EXIT
-  if [[ -n "${VERIFY_TIER_SCOPE}" && -n "${VERIFY_NO_VERDICT_REASON}" ]]; then
+  # `set -e` is off for the rest of this handler: a failing printf must not abort before the
+  # `exit` below, or the run reports printf's status instead of the one just captured.
+  set +e
+  # `exec` replaces this process, so REACHING this handler at all means the runner never started
+  # and every non-zero exit here is a fault only the wrapper can see. Hence the fallback: a gate
+  # that named itself is reported precisely, and anything else — a failed substitution under
+  # `set -e`, an unexecutable bundle — still leaves a record instead of a silent status.
+  if [[ -n "${VERIFY_TIER_SCOPE}" && "${verify_status}" -ne 0 ]]; then
     printf 'VERIFY RESULT: scope=%s outcome=no-verdict reason=%s\n' \
-      "${VERIFY_TIER_SCOPE}" "${VERIFY_NO_VERDICT_REASON}" >&2
+      "${VERIFY_TIER_SCOPE}" "${VERIFY_NO_VERDICT_REASON:-exit-${verify_status}}" >&2
   fi
   exit "${verify_status}"
 }

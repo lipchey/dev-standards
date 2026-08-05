@@ -32,7 +32,16 @@ const EXIT_CHECK_FAILED = 1;
    cannot report on a path where it was never invoked (a shim that refuses before dispatch, a
    remote lane whose workload never launched). Consumers own their own reason slugs. When more
    than one line is present the LAST one is the verdict — which is what the outermost caller,
-   the one that actually knows how the run ended, always writes. */
+   the one that actually knows how the run ended, always writes.
+
+   `scope` is whatever the invocation named, so a runner-emitted record can carry a non-tier scope
+   (`doctor`, `fix-staged`) when the fault precedes the mode's own work. A WRAPPER's records are
+   tier-only: it speaks for a missing verdict, and a non-tier mode has none to be missing.
+
+   Not every exit carries the line, and one hole is deliberate: a usage error (EXIT_USAGE) has no
+   record. argv did not parse, so there is no scope to name truthfully — and that exit is
+   unambiguous without one, since the code is shared with nothing and the rejected argument is
+   already on stderr. The record disambiguates; it is not a receipt. */
 function noVerdict(scope: string, reason: string): number {
   process.stderr.write(`VERIFY RESULT: scope=${scope} outcome=no-verdict reason=${reason}\n`);
   return EXIT_MANIFEST;
