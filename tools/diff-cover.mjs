@@ -451,6 +451,23 @@ function main() {
     `diff-coverage: ${result.total}% (${totalCovered}/${totalChanged} changed lines) ` +
       `threshold ${opts.threshold} — ${pass ? 'PASS' : 'FAIL'}`,
   );
+  /* On a failure the aggregate names no file to act on, and until now the per-file breakdown
+     existed ONLY inside diff-coverage.json. That is unreachable whenever the reader is not on
+     the machine that ran the gate — a remote build host keeps the JSON (and deletes it with the
+     workspace), and CI keeps it only as a failure artifact — so the operator was told the
+     percentage and left to re-run the whole coverage suite locally to learn WHICH file dragged
+     it down. Print the shortfall on the channel that always reaches the caller: stdout. Not
+     capped — every listed file is a file the author has to act on, and a silent cap would read
+     as "that was all of them". Only files with uncovered changed lines appear; a fully covered
+     file cannot be part of a shortfall. */
+  if (!pass) {
+    const shortfall = result.files
+      .filter((f) => f.covered < f.changedExecutable)
+      .sort((a, b) => a.pct - b.pct || b.changedExecutable - a.changedExecutable);
+    for (const f of shortfall) {
+      console.log(`  uncovered: ${f.path} ${f.covered}/${f.changedExecutable} changed lines (${f.pct}%)`);
+    }
+  }
   process.exitCode = pass ? 0 : 1;
 }
 

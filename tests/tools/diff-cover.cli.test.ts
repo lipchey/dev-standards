@@ -190,3 +190,38 @@ test('diff-cover CLI: committed delta is measured end-to-end (50% < threshold �
     cleanup(repo);
   }
 });
+
+/* The failure line carries a percentage and no file, so until the shortfall was printed the
+   only way to learn WHICH file to test was to open diff-coverage.json — which exists solely on
+   the machine that ran the gate. Whoever reads a remote or CI run reads stdout, so the actionable
+   part has to be there. Asserting the fully covered file is ABSENT is the half that matters: a
+   listing of every changed file would technically contain the answer while burying it. */
+test('diff-cover CLI: a failing run names only the files with uncovered changed lines', () => {
+  const repo = initRepo();
+  try {
+    write(repo, 'README.md', '# base\n');
+    commitAll(repo, 'init');
+    const baseSha = git(repo, ['rev-parse', 'HEAD']);
+
+    write(repo, 'src/covered.ts', 'export const a = 1;\nexport const b = 2;\n');
+    write(repo, 'src/gap.ts', 'export const c = 3;\nexport const d = 4;\n');
+    commitAll(repo, 'add src');
+
+    /* covered.ts 2/2, gap.ts 1/2 → total 3/4 = 75%, under the 90 threshold. */
+    const twoLines = {
+      0: { start: { line: 1 }, end: { line: 1 } },
+      1: { start: { line: 2 }, end: { line: 2 } },
+    };
+    writeCoverage(repo, {
+      'src/covered.ts': { statementMap: twoLines, s: { 0: 1, 1: 1 } },
+      'src/gap.ts': { statementMap: twoLines, s: { 0: 1, 1: 0 } },
+    });
+
+    const r = runTool(repo, ['--base-ref', baseSha, '--threshold', '90']);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /^ {2}uncovered: src\/gap\.ts 1\/2 changed lines \(50%\)$/m);
+    assert.equal(r.stdout.includes('src/covered.ts'), false, r.stdout);
+  } finally {
+    cleanup(repo);
+  }
+});
