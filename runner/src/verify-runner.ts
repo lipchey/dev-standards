@@ -14,6 +14,30 @@ import type { Check, CheckResult, Manifest, TierName } from './types.ts';
 
 const EXIT_CHECK_FAILED = 1;
 
+/* THE TERMINAL RECORD — grammar. One line, always a run's LAST, in exactly this shape:
+
+     VERIFY RESULT: scope=<scope> outcome=<outcome> [reason=<slug>] [blockers=N] [checks=N]
+
+   `outcome` is a CLOSED vocabulary of four, splitting on the single question a reader has —
+   is this exit a statement about the CODE, or about the MACHINERY?
+     passed | failed      a verdict; the tier ran and decided (stdout, beside the checks)
+     aborted              machinery: the tier started and threw before deciding (stderr)
+     no-verdict           machinery: no tier decision exists at all (stderr)
+   `reason` is REQUIRED on `no-verdict` and carries every finer distinction — refused, killed,
+   never dispatched. It is deliberately NOT a closed vocabulary: its charset is fixed
+   (`[a-z0-9-]+`, no whitespace, no `=`) and unknown slugs are opaque to a reader, so a wrapper
+   can name a fault this runner has never heard of without an upstream release to do it.
+
+   A WRAPPER MAY EMIT THIS LINE TOO, and must, for the faults it alone can see: the runner
+   cannot report on a path where it was never invoked (a shim that refuses before dispatch, a
+   remote lane whose workload never launched). Consumers own their own reason slugs. When more
+   than one line is present the LAST one is the verdict — which is what the outermost caller,
+   the one that actually knows how the run ended, always writes. */
+function noVerdict(scope: string, reason: string): number {
+  process.stderr.write(`VERIFY RESULT: scope=${scope} outcome=no-verdict reason=${reason}\n`);
+  return EXIT_MANIFEST;
+}
+
 // Validate the manifest before any check runs; exit happens only at the entrypoint.
 function main(argv: string[]): number {
   const invocation = parseArgs(argv);
@@ -32,12 +56,12 @@ function main(argv: string[]): number {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     process.stderr.write(`could not read manifest at "${manifestPath}": ${detail}\n`);
-    return EXIT_MANIFEST;
+    return noVerdict(scope, 'manifest-unreadable');
   }
 
   if (!load.ok) {
     for (const err of load.errors) process.stderr.write(`${formatErrorLine(err)}\n`);
-    return EXIT_MANIFEST;
+    return noVerdict(scope, 'manifest-invalid');
   }
 
   const manifest = load.manifest;
@@ -202,16 +226,15 @@ export function runTier(
   const reportPath = emitReport();
   process.stdout.write(`report: ${reportPath}\n`);
 
-  /* The tier's terminal record — always the run's LAST line, one grammar for every outcome.
+  /* The tier's terminal record — the verdict half of the grammar defined above.
      Until now a blocking failure was announced only by its inline summarize() line, so a long run
      buried it under every later passing check and ended byte-identically to a green one: a real
      full run put its single failure at line 750 of 1316 and still signed off with `report: <path>`
      (owner, 2026-08-05). The exit code stays the machine contract; this is for the log, which for
      a remote run is the only artifact that reaches the caller at all. Re-print exactly the set
      that decided `exit`, so the record cites its own evidence and cannot drift from it — names go
-     on those lines, never inside the record, whose vocabulary stays fixed and parseable. Both
-     normal outcomes go to STDOUT, beside the per-check lines they summarize; stderr is reserved
-     for the exceptional abort record main() writes. `passed` means the exit decision was zero,
+     on those lines, never inside the record, whose vocabulary stays fixed and parseable.
+     `passed` means the exit decision was zero,
      NOT that every result was `pass` — report-only findings, bypassed and skipped checks all
      legitimately survive it, which is why `blockers` is derived only from isBlockingResult. */
   if (blocking.length > 0) {

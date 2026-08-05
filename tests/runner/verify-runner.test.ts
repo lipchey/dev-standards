@@ -266,6 +266,47 @@ test('an aborted tier ends with an aborted record on stderr, after the detail li
   }
 });
 
+/* EXIT_MANIFEST is 1 — the SAME code a tier returns for blocking findings. Without a record a
+   caller reading the output could not tell a broken manifest from real findings, and reading the
+   exit code could not either: the collision is the whole reason `no-verdict` exists. Both manifest
+   faults are covered because they are separate returns, and the invalid-manifest one is the
+   likelier of the two (a hand-edited quality.json, not a missing file). */
+test('a manifest fault ends with a no-verdict record, not a silent exit 1', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-runner-record-manifest-'));
+  try {
+    const missing = path.join(tmp, 'absent.json');
+    const unreadable = spawnSync(process.execPath, [runnerPath, '--manifest', missing, '--full'], {
+      encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
+    });
+    assert.equal(unreadable.status, 1, unreadable.stderr);
+    assert.equal(
+      lastLine(unreadable.stderr),
+      'VERIFY RESULT: scope=full outcome=no-verdict reason=manifest-unreadable',
+    );
+
+    const invalidPath = path.join(tmp, 'quality.json');
+    fs.writeFileSync(invalidPath, JSON.stringify({ repo: 'x' }), 'utf8');
+    const invalid = spawnSync(process.execPath, [runnerPath, '--manifest', invalidPath, '--fast'], {
+      encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
+    });
+    assert.equal(invalid.status, 1, invalid.stderr);
+    assert.equal(
+      lastLine(invalid.stderr),
+      'VERIFY RESULT: scope=fast outcome=no-verdict reason=manifest-invalid',
+    );
+    // The validation detail is what a human acts on; the record must not displace it.
+    assert.ok(
+      invalid.stderr.indexOf('VERIFY RESULT') > 0,
+      `the record must follow the validation errors, got:\n${invalid.stderr}`,
+    );
+    assert.doesNotMatch(invalid.stdout, /VERIFY RESULT/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // isBlockingResult IS the tier's exit decision (`results.some(isBlockingResult) ? 1 : 0`).
 // Bug caught: a broken report-only check passing its tier fail-open because 'error' was
 // treated as mode-gated like an ordinary finding.

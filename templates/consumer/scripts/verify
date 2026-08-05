@@ -7,7 +7,42 @@ set -euo pipefail
 REPO_ROOT="$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)"
 BUNDLE="${REPO_ROOT}/vendor/dev-standards/runner/dist/verify-runner.mjs"
 
+# Every gate below refuses BEFORE the runner is reached, so the runner cannot write the terminal
+# record for it and a reader grepping for the verdict finds nothing at all. A wrapper owns the
+# record for the faults only it can see — grammar and vocabulary: runner/src/verify-runner.ts.
+# The `exec` at the bottom replaces this process, so once the runner starts the record is
+# entirely its own; that is why nothing here needs to guess at a dispatched run's outcome.
+VERIFY_TIER_SCOPE=""
+VERIFY_SCOPE_COUNT=0
+VERIFY_NO_VERDICT_REASON=""
+for ARGUMENT in "$@"; do
+  case "${ARGUMENT}" in
+    --full | --fast | --audit | --staged)
+      VERIFY_TIER_SCOPE="${ARGUMENT#--}"
+      VERIFY_SCOPE_COUNT=$((VERIFY_SCOPE_COUNT + 1))
+      ;;
+    # Counted, never named: neither is a tier, so neither has a verdict to be missing.
+    --fix-staged | --doctor) VERIFY_SCOPE_COUNT=$((VERIFY_SCOPE_COUNT + 1)) ;;
+  esac
+done
+# Two scope flags have no single truthful scope; the runner rejects the invocation by name.
+if [[ "${VERIFY_SCOPE_COUNT}" -gt 1 ]]; then
+  VERIFY_TIER_SCOPE=""
+fi
+
+verify_on_exit() {
+  local verify_status=$?
+  trap - EXIT
+  if [[ -n "${VERIFY_TIER_SCOPE}" && -n "${VERIFY_NO_VERDICT_REASON}" ]]; then
+    printf 'VERIFY RESULT: scope=%s outcome=no-verdict reason=%s\n' \
+      "${VERIFY_TIER_SCOPE}" "${VERIFY_NO_VERDICT_REASON}" >&2
+  fi
+  exit "${verify_status}"
+}
+trap verify_on_exit EXIT
+
 if [[ ! -f "${BUNDLE}" ]]; then
+  VERIFY_NO_VERDICT_REASON=bundle-missing
   echo "verify-runner bundle not found at ${BUNDLE}." >&2
   echo "Run: scripts/ds-bootstrap.sh" >&2
   exit 127
@@ -28,6 +63,7 @@ STAMP="${REPO_ROOT}/vendor/dev-standards/runner/dist/.built-from"
 BUILT_FROM="$(cat "${STAMP}" 2>/dev/null || echo none)"
 PINNED="$(git_clean -C "${REPO_ROOT}/vendor/dev-standards" rev-parse HEAD 2>/dev/null || echo unknown)"
 if [[ "${BUILT_FROM}" != "${PINNED}" ]]; then
+  VERIFY_NO_VERDICT_REASON=bundle-stale
   echo "verify-runner bundle is stale: built from ${BUILT_FROM}, submodule now at ${PINNED}." >&2
   echo "Run: scripts/ds-bootstrap.sh" >&2
   exit 127
@@ -43,6 +79,7 @@ RECORDED_ENTRY="$(git_clean -C "${REPO_ROOT}" ls-files -s -- vendor/dev-standard
 RECORDED_MODE="$(awk '{print $1}' <<<"${RECORDED_ENTRY}")"
 RECORDED="$(awk '{print $2}' <<<"${RECORDED_ENTRY}")"
 if [[ "${RECORDED_MODE}" != "160000" || "${RECORDED}" != "${PINNED}" ]]; then
+  VERIFY_NO_VERDICT_REASON=bundle-pin-mismatch
   echo "submodule checkout ${PINNED} does not match the recorded pin ${RECORDED:-<none>}." >&2
   echo "Run: scripts/ds-bootstrap.sh" >&2
   exit 127
