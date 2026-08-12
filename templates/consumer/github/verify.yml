@@ -33,6 +33,9 @@ jobs:
           # busts the cache like a literal two-path list would.
           cache-dependency-path: "**/package-lock.json"
 
+      - name: Install pinned npm
+        run: npm install --global npm@11.17.0
+
       - name: Bootstrap dev-standards
         run: scripts/ds-bootstrap.sh
 

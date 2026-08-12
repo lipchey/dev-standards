@@ -24,6 +24,8 @@ jobs:
         with:
           node-version: '20'
           cache: npm
+      - name: Install pinned npm
+        run: npm install --global npm@11.17.0
       - name: Install Dependencies
         run: npm ci
       - name: Verify Fast
@@ -41,6 +43,8 @@ jobs:
         with:
           node-version: '20'
           cache: npm
+      - name: Install pinned npm
+        run: npm install --global npm@11.17.0
       - name: Install Dependencies
         run: npm ci
       - name: Verify Full

@@ -27,6 +27,8 @@ jobs:
         with:
           node-version: '20'
           cache: npm
+      - name: Install pinned npm
+        run: npm install --global npm@11.17.0
       - name: Bootstrap
         run: npm run bootstrap
       - name: Verify Fast
@@ -45,6 +47,8 @@ jobs:
         with:
           node-version: '20'
           cache: npm
+      - name: Install pinned npm
+        run: npm install --global npm@11.17.0
       - name: Bootstrap
         run: npm run bootstrap
       - name: Verify Full
