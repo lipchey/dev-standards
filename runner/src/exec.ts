@@ -83,18 +83,14 @@ export function reapGroup(pid: number): void {
   }
 }
 
-// The shared spawn mechanic behind both `runCheck` and `runProcess`: run `argv` as a detached
-// process-group leader (`detached: true`) so a timeout can SIGKILL the whole subtree, not just
-// the immediate child, then reap the group on ETIMEDOUT. `stdio` is the ONLY thing that differs
-// between the two callers ('inherit' for a check streaming live output; piped for a captured
-// generic run), so it stays a parameter — the group/kill/reap logic lives here once.
-// Returns the raw spawnSync result plus a `timedOut` flag (the ETIMEDOUT-and-reaped case), which
-// each caller maps onto its own typed result.
-function spawnGroup(
+/* Callers vary only `stdio` and `env`; detached group creation, timeout killing, and reaping live
+   here once, while the raw result and `timedOut` flag let each caller map its own outcome. */
+export function spawnGroup(
   argv: string[],
   cwd: string,
   timeoutMs: number,
   stdio: SpawnSyncOptions['stdio'],
+  env?: NodeJS.ProcessEnv,
 ): { result: SpawnSyncReturns<string>; timedOut: boolean } {
   const [file, ...args] = argv;
   // `detached` is honored by spawnSync at runtime but missing from @types/node's
@@ -110,6 +106,7 @@ function spawnGroup(
     timeout: timeoutMs,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    ...(env === undefined ? {} : { env }),
   } as SpawnSyncOptions) as SpawnSyncReturns<string>;
 
   const err = result.error as NodeJS.ErrnoException | undefined;

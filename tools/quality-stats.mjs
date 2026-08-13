@@ -1,24 +1,9 @@
 #!/usr/bin/env node
 /*
- * quality-stats: read the append-only verify telemetry (one JSONL line per run,
- * schema in docs/plans/archive/2026-07-10-effectiveness-plan.md §2) and report what dev-standards actually
- * catches, so a calibration session (docs/CALIBRATION.md) can flip/prune/tune on
- * data instead of by eye.
- *
- * The file is GLOBAL — one per machine, shared by every consumer repo — and the
- * same check name legitimately runs in several tiers, so the aggregation key is
- * the full (repo, tier, check, branch) tuple; a shorter key would silently merge
- * unrelated series.
- *
- * Everything the tool concludes is a CANDIDATE, never a verdict: a catch-candidate
- * (a fail then a pass in the next run of the same key) may be a real catch or just
- * an unstage, and a never-failing gate is not proof it is safe to remove. Human
- * disposition happens in the calibration session; this tool only surfaces signal.
- *
- * Dep-free Node ESM (bare `node tools/quality-stats.mjs`). Pure fns
- * (parseLines / aggregate / formatReport) carry the logic and are unit-tested;
- * arg-parsing + file IO is a thin CLI wrapper. Built against the emitter contract
- * only — no runner import.
+ * Reads global append-only telemetry without importing the runner.
+ * The full (repo, tier, check, branch, timingSource) key keeps unlike measurement series apart.
+ * Output is candidate evidence that requires human disposition.
+ * Dep-free Node ESM exports pure aggregation functions; argument parsing and file I/O stay at the edge.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,6 +11,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const SUPPORTED_VERSION = 1;
+export const TIMING_SOURCE_PATTERN = /^[\w.-]{1,64}$/;
 const DAY_MS = 86_400_000;
 const STATUSES = new Set(['pass', 'fail', 'skipped', 'timeout', 'bypassed', 'error']);
 /* timeout/error are tool/spawn faults, not verdicts about the change: they are
@@ -112,6 +98,12 @@ export function normalizeEvent(obj) {
     if (r === null || typeof r !== 'object') return { kind: 'malformed' };
     if (typeof r.name !== 'string' || typeof r.tier !== 'string') return { kind: 'malformed' };
     if (!STATUSES.has(r.status)) return { kind: 'malformed' };
+    /* Absence means the runner timed the spawn itself; this versioned measurement-method
+       identifier must change whenever what it measures changes. */
+    const timingSource = r.timingSource === undefined ? 'runner-spawn-v1' : r.timingSource;
+    if (typeof timingSource !== 'string' || !TIMING_SOURCE_PATTERN.test(timingSource)) {
+      return { kind: 'malformed' };
+    }
     results.push({
       name: r.name,
       tier: r.tier,
@@ -119,6 +111,7 @@ export function normalizeEvent(obj) {
       durationMs: Number.isFinite(r.durationMs) ? r.durationMs : null,
       mode: r.mode === 'blocking' || r.mode === 'report-only' ? r.mode : null,
       reason: typeof r.reason === 'string' ? r.reason : undefined,
+      timingSource,
     });
   }
   return {
@@ -140,12 +133,12 @@ export function normalizeEvent(obj) {
   };
 }
 
-function keyOf(repo, tier, name, branch) {
-  return JSON.stringify([repo, tier, name, branch]);
+function keyOf(repo, tier, name, branch, timingSource) {
+  return JSON.stringify([repo, tier, name, branch, timingSource]);
 }
 
-function labelOf(repo, tier, name, branch) {
-  return `${repo}/${tier}/${name}@${branch === null ? '(none)' : branch}`;
+function labelOf(repo, tier, name, branch, timingSource) {
+  return `${repo}/${tier}/${name}@${branch === null ? '(none)' : branch} [${timingSource}]`;
 }
 
 /* p50 = median of ascending durations (integer ms). Even n averages the two
@@ -215,7 +208,7 @@ export function aggregate(events, options = {}) {
     let eventDurationMs = 0; // per-event Σ durationMs — the fallback when this event has no span
     for (const r of event.results) {
       if (r.status !== 'skipped' && r.durationMs !== null) eventDurationMs += r.durationMs;
-      const key = keyOf(event.repo, r.tier, r.name, event.branch);
+      const key = keyOf(event.repo, r.tier, r.name, event.branch, r.timingSource);
       let group = groups.get(key);
       if (group === undefined) {
         group = {
@@ -223,6 +216,7 @@ export function aggregate(events, options = {}) {
           tier: r.tier,
           name: r.name,
           branch: event.branch,
+          timingSource: r.timingSource,
           occurrences: [],
         };
         groups.set(key, group);
@@ -285,6 +279,7 @@ export function aggregate(events, options = {}) {
         tier: group.tier,
         name: group.name,
         branch: group.branch,
+        timingSource: group.timingSource,
         failStartedAt: pair.fail.startedAt,
         failSha: pair.fail.head_sha,
         passStartedAt: pair.pass.startedAt,
@@ -302,11 +297,13 @@ export function aggregate(events, options = {}) {
       tier: group.tier,
       name: group.name,
       branch: group.branch,
+      timingSource: group.timingSource,
       /* label is for HUMANS (report text) and is collision-prone by construction (a real
          branch literally named "(none)" reads like a null branch); key is the collision-free
-         JSON tuple — consumers joining records to flip/prune candidates MUST join on key. */
-      key: keyOf(group.repo, group.tier, group.name, group.branch),
-      label: labelOf(group.repo, group.tier, group.name, group.branch),
+         five-element JSON tuple. Consumers joining records to flip/prune candidates MUST join
+         on key because the measurement method is part of a series' identity. */
+      key: keyOf(group.repo, group.tier, group.name, group.branch, group.timingSource),
+      label: labelOf(group.repo, group.tier, group.name, group.branch, group.timingSource),
       runs,
       counts,
       catches: keyCatches.length,
@@ -349,7 +346,9 @@ export function aggregate(events, options = {}) {
   prune.sort((a, b) => a.label.localeCompare(b.label));
   catches.sort(
     (a, b) =>
-      labelOf(a.repo, a.tier, a.name, a.branch).localeCompare(labelOf(b.repo, b.tier, b.name, b.branch)) ||
+      labelOf(a.repo, a.tier, a.name, a.branch, a.timingSource).localeCompare(
+        labelOf(b.repo, b.tier, b.name, b.branch, b.timingSource),
+      ) ||
       a.failStartedAt.localeCompare(b.failStartedAt),
   );
 
@@ -438,6 +437,7 @@ export function formatReport(agg, meta = {}) {
       k.tier,
       k.name,
       k.branch === null ? '(none)' : k.branch,
+      k.timingSource,
       k.runs,
       k.counts.pass,
       k.counts.fail,
@@ -449,7 +449,7 @@ export function formatReport(agg, meta = {}) {
     ]);
     out.push(
       table(
-        ['repo', 'tier', 'check', 'branch', 'runs', 'pass', 'fail', 'byp', 'to', 'err', 'catch', 'p50ms'],
+        ['repo', 'tier', 'check', 'branch', 'timing', 'runs', 'pass', 'fail', 'byp', 'to', 'err', 'catch', 'p50ms'],
         rows,
       ),
     );
@@ -474,7 +474,7 @@ export function formatReport(agg, meta = {}) {
     for (const c of agg.catches) {
       const branch = c.branch === null ? '(none)' : c.branch;
       out.push(
-        `- ${c.repo} ${c.tier} ${c.name} ${branch}: ` +
+        `- ${c.repo} ${c.tier} ${c.name} ${branch} ${c.timingSource}: ` +
           `fail ${c.failStartedAt} (${shortSha(c.failSha)}) -> pass ${c.passStartedAt} (${shortSha(c.passSha)})`,
       );
     }

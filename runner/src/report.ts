@@ -20,6 +20,30 @@ export function writeReport(report: RunnerReport, root: string, reportsPath: str
   return writeConfined(root, relPath, JSON.stringify(report, null, 2) + '\n');
 }
 
+export function resolveConfinedPath(rootDir: string, relPath: string): string {
+  const realRoot = fs.realpathSync(rootDir);
+  const filePath = path.resolve(rootDir, relPath);
+  const dir = path.dirname(filePath);
+
+  assertWithinRoot(rootDir, filePath, relPath);
+  assertWithinRoot(realRoot, realpathOfDeepestExisting(dir), relPath);
+  return filePath;
+}
+
+export function readConfined(rootDir: string, relPath: string): string {
+  const filePath = resolveConfinedPath(rootDir, relPath);
+  const fd = fs.openSync(
+    filePath,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+  );
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error('confined read requires a regular file');
+    return fs.readFileSync(fd, 'utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /**
  * Confine `relPath` under `rootDir` (repo-controlled path): a lexical containment
  * check, then a realpath check on the deepest existing ancestor of the parent, a
@@ -59,12 +83,12 @@ function writeFileReplacingLeaf(dir: string, filePath: string, data: string): vo
   }
 }
 
-function assertWithinRoot(root: string, child: string, reportsPath: string): void {
+function assertWithinRoot(root: string, child: string, relPath: string): void {
   const rel = path.relative(root, child);
   const contained = rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
   if (!contained) {
     throw new Error(
-      `paths.reports ${JSON.stringify(reportsPath)} resolves outside the repo root: ` +
+      `path ${JSON.stringify(relPath)} resolves outside the repo root: ` +
         `${JSON.stringify(child)} is not within ${JSON.stringify(root)}`,
     );
   }

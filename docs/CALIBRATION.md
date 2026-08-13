@@ -9,7 +9,7 @@ decisions. Historical telemetry design:
 
 ## Inputs
 
-1. `node tools/quality-stats.mjs` — per-`(repo, tier, check, branch)`
+1. `node tools/quality-stats.mjs` — per-`(repo, tier, check, branch, timingSource)`
    aggregates over `~/.local/share/dev-standards/events.jsonl`
    (catch-candidates, noise, bypasses, durations, flip/prune candidates).
 2. The consumer's `.claude/gate-misses.md` — escapes since the last session.

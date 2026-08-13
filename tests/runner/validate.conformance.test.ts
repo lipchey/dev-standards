@@ -58,6 +58,19 @@ function setDeepReview(manifest: Manifest, deepReview: unknown): void {
   (manifest as unknown as Record<string, unknown>)['deep_review'] = deepReview;
 }
 
+function setValidGroup(manifest: Manifest): Record<string, unknown> {
+  const check = firstOf(manifest.tiers.fast, 'fast-tier check');
+  (check as unknown as Record<string, unknown>)['group'] = 'quality';
+  const group: Record<string, unknown> = {
+    name: 'quality',
+    argv: ['group-check'],
+    artifact_dir: '.artifacts/groups',
+    members: [{ check: check.name, result_key: 'primary' }],
+  };
+  (manifest as unknown as Record<string, unknown>)['groups'] = [group];
+  return group;
+}
+
 interface BatteryCase {
   label: string;
   mutate: (manifest: Manifest) => void;
@@ -172,6 +185,302 @@ const batteryCases: readonly BatteryCase[] = [
     label: 'operational_exit_codes: duplicate items',
     mutate: (m) => {
       firstOf(m.tiers.fast, 'fast-tier check').operational_exit_codes = [2, 2];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'valid groups declaration and check group reference',
+    mutate: (m) => {
+      setValidGroup(m);
+    },
+    expectValid: true,
+  },
+  {
+    label: 'groups is not an array',
+    mutate: (m) => {
+      (m as unknown as Record<string, unknown>)['groups'] = {};
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group entry is not an object',
+    mutate: (m) => {
+      (m as unknown as Record<string, unknown>)['groups'] = ['quality'];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'check group is not a string',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      void group;
+      (firstOf(m.tiers.fast, 'fast-tier check') as unknown as Record<string, unknown>)['group'] = 1;
+    },
+    expectValid: false,
+  },
+  {
+    label: 'check group is empty',
+    mutate: (m) => {
+      setValidGroup(m);
+      (firstOf(m.tiers.fast, 'fast-tier check') as unknown as Record<string, unknown>)['group'] = '';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group is missing a required key',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      delete group['artifact_dir'];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group has an additional property',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['unexpected_key'] = true;
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group declares timeout_seconds',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['timeout_seconds'] = 30;
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group name is empty',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['name'] = '';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group name is not a string',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['name'] = 1;
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group argv is empty',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['argv'] = [];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group argv is not an array',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['argv'] = 'group-check';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group argv contains a non-string item',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['argv'] = ['group-check', 1];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group argv contains an empty item',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['argv'] = [''];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group artifact_dir is empty',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['artifact_dir'] = '';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group artifact_dir is not a string',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['artifact_dir'] = 1;
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group members is empty',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['members'] = [];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group members is not an array',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['members'] = {};
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group member is not an object',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['members'] = ['runner-typecheck'];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group member is missing result_key',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['members'] = [{ check: firstOf(m.tiers.fast, 'fast-tier check').name }];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group member has an additional property',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['members'] = [
+        {
+          check: firstOf(m.tiers.fast, 'fast-tier check').name,
+          result_key: 'primary',
+          unexpected_key: true,
+        },
+      ];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group member check is empty',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['members'] = [{ check: '', result_key: 'primary' }];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group member check is not a string',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['members'] = [{ check: 1, result_key: 'primary' }];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group member result_key is empty',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['members'] = [
+        { check: firstOf(m.tiers.fast, 'fast-tier check').name, result_key: '' },
+      ];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group member result_key is not a string',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['members'] = [
+        { check: firstOf(m.tiers.fast, 'fast-tier check').name, result_key: 1 },
+      ];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group name contains a separator',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['name'] = 'nested/group';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group name is a current-directory segment',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['name'] = '.';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group name is a parent-directory segment',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['name'] = '..';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group artifact_dir contains a parent segment',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['artifact_dir'] = 'artifacts/../outside';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group artifact_dir contains a current segment',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['artifact_dir'] = 'artifacts/./result';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group artifact_dir is absolute',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['artifact_dir'] = '/artifacts/result';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group artifact_dir begins with a drive letter',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['artifact_dir'] = 'C:/artifacts/result';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group artifact_dir contains a backslash',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['artifact_dir'] = 'artifacts\\result';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group artifact_dir contains a bad character',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['artifact_dir'] = 'artifacts/result!';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group argv contains a fileset token',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['argv'] = ['group-check', '{files:repo_ts}'];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'group argv contains a fileset token with a line break',
+    mutate: (m) => {
+      const group = setValidGroup(m);
+      group['argv'] = ['group-check', '{files:\nrepo_ts}'];
     },
     expectValid: false,
   },
@@ -465,6 +774,7 @@ test('schema declares root properties in canonical order', () => {
     'workspaces',
     'filesets',
     'tiers',
+    'groups',
     'format',
     'deep_review',
   ]);
@@ -502,6 +812,18 @@ test('schema declares nested property groups in canonical order', () => {
     'diff_filter',
   ]);
   assert.deepEqual(propertyKeys(child(props, 'tiers')), ['staged', 'fast', 'full', 'audit']);
+  assert.deepEqual(propertyKeys(child(child(props, 'groups'), 'items')), [
+    'name',
+    'argv',
+    'artifact_dir',
+    'members',
+  ]);
+  assert.deepEqual(
+    propertyKeys(
+      child(child(child(child(child(props, 'groups'), 'items'), 'properties'), 'members'), 'items'),
+    ),
+    ['check', 'result_key'],
+  );
   assert.deepEqual(propertyKeys(child(child(defs, 'checkArray'), 'items')), [
     'name',
     'argv',
@@ -511,5 +833,6 @@ test('schema declares nested property groups in canonical order', () => {
     'baseline',
     'bypassable',
     'operational_exit_codes',
+    'group',
   ]);
 });

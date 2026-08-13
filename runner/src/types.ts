@@ -30,6 +30,20 @@ export interface Check {
      status:'error' — unbypassable, blocks regardless of mode — so a tool malfunction never counts
      as a caught finding or slips through a bypassable check. Integers 1–255, unique. */
   operational_exit_codes?: number[];
+  group?: string;
+}
+
+export interface CheckGroupMember {
+  check: string;
+  /* Opaque to the runner; it need not match the check name. */
+  result_key: string;
+}
+
+export interface CheckGroup {
+  name: string;
+  argv: string[];
+  artifact_dir: string;
+  members: CheckGroupMember[];
 }
 
 interface Workspace {
@@ -73,6 +87,9 @@ export interface Manifest {
     full: Check[];
     audit?: Check[];
   };
+  /* One command may run until the sum of its members' timeouts, enlarging the hang window beyond
+     any member's individual timeout. */
+  groups?: CheckGroup[];
   format?: FormatConfig;
   deep_review?: {
     enabled: boolean;
@@ -109,10 +126,16 @@ export interface CheckResult {
   durationMs: number;
   mode: CheckMode;
   /* For 'bypassed': the trimmed, secret-redacted, 200-capped DS_BYPASS_REASON that relaxed the finding.
-     For 'error': the errno code, signal, or spawn-error message. Absent otherwise. */
+     For 'error': a spawn fault or grouped artifact, lifecycle, attribution, or status-contradiction
+     reason. Absent otherwise. */
   reason?: string;
+  /* Absent when the runner timed the spawn itself; a value is a versioned measurement-method
+     identifier that must change whenever what it measures changes so unlike measurements do not
+     share a percentile series. */
+  timingSource?: string;
   /* Linux PSI only: milliseconds inside this check's window during which ALL tasks were stalled
-     on I/O (`/proc/pressure/io`, `full`). Absent on macOS and PSI-less kernels. Tells a check
-     killed by host I/O starvation apart from one that hung on its own. */
+     on I/O (`/proc/pressure/io`, `full`). Absent on macOS, PSI-less kernels, and group rows because
+     a grouped command has no per-member observation window. Tells a check killed by host I/O
+     starvation apart from one that hung on its own. */
   ioStallMs?: number;
 }

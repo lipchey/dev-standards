@@ -5,6 +5,7 @@ import type { ManifestLoadResult } from './manifest.ts';
 import { EXIT_MANIFEST, EXIT_USAGE, formatErrorLine, isMainModule } from './manifest-cli.ts';
 import { expandFileset } from './filesets.ts';
 import { runCheck } from './exec.ts';
+import { errorRows as groupErrorRows, runCheckGroup } from './group.ts';
 import { assertWithinBudget } from './budget.ts';
 import { writeReport } from './report.ts';
 import { doctor } from './doctor.ts';
@@ -175,6 +176,7 @@ export function runTier(
 
   try {
     const filesByName = new Map<string, string[]>();
+    const executedGroups = new Set<string>();
     for (const fileset of manifest.filesets) {
       const referenced = checks.some(
         (check) =>
@@ -188,10 +190,38 @@ export function runTier(
     }
 
     for (const check of checks) {
+      if (check.group !== undefined && executedGroups.has(check.group)) continue;
       process.stdout.write(
         `  check ${check.name} [${check.mode ?? 'blocking'}] configured timeout ${check.timeout_seconds}s\n`,
       );
       const left = remainingMs();
+      if (check.group !== undefined) {
+        const groupName = check.group;
+        const group = manifest.groups?.find((candidate) => candidate.name === groupName);
+        executedGroups.add(groupName);
+        const members = checks.filter((candidate) => candidate.group === groupName);
+        const groupResults = group === undefined
+          ? groupErrorRows(
+              { checks: members, tier: scope },
+              `group execution failed: group ${JSON.stringify(groupName)} is not declared`,
+            )
+          : left <= 0
+            ? members.map((member) => deadlineFail(member, scope))
+            : runCheckGroup({
+                group,
+                checks: members,
+                tier: scope,
+                cwd: root,
+                timeoutMs: Math.min(
+                  members.reduce((sum, member) => sum + member.timeout_seconds * 1000, 0),
+                  left,
+                ),
+              });
+        for (const groupResult of groupResults) results.push(groupResult);
+        process.stdout.write(groupResults.map(summarize).join(''));
+        assertBudget();
+        continue;
+      }
       // Never spawn with a spent budget; fail the check without launching it.
       const result =
         left <= 0

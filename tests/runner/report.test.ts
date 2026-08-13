@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { writeReport } from '../../runner/src/report.ts';
+import { readConfined, resolveConfinedPath, writeReport } from '../../runner/src/report.ts';
 import type { RunnerReport } from '../../runner/src/report.ts';
 
 function makeReport(scope = 'fast'): RunnerReport {
@@ -125,6 +125,49 @@ test('writeReport overwrites an existing real report leaf (regression for atomic
     second.generatedAt = new Date(Date.now() + 1000).toISOString();
     const written = writeReport(second, root, 'reports');
     assert.deepEqual(JSON.parse(fs.readFileSync(written, 'utf8')), second);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resolveConfinedPath rejects lexical and symlink escapes', () => {
+  const root = tmp();
+  const outside = tmp('verify-outside-');
+  try {
+    assert.throws(
+      () => resolveConfinedPath(root, '../escape.json'),
+      /^Error: path "\.\.\/escape\.json" resolves outside the repo root:/,
+    );
+    fs.symlinkSync(outside, path.join(root, 'artifacts'), 'dir');
+    assert.throws(
+      () => resolveConfinedPath(root, 'artifacts/result.json'),
+      /^Error: path "artifacts\/result\.json" resolves outside the repo root:/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('readConfined reads a regular file through its open handle', () => {
+  const root = tmp();
+  try {
+    fs.writeFileSync(path.join(root, 'result.json'), '{"ok":true}\n');
+    assert.equal(readConfined(root, 'result.json'), '{"ok":true}\n');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('readConfined rejects a symlink leaf and a directory', () => {
+  const root = tmp();
+  try {
+    fs.writeFileSync(path.join(root, 'real.json'), '{}');
+    fs.symlinkSync(path.join(root, 'real.json'), path.join(root, 'link.json'));
+    fs.mkdirSync(path.join(root, 'directory.json'));
+
+    assert.throws(() => readConfined(root, 'link.json'));
+    assert.throws(() => readConfined(root, 'directory.json'), /regular file/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -122,6 +122,7 @@ export function buildReportModel({
     tier: k.tier,
     check: k.name,
     branch: k.branch,
+    timingSource: k.timingSource,
     latestMode: k.latestMode,
     runs: k.runs,
     fail: k.counts.fail,
@@ -142,6 +143,7 @@ export function buildReportModel({
     tier: c.tier,
     check: c.name,
     branch: c.branch,
+    timingSource: c.timingSource,
     failStartedAt: c.failStartedAt,
     failSha: c.failSha,
     passStartedAt: c.passStartedAt,
@@ -349,7 +351,7 @@ const APP_JS = `
       if (c.latestMode === 'report-only') tr.className = 'muted';
       var cells = [
         c.repo, c.tier, c.check, c.branch === null ? '(none)' : c.branch,
-        c.latestMode || '-', String(c.runs), String(c.fail),
+        c.timingSource, c.latestMode || '-', String(c.runs), String(c.fail),
         c.runs ? Math.round(c.failRate * 100) + '%' : '-',
         String(c.catches), String(c.errors + c.timeouts),
         c.p50Ms === null ? '-' : String(c.p50Ms),
@@ -371,6 +373,7 @@ const APP_JS = `
       var li = document.createElement('li');
       var branch = c.branch === null ? '(none)' : c.branch;
       li.textContent = c.repo + ' · ' + c.tier + ' · ' + c.check + ' @ ' + branch +
+        ' [' + c.timingSource + ']' +
         ':  fail ' + c.failStartedAt + ' (' + shortSha(c.failSha) + ')  →  pass ' +
         c.passStartedAt + ' (' + shortSha(c.passSha) + ')';
       ul.appendChild(li);
@@ -429,7 +432,7 @@ export function renderHtml(model) {
   <div class="scroll">
     <table>
       <thead><tr>
-        <th>repo</th><th>tier</th><th>check</th><th>branch</th><th>mode</th>
+        <th>repo</th><th>tier</th><th>check</th><th>branch</th><th>timing</th><th>mode</th>
         <th>runs</th><th>fail</th><th>fail%</th><th>catch</th><th>noise</th><th>p50ms</th><th>candidate</th>
       </tr></thead>
       <tbody id="checks-body"></tbody>

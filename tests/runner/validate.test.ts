@@ -70,6 +70,18 @@ function expectError(result: ValidationResult, match: { path?: string; rule?: st
   );
 }
 
+function addValidGroup(manifest: Manifest): void {
+  (firstFastCheck(manifest) as unknown as Record<string, unknown>)['group'] = 'quality';
+  (manifest as unknown as Record<string, unknown>)['groups'] = [
+    {
+      name: 'quality',
+      argv: ['group-check'],
+      artifact_dir: '.artifacts/groups',
+      members: [{ check: 'typecheck', result_key: 'typecheck' }],
+    },
+  ];
+}
+
 test('valid manifest passes', () => {
   const result = validate(makeManifest());
   assert.equal(
@@ -78,6 +90,85 @@ test('valid manifest passes', () => {
     `expected valid manifest to pass; received errors:\n${JSON.stringify(result.errors, null, 2)}`,
   );
   assert.equal(result.errors.length, 0, 'expected zero errors for a valid manifest');
+});
+
+test('valid groups declaration and check group reference pass structurally', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  const result = validate(manifest);
+  assert.equal(
+    result.ok,
+    true,
+    `expected valid groups to pass; received errors:\n${JSON.stringify(result.errors, null, 2)}`,
+  );
+});
+
+test('groups must be an array', () => {
+  const manifest = makeManifest();
+  (manifest as unknown as Record<string, unknown>)['groups'] = {};
+  expectError(validate(manifest), { path: 'groups', rule: 'type' });
+});
+
+test('group declarations require name, argv, artifact_dir, and members', () => {
+  const manifest = makeManifest();
+  (manifest as unknown as Record<string, unknown>)['groups'] = [{}];
+  const result = validate(manifest);
+  for (const key of ['name', 'argv', 'artifact_dir', 'members']) {
+    expectError(result, { path: `groups[0].${key}`, rule: 'required' });
+  }
+});
+
+test('group declarations reject additional properties', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  const groups = (manifest as unknown as { groups: Array<Record<string, unknown>> }).groups;
+  groups[0]!['unexpected_key'] = true;
+  expectError(validate(manifest), { path: 'groups[0].unexpected_key', rule: 'additional-property' });
+});
+
+test('group argv requires at least one non-empty string', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  const group = (manifest as unknown as { groups: Array<Record<string, unknown>> }).groups[0]!;
+  group['argv'] = [''];
+  expectError(validate(manifest), { path: 'groups[0].argv[0]', rule: 'min-length' });
+});
+
+test('group members requires at least one member', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  const group = (manifest as unknown as { groups: Array<Record<string, unknown>> }).groups[0]!;
+  group['members'] = [];
+  expectError(validate(manifest), { path: 'groups[0].members', rule: 'min-items' });
+});
+
+test('group members require check and result_key', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  const group = (manifest as unknown as { groups: Array<Record<string, unknown>> }).groups[0]!;
+  group['members'] = [{}];
+  const result = validate(manifest);
+  expectError(result, { path: 'groups[0].members[0].check', rule: 'required' });
+  expectError(result, { path: 'groups[0].members[0].result_key', rule: 'required' });
+});
+
+test('group members reject additional properties', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  const members = (
+    manifest as unknown as { groups: Array<{ members: Array<Record<string, unknown>> }> }
+  ).groups[0]!.members;
+  members[0]!['unexpected_key'] = true;
+  expectError(validate(manifest), {
+    path: 'groups[0].members[0].unexpected_key',
+    rule: 'additional-property',
+  });
+});
+
+test('check group must be a non-empty string', () => {
+  const manifest = makeManifest();
+  (firstFastCheck(manifest) as unknown as Record<string, unknown>)['group'] = '';
+  expectError(validate(manifest), { path: 'tiers.fast[0].group', rule: 'min-length' });
 });
 
 test('missing timeout_seconds fails at tiers.fast[0].timeout_seconds', () => {

@@ -162,3 +162,27 @@ test('migrate: a valid version-1 manifest exits 0 and reports no available migra
     cleanup();
   }
 });
+
+test('migrate: a valid grouped manifest is accepted without rewriting it', () => {
+  const grouped = structuredClone(validManifest);
+  (grouped.tiers.fast[0] as unknown as Record<string, unknown>)['group'] = 'quality';
+  (grouped as unknown as Record<string, unknown>)['groups'] = [
+    {
+      name: 'quality',
+      argv: ['group-check'],
+      artifact_dir: '.artifacts/groups',
+      members: [{ check: 'typecheck', result_key: 'typecheck' }],
+    },
+  ];
+  const { manifestPath, cleanup } = writeTempManifest(JSON.stringify(grouped));
+  try {
+    const before = fs.readFileSync(manifestPath);
+    const result = runMigrate(['--manifest', manifestPath]);
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr.length, 0, 'a valid grouped manifest must not write to stderr');
+    assert.match(result.stdout.join('\n'), /no .*migration/i);
+    assert.deepEqual(fs.readFileSync(manifestPath), before);
+  } finally {
+    cleanup();
+  }
+});

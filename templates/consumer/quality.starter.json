@@ -72,6 +72,7 @@
     ],
     "audit": []
   },
+  "groups": [],
   "deep_review": {
     "enabled": true,
     "modes": [

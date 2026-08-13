@@ -234,6 +234,43 @@ test('a green run ends with a passed record on stdout, after the report line', (
       `the record must follow the report line, got:\n${run.stdout}`,
     );
     assert.doesNotMatch(run.stderr, /VERIFY RESULT/);
+
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a group-less manifest serializes the legacy report row shape', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-runner-legacy-row-'));
+  try {
+    const init = spawnSync('git', ['init', tmp], { encoding: 'utf8' });
+    assert.equal(init.status, 0, `git init failed:\n${init.stderr}`);
+
+    const manifestPath = path.join(tmp, 'quality.json');
+    const manifest = structuredClone(MANIFEST) as unknown as Manifest;
+    manifest.tiers.fast = [
+      { name: 'passing-check', argv: [process.execPath, '--version'], timeout_seconds: 30 },
+    ];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    const run = spawnSync(process.execPath, [runnerPath, '--manifest', manifestPath, '--fast'], {
+      encoding: 'utf8',
+      env: { ...process.env, DS_TELEMETRY_PATH: 'off' },
+    });
+    assert.equal(run.status, 0, `runner failed:\n${run.stderr}`);
+
+    const report = JSON.parse(
+      fs.readFileSync(path.join(tmp, 'reports/quality/verify-fast.json'), 'utf8'),
+    );
+    assert.equal(report.results.length, 1);
+    const row = report.results[0];
+    const legacyKeys = ['durationMs', 'exitCode', 'mode', 'name', 'status', 'tier'];
+    if ('ioStallMs' in row) legacyKeys.push('ioStallMs');
+    assert.deepEqual(Object.keys(row).sort(), legacyKeys.sort());
+    assert.deepEqual(
+      { status: row.status, mode: row.mode, exitCode: row.exitCode },
+      { status: 'pass', mode: 'blocking', exitCode: 0 },
+    );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

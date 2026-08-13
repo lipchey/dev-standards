@@ -20,6 +20,7 @@ type Result = {
   durationMs?: number | null;
   mode?: string | null;
   reason?: string;
+  timingSource?: string;
 };
 
 const DAY = 86_400_000;
@@ -123,6 +124,38 @@ test('buildReportModel: KPIs are exact sums over the in-window runs', () => {
   assert.equal(eslint.latestMode, 'report-only');
   assert.equal(eslint.flip, true, 'report-only + in-window catch + 0 noise → flip candidate');
   assert.equal(eslint.catches, 1);
+});
+
+test('buildReportModel + renderHtml: timing sources remain distinct in checks and catches', () => {
+  const result = (status: 'fail' | 'pass', timingSource: string, durationMs: number): Result => ({
+    name: 'typecheck',
+    tier: 'fast',
+    status,
+    durationMs,
+    mode: 'report-only',
+    timingSource,
+  });
+  const model = modelOf([
+    ev(iso(T - 4 * DAY), 'r', 'main', [result('fail', 'batch-clock-v1', 10)]),
+    ev(iso(T - 3 * DAY), 'r', 'main', [result('pass', 'batch-clock-v1', 20)]),
+    ev(iso(T - 2 * DAY), 'r', 'main', [result('fail', 'external-clock-v1', 30)]),
+    ev(iso(T - 1 * DAY), 'r', 'main', [result('pass', 'external-clock-v1', 40)]),
+  ]);
+
+  assert.deepEqual(
+    model.checks.map((row: any) => [row.timingSource, row.p50Ms]),
+    [
+      ['batch-clock-v1', 15],
+      ['external-clock-v1', 35],
+    ],
+  );
+  assert.deepEqual(
+    model.catches.map((row: any) => row.timingSource),
+    ['batch-clock-v1', 'external-clock-v1'],
+  );
+  const html = renderHtml(model);
+  assert.ok(html.includes('<th>timing</th>'));
+  assert.equal((html.match(/c\.timingSource/g) || []).length, 2);
 });
 
 test('buildReportModel: a future occurrence does not steal latestMode (via aggregate)', () => {

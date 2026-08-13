@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
+  TIMING_SOURCE_PATTERN as AGGREGATOR_TIMING_SOURCE_PATTERN,
   parseLines,
   normalizeEvent,
   aggregate,
@@ -16,6 +17,7 @@ import {
   parseDays,
   inWindow,
 } from '../../tools/quality-stats.mjs';
+import { TIMING_SOURCE_PATTERN as ATTRIBUTOR_TIMING_SOURCE_PATTERN } from '../../runner/src/group.ts';
 
 /* The .mjs tool is dep-free and exports no types; these builders mirror the
    emitter contract (docs/plans/archive/2026-07-10-effectiveness-plan.md §2) so
@@ -27,6 +29,7 @@ type Result = {
   durationMs?: number | null;
   mode?: string | null;
   reason?: string;
+  timingSource?: string;
 };
 
 const DAY = 86_400_000;
@@ -133,6 +136,46 @@ test('normalizeEvent: a result missing name/tier/status makes the event malforme
   );
 });
 
+test('parseLines: an out-of-grammar timing source makes the event malformed', () => {
+  const parsed = parseLines(
+    jsonl([
+      ev(iso(T), 'r', 'main', [
+        {
+          name: 'c',
+          tier: 'fast',
+          status: 'pass',
+          durationMs: 5,
+          mode: 'blocking',
+          timingSource: 'batch\nclock',
+        },
+      ]),
+    ]),
+  );
+  assert.equal(parsed.events.length, 0);
+  assert.equal(parsed.malformed, 1);
+});
+
+test('timing-source validators enforce the same grammar', () => {
+  assert.equal(ATTRIBUTOR_TIMING_SOURCE_PATTERN.source, AGGREGATOR_TIMING_SOURCE_PATTERN.source);
+});
+
+test('parseLines: a numeric timing source makes the event malformed', () => {
+  const event = ev(iso(T), 'r', 'main', [
+    {
+      name: 'c',
+      tier: 'fast',
+      status: 'pass',
+      durationMs: 5,
+      mode: 'blocking',
+      timingSource: 5 as unknown as string,
+    },
+  ]);
+  const parsed = parseLines(jsonl([event]));
+
+  assert.equal(parsed.events.length, 0);
+  assert.equal(parsed.malformed, 1);
+});
+
 test('normalizeEvent: a valid event with null branch normalizes to a null branch key part', () => {
   const res = normalizeEvent(ev(iso(T), 'r', null, [{ name: 'c', tier: 'fast', status: 'pass', durationMs: 5, mode: 'blocking' }]));
   assert.ok(res.event);
@@ -162,6 +205,69 @@ test('normalizeEvent: surfaces the run outcome fields exit/aborted, tolerating a
 
 /* ---- aggregate: catch-candidates, key separation, windows ---- */
 
+test('aggregate: timing sources split one check into separate percentile series', () => {
+  const agg = aggregateOf([
+    ev(iso(T - 2 * DAY), 'r', 'main', [
+      {
+        name: 'c',
+        tier: 'fast',
+        status: 'pass',
+        durationMs: 10,
+        mode: 'blocking',
+        timingSource: 'batch-clock-v1',
+      },
+    ]),
+    ev(iso(T - 1 * DAY), 'r', 'main', [
+      {
+        name: 'c',
+        tier: 'fast',
+        status: 'pass',
+        durationMs: 20,
+        mode: 'blocking',
+        timingSource: 'external-clock-v1',
+      },
+    ]),
+  ]);
+
+  assert.deepEqual(
+    agg.keys.map((key: any) => [key.timingSource, key.runs, key.p50]),
+    [
+      ['batch-clock-v1', 1, 10],
+      ['external-clock-v1', 1, 20],
+    ],
+  );
+});
+
+test('aggregate: an absent timing source folds under runner-spawn-v1', () => {
+  const agg = aggregateOf([
+    ev(iso(T), 'r', 'main', [
+      { name: 'c', tier: 'fast', status: 'pass', durationMs: 10, mode: 'blocking' },
+    ]),
+  ]);
+
+  assert.equal(agg.keys[0].timingSource, 'runner-spawn-v1');
+  assert.deepEqual(JSON.parse(agg.keys[0].key), ['r', 'fast', 'c', 'main', 'runner-spawn-v1']);
+});
+
+test('formatReport: the per-key table renders a timing column', () => {
+  const agg = aggregateOf([
+    ev(iso(T), 'r', 'main', [
+      {
+        name: 'c',
+        tier: 'fast',
+        status: 'pass',
+        durationMs: 10,
+        mode: 'blocking',
+        timingSource: 'batch-clock-v1',
+      },
+    ]),
+  ]);
+  const report = formatReport(agg);
+
+  assert.match(report, /^repo\s+tier\s+check\s+branch\s+timing\s+runs/m);
+  assert.match(report, /^r\s+fast\s+c\s+main\s+batch-clock-v1\s+1/m);
+});
+
 test('aggregate: a fail then a pass in the next run of the same key is one catch-candidate', () => {
   const agg = aggregateOf([
     ev(iso(T - 2 * DAY), 'ai-prompter', 'main', [{ name: 'eslint', tier: 'fast', status: 'fail', durationMs: 300, mode: 'report-only' }]),
@@ -171,7 +277,7 @@ test('aggregate: a fail then a pass in the next run of the same key is one catch
   assert.equal(k.runs, 2);
   assert.equal(k.catches, 1);
   assert.equal(agg.flip.length, 1);
-  assert.equal(agg.flip[0].label, 'ai-prompter/fast/eslint@main');
+  assert.equal(agg.flip[0].label, 'ai-prompter/fast/eslint@main [runner-spawn-v1]');
 });
 
 test('aggregate: same check name in two tiers and two repos stays separate — no cross-contamination', () => {
@@ -187,11 +293,11 @@ test('aggregate: same check name in two tiers and two repos stays separate — n
   assert.equal(agg.keys.length, 3);
   const byLabel: Record<string, any> = {};
   for (const k of agg.keys) byLabel[k.label] = k;
-  assert.equal(byLabel['repoA/fast/eslint@main'].catches, 1);
-  assert.equal(byLabel['repoA/full/eslint@main'].catches, 0);
-  assert.equal(byLabel['repoB/fast/eslint@main'].catches, 0);
+  assert.equal(byLabel['repoA/fast/eslint@main [runner-spawn-v1]'].catches, 1);
+  assert.equal(byLabel['repoA/full/eslint@main [runner-spawn-v1]'].catches, 0);
+  assert.equal(byLabel['repoB/fast/eslint@main [runner-spawn-v1]'].catches, 0);
   // only the one real episode is a flip candidate
-  assert.deepEqual(agg.flip.map((f: any) => f.label), ['repoA/fast/eslint@main']);
+  assert.deepEqual(agg.flip.map((f: any) => f.label), ['repoA/fast/eslint@main [runner-spawn-v1]']);
 });
 
 test('aggregate: window boundary is inclusive — a fail exactly at the since-cutoff still catches', () => {
@@ -259,7 +365,7 @@ test('aggregate: a check that only ever passes inside the prune window is a prun
     ev(iso(T - 4 * DAY), 'r', 'main', [{ name: 'knip', tier: 'full', status: 'pass', durationMs: 60, mode: 'blocking' }]),
   ]);
   assert.equal(agg.prune.length, 1);
-  assert.equal(agg.prune[0].label, 'r/full/knip@main');
+  assert.equal(agg.prune[0].label, 'r/full/knip@main [runner-spawn-v1]');
 });
 
 test('aggregate: a single fail inside the prune window removes the prune candidacy', () => {
@@ -330,10 +436,10 @@ test('formatReport: Catch candidates lists each fail→pass pair with startedAt 
 
   const report = formatReport(agg);
   assert.ok(report.includes('## Catch candidates'), 'section present');
-  const line = report.split('\n').find((l) => l.startsWith('- repoX fast eslint main:'));
+  const line = report.split('\n').find((l) => l.startsWith('- repoX fast eslint main runner-spawn-v1:'));
   assert.equal(
     line,
-    `- repoX fast eslint main: fail ${failAt} (abc123456789) -> pass ${passAt} (-)`,
+    `- repoX fast eslint main runner-spawn-v1: fail ${failAt} (abc123456789) -> pass ${passAt} (-)`,
     `catch-candidate pair mis-rendered; got:\n${report}`,
   );
 });
@@ -375,7 +481,7 @@ test('formatReport: a bypass reason with a newline and ANSI is JSON-escaped onto
     ev(iso(T - 1 * DAY), 'r', 'main', [{ name: 'c', tier: 'fast', status: 'bypassed', durationMs: 10, mode: 'blocking', reason }]),
   ]);
   const report = formatReport(agg);
-  const line = report.split('\n').find((l) => l.startsWith('- r/fast/c@main:'));
+  const line = report.split('\n').find((l) => l.startsWith('- r/fast/c@main [runner-spawn-v1]:'));
   assert.ok(line, `bypass reason line present; got:\n${report}`);
   assert.ok(line.includes(JSON.stringify(reason)), 'reason is JSON-quoted');
   assert.ok(!line.includes(''), 'the raw ESC byte is escaped away');
@@ -472,7 +578,7 @@ test('CLI: a real fixture prints every documented section, both candidate lists,
     // The eslint fail→pass is a catch-candidate pair (head_sha "deadbeef" from the ev builder).
     assert.match(
       res.stdout,
-      /- repoX fast eslint main: fail .* \(deadbeef\) -> pass .* \(deadbeef\)/,
+      /- repoX fast eslint main runner-spawn-v1: fail .* \(deadbeef\) -> pass .* \(deadbeef\)/,
       'catch-candidate pair listed',
     );
     assert.ok(res.stdout.includes('malformed=1'), 'malformed counter');

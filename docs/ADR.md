@@ -44,6 +44,7 @@ current code, so they get no standalone entry here.
 | ADR-026 | Accepted | SonarJS machinery upstream, rule matrix in the consumer |
 | ADR-027 | Accepted | `check-new-deps` proves pnpm workspaces |
 | ADR-028 | Accepted | Shared deep-review core with adaptive tiered topology |
+| ADR-029 | Accepted | Attributed batch execution with distinct timing series |
 
 ---
 
@@ -1350,3 +1351,67 @@ scaling its cost to the diff actually under review.
   not cross-family.
 - Consumers pick the new topology up through a pin bump; wrappers, skill
   names, and descriptions are unchanged, so no reseeding is needed.
+
+---
+
+## ADR-029 — Attributed batch execution with distinct timing series
+
+- **Status:** Accepted
+- **Date:** 2026-08-13
+- **Scope:** Quality-runner grouped checks, result attribution, and latency statistics.
+
+### Context
+
+Independent quality gates may share one child process, but a single process
+exit cannot describe each gate's result or duration. The command therefore
+produces a result artifact that attributes outcomes to the declared members.
+Durations reported by that command use a different measurement method from
+durations observed around an individually spawned gate; folding both methods
+into one percentile series would make the percentile statistically incoherent.
+
+The upstream runner is shared across consumers that execute their gates in
+different ways. Encoding consumer-specific orchestration vocabulary in the
+contract would couple the runner and its telemetry history to infrastructure it
+neither owns nor needs to understand.
+
+### Decision
+
+1. A group is one command that reports its members out of band. The runner
+   attributes the artifact after the command finishes; the group process's own
+   exit does not override member attribution. Post-attribution artifact cleanup
+   is recursive and best-effort: cleanup errors never displace the attributed
+   outcome, including an attribution failure, and a leftover artifact is inert
+   because the next invocation uses a different nonce.
+2. `timingSource` is an opaque, consumer-declared, versioned measurement-method
+   identifier within `/^[\w.-]{1,64}$/`: 1–64 ASCII letters, digits, underscores,
+   dots, or hyphens. It is not an enum of implementations and must change when
+   the measurement method changes. Both the attributor and aggregator enforce
+   this grammar; the aggregator rejects the whole event when any supplied value
+   is malformed. An individually spawn-timed result omits the field; latency
+   aggregation interprets absence as its versioned spawn-timing source.
+3. A check cannot join a group when it carries operational exit codes, a
+   skip-if-empty fileset, `bypassable: true`, or a non-blocking mode. Operational
+   exit codes assign meaning to an individual process exit that a shared
+   process cannot preserve. Skip-if-empty requires a member-specific
+   pre-execution decision. `bypassable: true` requires a member-specific waiver path.
+   Non-blocking mode conflicts with the fail-closed classification required
+   when a member cannot be attributed.
+4. The hard timeout applies to the group command and is bounded by both the
+   remaining tier budget and the sum of member timeouts. Member durations are
+   classified post hoc against their declared timeouts. No per-member kill is
+   promised inside the shared process.
+5. Latency aggregation keys include `timingSource`. Adoption therefore declares
+   a percentile-series break: samples measured by different methods remain in
+   separate series even when repository, tier, gate name, and branch match.
+
+### Consequences
+
+- Consumers may batch eligible gates without exposing their orchestration
+  details to the upstream contract, but they own the meaning and versioning of
+  the timing-source value they declare.
+- An unresponsive group may consume the sum of its member timeout allowances;
+  member timeout labels describe attributed elapsed time, not independent
+  termination boundaries.
+- Historical spawn-timed samples remain readable under the aggregation
+  default, while attributed measurements intentionally start separate latency
+  histories.

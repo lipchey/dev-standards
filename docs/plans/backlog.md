@@ -37,11 +37,12 @@ The findings schema still accepts non-positive lines, empty or duplicate
 `slice_files`, and a finding file outside its `slice_files`. Add schema and mutation
 tests before changing fix-mode behavior.
 
-### Realpath-confine installer rollback deletions
+### Make shared path confinement fail closed and race-safe
 
-`ds-install.sh --rollback` protects fixed `.claude/*` byproducts behind symlinks, but
-journal-driven deletions still trust recorded lexical paths. Realpath-confine each
-delete and cover a symlink-boundary fixture.
+`realpathOfDeepestExisting` treats non-`ENOENT` failures such as `EACCES` as absence,
+while resolve-then-use remains raceable through mutable ancestors. Replace it with a
+fail-closed, race-safe primitive shared by installer rollback and group-artifact
+handling, covered by permission-failure and ancestor-swap fixtures.
 
 ### Make pin-bump seeding transactional
 

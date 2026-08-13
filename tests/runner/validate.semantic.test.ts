@@ -80,6 +80,42 @@ function expectError(result: ValidationResult, match: { path?: string; rule?: st
   );
 }
 
+interface MutableGroupMember {
+  check: string;
+  result_key: string;
+}
+
+interface MutableGroup {
+  name: string;
+  argv: string[];
+  artifact_dir: string;
+  members: MutableGroupMember[];
+}
+
+function addValidGroup(manifest: Manifest): MutableGroup {
+  (firstFastCheck(manifest) as unknown as Record<string, unknown>)['group'] = 'quality';
+  const group: MutableGroup = {
+    name: 'quality',
+    argv: ['group-check'],
+    artifact_dir: '.artifacts/groups',
+    members: [{ check: 'typecheck', result_key: 'typecheck' }],
+  };
+  (manifest as unknown as { groups: MutableGroup[] }).groups = [group];
+  return group;
+}
+
+function expectGroupError(
+  manifest: Manifest,
+  match: { path: string; rule: string },
+  message: RegExp,
+): void {
+  const result = validate(manifest);
+  expectError(result, match);
+  const error = findError(result, match);
+  assert.ok(error);
+  assert.match(error.message, message);
+}
+
 test('two {files:...} tokens in one argv fail with rule files-token-count', () => {
   const manifest = makeManifest();
   firstFastCheck(manifest).argv = ['tool', '{files:repo_ts}', '{files:repo_ts}'];
@@ -106,6 +142,250 @@ test('skip_if_empty naming an undeclared fileset fails with rule skip-if-empty-r
     rule: 'skip-if-empty-reference',
   });
 });
+
+test('a grouped check declaring operational_exit_codes is not batchable', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  firstFastCheck(manifest).operational_exit_codes = [2];
+  expectGroupError(
+    manifest,
+    { path: 'tiers.fast[0].operational_exit_codes', rule: 'group-eligibility' },
+    /declares operational_exit_codes.*not batchable/,
+  );
+});
+
+test('a grouped check declaring skip_if_empty is not batchable', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  firstFastCheck(manifest).skip_if_empty = 'repo_ts';
+  expectGroupError(
+    manifest,
+    { path: 'tiers.fast[0].skip_if_empty', rule: 'group-eligibility' },
+    /declares skip_if_empty.*not batchable/,
+  );
+});
+
+test('a grouped check with bypassable true is not batchable', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  firstFastCheck(manifest).bypassable = true;
+  expectGroupError(
+    manifest,
+    { path: 'tiers.fast[0].bypassable', rule: 'group-eligibility' },
+    /bypassable true.*not batchable/,
+  );
+});
+
+test('a grouped check explicitly declaring bypassable false is batchable', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  firstFastCheck(manifest).bypassable = false;
+  assert.deepEqual(validate(manifest), { ok: true, errors: [] });
+});
+
+test('a grouped check with non-blocking mode is not batchable', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  firstFastCheck(manifest).mode = 'report-only';
+  expectGroupError(
+    manifest,
+    { path: 'tiers.fast[0].mode', rule: 'group-eligibility' },
+    /mode "report-only".*not batchable/,
+  );
+});
+
+test('a grouped check explicitly declaring blocking mode is batchable', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  firstFastCheck(manifest).mode = 'blocking';
+  assert.deepEqual(validate(manifest), { ok: true, errors: [] });
+});
+
+test('a check group reference must name a declared group', () => {
+  const manifest = makeManifest();
+  (firstFastCheck(manifest) as unknown as Record<string, unknown>)['group'] = 'missing';
+  expectGroupError(
+    manifest,
+    { path: 'tiers.fast[0].group', rule: 'group-reference' },
+    /references undeclared group "missing"/,
+  );
+});
+
+test('every check naming a group must appear in that group members list', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  group.members = [{ check: 'other', result_key: 'other' }];
+  manifest.tiers.fast.push({ name: 'other', argv: ['other-check'], timeout_seconds: 10 });
+  expectGroupError(
+    manifest,
+    { path: 'tiers.fast[0].group', rule: 'group-membership' },
+    /check "typecheck" names group "quality" but is absent from its members/,
+  );
+});
+
+test('every group member must name a check assigned to that group', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  manifest.tiers.fast.push({ name: 'other', argv: ['other-check'], timeout_seconds: 10 });
+  group.members.push({ check: 'other', result_key: 'other' });
+  expectGroupError(
+    manifest,
+    { path: 'groups[0].members[1].check', rule: 'group-membership' },
+    /member check "other" is not assigned to group "quality"/,
+  );
+});
+
+test('a group member must name an existing check', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  group.members.push({ check: 'missing', result_key: 'missing' });
+  expectGroupError(
+    manifest,
+    { path: 'groups[0].members[1].check', rule: 'group-membership' },
+    /member check "missing" does not exist/,
+  );
+});
+
+test('all group members must live in one tier', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  manifest.tiers.full.push({
+    name: 'other',
+    argv: ['other-check'],
+    timeout_seconds: 10,
+    group: 'quality',
+  });
+  group.members.push({ check: 'other', result_key: 'other' });
+  expectGroupError(
+    manifest,
+    { path: 'groups[0].members[1].check', rule: 'group-tier' },
+    /group "quality" spans tiers "fast" and "full"/,
+  );
+});
+
+test('group names must be unique', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  (manifest as unknown as { groups: MutableGroup[] }).groups.push(structuredClone(group));
+  expectGroupError(
+    manifest,
+    { path: 'groups[1].name', rule: 'group-name-unique' },
+    /duplicate group name "quality"/,
+  );
+});
+
+test('member result_key values must be unique within a group', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  manifest.tiers.fast.push({
+    name: 'other',
+    argv: ['other-check'],
+    timeout_seconds: 10,
+    group: 'quality',
+  });
+  group.members.push({ check: 'other', result_key: 'typecheck' });
+  expectGroupError(
+    manifest,
+    { path: 'groups[0].members[1].result_key', rule: 'group-membership' },
+    /duplicate result_key "typecheck" in group "quality"/,
+  );
+});
+
+// A check name is unique per tier only, so one member name can resolve to two tiers at once —
+// a shape the two-member spanning case never reaches.
+test('a single member resolving into two tiers spans tiers', () => {
+  const manifest = makeManifest();
+  addValidGroup(manifest);
+  manifest.tiers.full.push({
+    name: 'typecheck',
+    argv: ['npm', 'run', 'typecheck'],
+    timeout_seconds: 10,
+    group: 'quality',
+  });
+  expectGroupError(
+    manifest,
+    { path: 'groups[0].members[0].check', rule: 'group-tier' },
+    /spans tiers/,
+  );
+});
+
+test('member check values must be unique within a group', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  group.members.push({ check: 'typecheck', result_key: 'other' });
+  expectGroupError(
+    manifest,
+    { path: 'groups[0].members[1].check', rule: 'group-membership' },
+    /duplicate member check "typecheck" in group "quality"/,
+  );
+});
+
+test('group argv rejects fileset tokens', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  group.argv.push('{files:repo_ts}');
+  expectGroupError(
+    manifest,
+    { path: 'groups[0].argv[1]', rule: 'group-argv-token' },
+    /group argv cannot contain a \{files:<fileset>\} token/,
+  );
+});
+
+test('group argv rejects fileset tokens containing a line break', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  group.argv.push('{files:\nrepo_ts}');
+  expectGroupError(
+    manifest,
+    { path: 'groups[0].argv[1]', rule: 'group-argv-token' },
+    /group argv cannot contain a \{files:<fileset>\} token/,
+  );
+});
+
+test('a group cannot declare timeout_seconds', () => {
+  const manifest = makeManifest();
+  const group = addValidGroup(manifest);
+  (group as unknown as Record<string, unknown>)['timeout_seconds'] = 30;
+  expectError(validate(manifest), { path: 'groups[0].timeout_seconds', rule: 'additional-property' });
+});
+
+const invalidArtifactDirs = [
+  { label: 'parent segment', value: 'artifacts/../outside' },
+  { label: 'current segment', value: 'artifacts/./result' },
+  { label: 'absolute path', value: '/artifacts/result' },
+  { label: 'drive letter', value: 'C:/artifacts/result' },
+  { label: 'backslash', value: 'artifacts\\result' },
+  { label: 'bad character', value: 'artifacts/result!' },
+] as const;
+
+for (const { label, value } of invalidArtifactDirs) {
+  test(`group artifact_dir rejects ${label}`, () => {
+    const manifest = makeManifest();
+    const group = addValidGroup(manifest);
+    group.artifact_dir = value;
+    expectGroupError(
+      manifest,
+      { path: 'groups[0].artifact_dir', rule: 'group-path' },
+      /relative POSIX path/,
+    );
+  });
+}
+
+const invalidGroupNames = ['nested/group', '.', '..'] as const;
+
+for (const name of invalidGroupNames) {
+  test(`group name rejects ${JSON.stringify(name)}`, () => {
+    const manifest = makeManifest();
+    const group = addValidGroup(manifest);
+    group.name = name;
+    (firstFastCheck(manifest) as unknown as Record<string, unknown>)['group'] = name;
+    expectGroupError(
+      manifest,
+      { path: 'groups[0].name', rule: 'group-path' },
+      /single path segment/,
+    );
+  });
+}
 
 // Keep schema docs and validator dialect in lockstep for every banned construct and field.
 const bannedGlobConstructs: ReadonlyArray<{ label: string; pattern: string }> = [

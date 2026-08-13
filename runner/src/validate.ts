@@ -31,9 +31,20 @@ type RuleName =
   | 'format-fileset-reference'
   | 'format-fileset-source'
   | 'format-fileset-filter'
-  | 'format-argv-token';
+  | 'format-argv-token'
+  | 'group-reference'
+  | 'group-name-unique'
+  | 'group-membership'
+  | 'group-eligibility'
+  | 'group-tier'
+  | 'group-argv-token'
+  | 'group-path';
 
-type UniquenessRule = 'fileset-name-unique' | 'check-name-unique' | 'workspace-name-unique';
+type UniquenessRule =
+  | 'fileset-name-unique'
+  | 'check-name-unique'
+  | 'workspace-name-unique'
+  | 'group-name-unique';
 
 const STACKS = ['node-service', 'frontend-web', 'n8n-ops', 'meta-docs'] as const;
 const SCHEDULER_CLASSES = [
@@ -59,7 +70,7 @@ const TOP_LEVEL_REQUIRED = [
   'filesets',
   'tiers',
 ] as const;
-const TOP_LEVEL_ALLOWED = [...TOP_LEVEL_REQUIRED, 'format', 'deep_review'] as const;
+const TOP_LEVEL_ALLOWED = [...TOP_LEVEL_REQUIRED, 'groups', 'format', 'deep_review'] as const;
 const FORMAT_KEYS = ['argv', 'fileset', 'timeout_seconds'] as const;
 // A/C/M/R all resolve to an existing regular file; D/T/U/X/B would hand the formatter a
 // deleted, type-changed, or conflicted path, so a format fileset's filter must stay within these.
@@ -84,7 +95,10 @@ const CHECK_ALLOWED = [
   'baseline',
   'bypassable',
   'operational_exit_codes',
+  'group',
 ] as const;
+const GROUP_REQUIRED = ['name', 'argv', 'artifact_dir', 'members'] as const;
+const GROUP_MEMBER_KEYS = ['check', 'result_key'] as const;
 const REQUIRED_TIERS = ['staged', 'fast', 'full'] as const;
 const TIER_NAMES = ['staged', 'fast', 'full', 'audit'] as const;
 
@@ -118,6 +132,12 @@ const FILES_TOKEN = /^\{files:([\w-]+)\}$/;
 const FILESET_NAME_PATTERN = /^[\w-]+$/;
 // The schema dialect allows only `*`, `**`, and literals.
 const UNSUPPORTED_GLOB_SYNTAX = /[?[{]/;
+// A group name and every `artifact_dir` segment become filesystem components the runner writes to
+// and deletes, so the grammar stays narrow enough that no accepted value can leave the namespace.
+const GROUP_SEGMENT_PATTERN = /^[\w.-]+$/;
+// Deliberately broader than `FILES_TOKEN`: a group argv rejects anything `{files:…}`-shaped, not
+// only a legal fileset name, because a batch has no fileset to expand and no way to report a skip.
+const GROUP_FILES_TOKEN = /^\{files:.*\}$/s;
 
 // Rest tuple distinguishes "no value" from an explicit undefined value.
 function addError(
@@ -297,6 +317,7 @@ function validateStructure(root: Record<string, unknown>, errors: ValidationErro
   if (Object.hasOwn(root, 'workspaces')) validateWorkspaces(root['workspaces'], errors);
   if (Object.hasOwn(root, 'filesets')) validateFilesets(root['filesets'], errors);
   if (Object.hasOwn(root, 'tiers')) validateTiers(root['tiers'], errors);
+  if (Object.hasOwn(root, 'groups')) validateGroups(root['groups'], errors);
   if (Object.hasOwn(root, 'format')) validateFormat(root['format'], errors);
   if (Object.hasOwn(root, 'deep_review')) validateDeepReview(root['deep_review'], errors);
 }
@@ -484,6 +505,55 @@ function validateCheck(value: unknown, path: string, errors: ValidationError[]):
   if (Object.hasOwn(check, 'operational_exit_codes')) {
     validateOperationalExitCodes(check['operational_exit_codes'], `${path}.operational_exit_codes`, errors);
   }
+  if (Object.hasOwn(check, 'group')) validateNonEmptyString(check['group'], `${path}.group`, errors);
+}
+
+function validateGroups(value: unknown, errors: ValidationError[]): void {
+  if (!isUnknownArray(value)) {
+    addError(errors, 'groups', 'type', `must be an array of groups, got ${describeValue(value)}`, value);
+    return;
+  }
+  value.forEach((entry, index) => {
+    validateGroup(entry, `groups[${index}]`, errors);
+  });
+}
+
+function validateGroup(value: unknown, path: string, errors: ValidationError[]): void {
+  const group = requireRecord(value, path, errors);
+  if (group === undefined) return;
+  requireKeys(group, path, GROUP_REQUIRED, errors);
+  rejectUnknownKeys(group, path, GROUP_REQUIRED, errors);
+  if (Object.hasOwn(group, 'name')) validateNonEmptyString(group['name'], `${path}.name`, errors);
+  if (Object.hasOwn(group, 'argv')) {
+    validateStringArray(group['argv'], `${path}.argv`, 1, errors, true);
+  }
+  if (Object.hasOwn(group, 'artifact_dir')) {
+    validateNonEmptyString(group['artifact_dir'], `${path}.artifact_dir`, errors);
+  }
+  if (Object.hasOwn(group, 'members')) validateGroupMembers(group['members'], `${path}.members`, errors);
+}
+
+function validateGroupMembers(value: unknown, path: string, errors: ValidationError[]): void {
+  if (!isUnknownArray(value)) {
+    addError(errors, path, 'type', `must be an array of group members, got ${describeValue(value)}`, value);
+    return;
+  }
+  if (value.length === 0) {
+    addError(errors, path, 'min-items', 'must contain at least 1 member', value);
+  }
+  value.forEach((entry, index) => {
+    const memberPath = `${path}[${index}]`;
+    const member = requireRecord(entry, memberPath, errors);
+    if (member === undefined) return;
+    requireKeys(member, memberPath, GROUP_MEMBER_KEYS, errors);
+    rejectUnknownKeys(member, memberPath, GROUP_MEMBER_KEYS, errors);
+    if (Object.hasOwn(member, 'check')) {
+      validateNonEmptyString(member['check'], `${memberPath}.check`, errors);
+    }
+    if (Object.hasOwn(member, 'result_key')) {
+      validateNonEmptyString(member['result_key'], `${memberPath}.result_key`, errors);
+    }
+  });
 }
 
 // Mirrors the schema: a non-empty array of unique integers in [1, 255]. Item-level errors are
@@ -590,9 +660,270 @@ function validateSemantics(root: Record<string, unknown>, errors: ValidationErro
   const filesetNames = collectDeclaredFilesetNames(root);
   validateTierBudgets(root, errors);
   validateTierCheckSemantics(root, filesetNames, errors);
+  validateGroupSemantics(root, errors);
   validateFilesetSemantics(root, errors);
   validateFormatSemantics(root, errors);
   validateWorkspaceUniqueness(root, errors);
+}
+
+interface LocatedCheck {
+  check: Record<string, unknown>;
+  path: string;
+  tier: (typeof TIER_NAMES)[number];
+  name: string;
+  group?: string;
+}
+
+function validateGroupSemantics(root: Record<string, unknown>, errors: ValidationError[]): void {
+  const tiers = root['tiers'];
+  if (!isRecord(tiers)) return;
+  const groups = isUnknownArray(root['groups']) ? root['groups'] : [];
+
+  const checks: LocatedCheck[] = [];
+  for (const tier of TIER_NAMES) {
+    const tierChecks = tiers[tier];
+    if (!isUnknownArray(tierChecks)) continue;
+    tierChecks.forEach((check, index) => {
+      if (!isRecord(check) || typeof check['name'] !== 'string') return;
+      const group = check['group'];
+      checks.push({
+        check,
+        path: `tiers.${tier}[${index}]`,
+        tier,
+        name: check['name'],
+        ...(typeof group === 'string' ? { group } : {}),
+      });
+    });
+  }
+
+  reportDuplicateNames(groups, 'groups', 'group-name-unique', 'group', '', errors);
+  const declaredGroups = new Set(
+    groups.flatMap((group) =>
+      isRecord(group) && typeof group['name'] === 'string' ? [group['name']] : [],
+    ),
+  );
+
+  for (const located of checks) {
+    const groupName = located.group;
+    if (groupName === undefined || groupName.length === 0) continue;
+    if (!declaredGroups.has(groupName)) {
+      addError(
+        errors,
+        `${located.path}.group`,
+        'group-reference',
+        `check ${JSON.stringify(located.name)} references undeclared group ${JSON.stringify(groupName)}`,
+        groupName,
+      );
+    }
+    if (Object.hasOwn(located.check, 'operational_exit_codes')) {
+      addError(
+        errors,
+        `${located.path}.operational_exit_codes`,
+        'group-eligibility',
+        `check ${JSON.stringify(located.name)} declares operational_exit_codes and cannot join group ${JSON.stringify(groupName)}; a gate with that field is not batchable`,
+        located.check['operational_exit_codes'],
+      );
+    }
+    if (Object.hasOwn(located.check, 'skip_if_empty')) {
+      addError(
+        errors,
+        `${located.path}.skip_if_empty`,
+        'group-eligibility',
+        `check ${JSON.stringify(located.name)} declares skip_if_empty and cannot join group ${JSON.stringify(groupName)}; a gate with that field is not batchable`,
+        located.check['skip_if_empty'],
+      );
+    }
+    if (located.check['bypassable'] === true) {
+      addError(
+        errors,
+        `${located.path}.bypassable`,
+        'group-eligibility',
+        `check ${JSON.stringify(located.name)} sets bypassable true and cannot join group ${JSON.stringify(groupName)}; a bypassable gate is not batchable`,
+        true,
+      );
+    }
+    const mode = located.check['mode'];
+    if (typeof mode === 'string' && mode !== 'blocking') {
+      addError(
+        errors,
+        `${located.path}.mode`,
+        'group-eligibility',
+        `check ${JSON.stringify(located.name)} uses mode ${JSON.stringify(mode)} and cannot join group ${JSON.stringify(groupName)}; a non-blocking gate is not batchable`,
+        mode,
+      );
+    }
+  }
+
+  groups.forEach((entry, groupIndex) => {
+    if (!isRecord(entry)) return;
+    validateGroupPathSemantics(entry, groupIndex, errors);
+    validateGroupArgvSemantics(entry, groupIndex, errors);
+    validateGroupMembership(entry, groupIndex, checks, errors);
+  });
+}
+
+function validateGroupPathSemantics(
+  group: Record<string, unknown>,
+  groupIndex: number,
+  errors: ValidationError[],
+): void {
+  const name = group['name'];
+  if (typeof name === 'string' && name.length > 0 && !isGroupSegment(name)) {
+    addError(
+      errors,
+      `groups[${groupIndex}].name`,
+      'group-path',
+      'group name must be a single path segment matching ^[A-Za-z0-9._-]+$ and cannot be "." or ".."',
+      name,
+    );
+  }
+  const artifactDir = group['artifact_dir'];
+  if (typeof artifactDir === 'string' && artifactDir.length > 0 && !isGroupArtifactDir(artifactDir)) {
+    addError(
+      errors,
+      `groups[${groupIndex}].artifact_dir`,
+      'group-path',
+      'artifact_dir must be a relative POSIX path whose segments match ^[A-Za-z0-9._-]+$ and are not "." or ".."',
+      artifactDir,
+    );
+  }
+}
+
+function isGroupSegment(value: string): boolean {
+  return value !== '.' && value !== '..' && GROUP_SEGMENT_PATTERN.test(value);
+}
+
+function isGroupArtifactDir(value: string): boolean {
+  if (value.startsWith('/') || /^[a-z]:/i.test(value) || value.includes('\\')) return false;
+  return value.split('/').every(isGroupSegment);
+}
+
+function validateGroupArgvSemantics(
+  group: Record<string, unknown>,
+  groupIndex: number,
+  errors: ValidationError[],
+): void {
+  const argv = group['argv'];
+  if (!isUnknownArray(argv)) return;
+  argv.forEach((argument, index) => {
+    if (typeof argument === 'string' && GROUP_FILES_TOKEN.test(argument)) {
+      addError(
+        errors,
+        `groups[${groupIndex}].argv[${index}]`,
+        'group-argv-token',
+        'group argv cannot contain a {files:<fileset>} token because an empty expansion has no attributable result',
+        argument,
+      );
+    }
+  });
+}
+
+function validateGroupMembership(
+  group: Record<string, unknown>,
+  groupIndex: number,
+  checks: readonly LocatedCheck[],
+  errors: ValidationError[],
+): void {
+  const name = group['name'];
+  const members = group['members'];
+  if (typeof name !== 'string' || name.length === 0 || !isUnknownArray(members)) return;
+
+  const memberNames = new Set<string>();
+  const resultKeys = new Set<string>();
+  members.forEach((member, memberIndex) => {
+    if (!isRecord(member)) return;
+    const checkName = member['check'];
+    if (typeof checkName === 'string') {
+      if (memberNames.has(checkName)) {
+        addError(
+          errors,
+          `groups[${groupIndex}].members[${memberIndex}].check`,
+          'group-membership',
+          `duplicate member check ${JSON.stringify(checkName)} in group ${JSON.stringify(name)}`,
+          checkName,
+        );
+      }
+      memberNames.add(checkName);
+    }
+    const resultKey = member['result_key'];
+    if (typeof resultKey === 'string') {
+      if (resultKeys.has(resultKey)) {
+        addError(
+          errors,
+          `groups[${groupIndex}].members[${memberIndex}].result_key`,
+          'group-membership',
+          `duplicate result_key ${JSON.stringify(resultKey)} in group ${JSON.stringify(name)}`,
+          resultKey,
+        );
+      }
+      resultKeys.add(resultKey);
+    }
+  });
+
+  const assigned = checks.filter((check) => check.group === name);
+  for (const check of assigned) {
+    if (!memberNames.has(check.name)) {
+      addError(
+        errors,
+        `${check.path}.group`,
+        'group-membership',
+        `check ${JSON.stringify(check.name)} names group ${JSON.stringify(name)} but is absent from its members`,
+        name,
+      );
+    }
+  }
+
+  let memberTier: LocatedCheck['tier'] | undefined;
+  members.forEach((member, memberIndex) => {
+    if (!isRecord(member) || typeof member['check'] !== 'string') return;
+    const checkName = member['check'];
+    const candidates = checks.filter((check) => check.name === checkName);
+    const assignedCandidates = candidates.filter((check) => check.group === name);
+    const path = `groups[${groupIndex}].members[${memberIndex}].check`;
+    if (candidates.length === 0) {
+      addError(
+        errors,
+        path,
+        'group-membership',
+        `group ${JSON.stringify(name)} member check ${JSON.stringify(checkName)} does not exist`,
+        checkName,
+      );
+      return;
+    }
+    if (assignedCandidates.length === 0) {
+      addError(
+        errors,
+        path,
+        'group-membership',
+        `group ${JSON.stringify(name)} member check ${JSON.stringify(checkName)} is not assigned to group ${JSON.stringify(name)}`,
+        checkName,
+      );
+      return;
+    }
+    const candidateTier = assignedCandidates[0]?.tier;
+    if (candidateTier === undefined) return;
+    if (memberTier === undefined) {
+      memberTier = candidateTier;
+    } else if (candidateTier !== memberTier) {
+      addError(
+        errors,
+        path,
+        'group-tier',
+        `group ${JSON.stringify(name)} spans tiers ${JSON.stringify(memberTier)} and ${JSON.stringify(candidateTier)}; all members must share one tier`,
+        checkName,
+      );
+    }
+    const extraTier = assignedCandidates.find((candidate) => candidate.tier !== candidateTier)?.tier;
+    if (extraTier !== undefined) {
+      addError(
+        errors,
+        path,
+        'group-tier',
+        `group ${JSON.stringify(name)} spans tiers ${JSON.stringify(candidateTier)} and ${JSON.stringify(extraTier)}; all members must share one tier`,
+        checkName,
+      );
+    }
+  });
 }
 
 function validateFormatSemantics(root: Record<string, unknown>, errors: ValidationError[]): void {
