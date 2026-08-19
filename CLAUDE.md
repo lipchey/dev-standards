@@ -26,6 +26,13 @@ historical plans and calibration entries may use its former repository name,
   (docs/ADR.md), the consumer journal records only its adoption + a pointer
   (miss caught by the owner, 2026-07-15: constants-home/naming landed in the
   consumer while the template still seeded the old behavior).
+- **Intake ledger**: the live consumer's ledger is the source of truth for
+  change *intake* — what is being changed, why, on whose request, and adoption
+  state; an ADR entry recording a change that arrived through consumer intake
+  links its ledger row. The standard's substance
+  and its rationale still live HERE and ship with seeds in the same batch — a
+  change that exists only in a consumer is a seed-parity violation regardless
+  of what the ledger says.
 - **Skill bodies are canonical — no per-project fork**: a skill's body has one
   source for all projects (ADR-003/010). Per-project specificity goes through the
   three legal tuning surfaces (`quality.json`, additive `.claude/review-guides/`
