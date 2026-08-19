@@ -190,8 +190,9 @@ error everywhere; the pilot is now aligned with the seed/composition default.
 
 ### 2026-08-19 — first ariadne calibration session (consumer ledger read at last)
 
-**Inputs.** `quality-stats --repo ariadne --since 23` over 3169 events
-(2026-07-28 → 2026-08-19, 415 branches); ariadne's `.claude/gate-misses.md`;
+**Inputs.** `quality-stats --repo ariadne --since 23` over 3187 events
+(2026-07-28 → 2026-08-19, 420 branches), read from one frozen copy of the sink so
+the retained artifact and every table derived from it agree; ariadne's `.claude/gate-misses.md`;
 this inbox. The 2026-07-15 entry above recorded the consumer ledger as
 unreachable and deferred it — this is that deferral being paid off, 33 days
 later. No calibration session had ever read an ariadne ledger.
@@ -203,25 +204,28 @@ skips because unrelated misses had been appended below them, and one record
 written as a bare pipe-delimited bullet. Every tier stayed green throughout —
 the ledger has no gate on its own shape. All 13 now carry a pointer line whose
 date, title, class and route are taken verbatim from the record; no existing
-text was rewritten. 120 records total, all dispositioned; five closed (three on
-a verified recorded proof, two on a red/green produced in-session), two left
-explicitly `proof owed`.
+text was rewritten. 120 records total, all dispositioned; four closed, each on a proof re-run against
+the current tree — two whose proof the entry already carried, two produced
+in-session under an owner cap — and three left explicitly `proof owed`, including
+one whose green half would have encrypted against the real secret vault.
 
 **Two findings about this tool, not the consumer.**
 
 1. *The candidate lists cannot be dispositioned as printed.* Keying on
    `(repo, tier, check, branch, timingSource)` puts the branch axis inside the
-   key, so `## Prune candidates` reported 4213 rows for ariadne. Collapsed onto
+   key, so `## Prune candidates` reported 4231 rows for ariadne. Collapsed onto
    `(check, tier, timingSource, mode)` — summing counts, but computing catches
    per branch and then summing, since a fail on one branch followed by a pass on
    another is not a catch — there are 23, and a "0 fails in the last 30d" window
    finally means what its heading says.
 2. *Most catch candidates observed no code change.* A pair carries both runs'
-   `head_sha` and nothing compares them: **751 of 852 pairs share one**, median
-   64s apart, 640 of them at the `full` tier which runs on a clean exact HEAD.
-   So `cost per catch: 114.2s` is a cost per candidate; per pair that saw the
-   tree move it is about 13.4 minutes. What makes an identical tree disagree is
-   not in the telemetry.
+   `head_sha` and nothing compares them: **752 of 853 pairs share one**, median
+   64s apart, 640 of them at the `full` tier. So `cost per catch: 114.5s` is a
+   cost per candidate; per pair that saw the tree move it is about 16.1 minutes.
+   Note the limit of the field: telemetry records the commit and nothing about
+   the worktree — no cleanliness flag, no content hash — so the honest claim is
+   "same commit", not "same tree", and what makes the two runs disagree is not in
+   the telemetry either.
 
 **Decisions.** No flip: the window holds one `report-only` series
 (`check-new-deps/staged`, 74 runs, 0 catches), below the ≥1-catch bar. No prune
