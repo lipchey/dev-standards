@@ -187,3 +187,52 @@ package's own dependency boundary.
 
 **Net.** ADR-022's warn→error ramp is complete on the pilot. The rule ships at
 error everywhere; the pilot is now aligned with the seed/composition default.
+
+### 2026-08-19 — first ariadne calibration session (consumer ledger read at last)
+
+**Inputs.** `quality-stats --repo ariadne --since 23` over 3169 events
+(2026-07-28 → 2026-08-19, 415 branches); ariadne's `.claude/gate-misses.md`;
+this inbox. The 2026-07-15 entry above recorded the consumer ledger as
+unreachable and deferred it — this is that deferral being paid off, 33 days
+later. No calibration session had ever read an ariadne ledger.
+
+**The ledger was unreadable before it could be counted.** 12 sections had
+accumulated after `## Closed`, and 13 records carried no checkbox at all: nine
+prose-only sections, three prose records hidden under sections a shape scan
+skips because unrelated misses had been appended below them, and one record
+written as a bare pipe-delimited bullet. Every tier stayed green throughout —
+the ledger has no gate on its own shape. All 13 now carry a pointer line whose
+date, title, class and route are taken verbatim from the record; no existing
+text was rewritten. 120 records total, all dispositioned; five closed (three on
+a verified recorded proof, two on a red/green produced in-session), two left
+explicitly `proof owed`.
+
+**Two findings about this tool, not the consumer.**
+
+1. *The candidate lists cannot be dispositioned as printed.* Keying on
+   `(repo, tier, check, branch, timingSource)` puts the branch axis inside the
+   key, so `## Prune candidates` reported 4213 rows for ariadne. Collapsed onto
+   `(check, tier, timingSource, mode)` — summing counts, but computing catches
+   per branch and then summing, since a fail on one branch followed by a pass on
+   another is not a catch — there are 23, and a "0 fails in the last 30d" window
+   finally means what its heading says.
+2. *Most catch candidates observed no code change.* A pair carries both runs'
+   `head_sha` and nothing compares them: **751 of 852 pairs share one**, median
+   64s apart, 640 of them at the `full` tier which runs on a clean exact HEAD.
+   So `cost per catch: 114.2s` is a cost per candidate; per pair that saw the
+   tree move it is about 13.4 minutes. What makes an identical tree disagree is
+   not in the telemetry.
+
+**Decisions.** No flip: the window holds one `report-only` series
+(`check-new-deps/staged`, 74 runs, 0 catches), below the ≥1-catch bar. No prune
+and no demotion: the only large clean candidate is `repository-policies/full`,
+a policy gate whose value is preventing a class rather than catching one, and
+the rest are probes that fail by construction, single-branch rows, or one-run
+`nx-task-v1` rows from the timing cutover. No `quality.json` tuning.
+
+**Routed here.** Both findings above, plus ariadne's two open `core` gate-misses.
+Also logged in the consumer ledger: its own shape has no gate, and
+`diff-coverage` — a blocking gate — ended 58 of 844 runs in `error` while
+reading as a prune candidate on 0 fails.
+
+**Next session: 2026-09-02** (14 days, per this playbook's 1–2 week cadence).
