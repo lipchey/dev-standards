@@ -1,5 +1,4 @@
-// Reserved for Phase 3a meta-repo adoption; no validator fixture coverage yet.
-type Stack = 'node-service' | 'frontend-web' | 'n8n-ops' | 'meta-docs';
+type Stack ='node-service' | 'frontend-web' | 'n8n-ops' | 'meta-docs' | 'python-tool';
 type SchedulerClass =
   | 'github-actions-push-and-schedule'
   | 'n8n-webhook-and-schedule'
@@ -50,7 +49,7 @@ interface Workspace {
   name: string;
   path: string;
   stack: Stack;
-  package_manager: 'npm' | 'pnpm' | 'yarn' | 'none';
+  package_manager: 'npm' | 'pnpm' | 'yarn' | 'none' | 'uv';
 }
 
 /* `fileset` must be a git_staged fileset; runs only when policy.format_fix_staged_allowed is true. */

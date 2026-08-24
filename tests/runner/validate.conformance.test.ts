@@ -133,6 +133,36 @@ const batteryCases: readonly BatteryCase[] = [
     expectValid: false,
   },
   {
+    label: 'out-of-range enum: workspace stack',
+    mutate: (m) => {
+      (firstOf(m.workspaces, 'workspace') as unknown as { stack: string }).stack = 'not-a-stack';
+    },
+    expectValid: false,
+  },
+  /* Typed assignment, not a cast: a cast would let a member dropped from the TS
+     union still compile. */
+  {
+    label: 'in-range enum: root stack python-tool',
+    mutate: (m) => {
+      m.stack = 'python-tool';
+    },
+    expectValid: true,
+  },
+  {
+    label: 'in-range enum: workspace stack python-tool',
+    mutate: (m) => {
+      firstOf(m.workspaces, 'workspace').stack = 'python-tool';
+    },
+    expectValid: true,
+  },
+  {
+    label: 'in-range enum: workspace package_manager uv',
+    mutate: (m) => {
+      firstOf(m.workspaces, 'workspace').package_manager = 'uv';
+    },
+    expectValid: true,
+  },
+  {
     label: 'out-of-range enum: check mode',
     mutate: (m) => {
       (firstOf(m.tiers.fast, 'fast-tier check') as unknown as { mode: string }).mode = 'advisory';

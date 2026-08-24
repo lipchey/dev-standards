@@ -45,6 +45,7 @@ current code, so they get no standalone entry here.
 | ADR-027 | Accepted | `check-new-deps` proves pnpm workspaces |
 | ADR-028 | Accepted | Shared deep-review core with adaptive tiered topology |
 | ADR-029 | Accepted | Attributed batch execution with distinct timing series |
+| ADR-030 | Accepted | `stack`/`package_manager` stay closed enums; members added on demand |
 
 ---
 
@@ -1415,3 +1416,63 @@ neither owns nor needs to understand.
 - Historical spawn-timed samples remain readable under the aggregation
   default, while attributed measurements intentionally start separate latency
   histories.
+
+---
+
+## ADR-030 — `stack` and `package_manager` stay closed enums; members are added on demand
+
+- **Status:** Accepted
+- **Date:** 2026-08-24
+- **Intake:** consumer ledger row `DS-001` (ariadne
+  `docs/plans/roadmap/06-dev-standards-intake-ledger.md`).
+
+### Context
+
+A consumer needed to declare a `uv`-managed Python tool workspace in
+`workspaces[]` and could not: neither enum had a member for it. The workspace
+was therefore unrepresentable, and a coverage gate asserting "every declared
+workspace is covered by some fileset" would have certified the completeness of a
+list that structurally cannot hold it — legalising the blind spot instead of
+closing it.
+
+Both fields are validated and never read. `stack` has no consumer at all beyond
+`validateEnum`, and the runner has no defaults layer to hang one on: `tierChecks`
+selects the declared tier directly, its only fallback being an empty array for an
+absent optional `audit` tier — no templates, no merge, no overrides.
+`package_manager` is likewise only validated. So the choice was between opening the enums to arbitrary strings,
+deleting the fields, or adding the two members.
+
+### Decision
+
+1. Both enums stay **closed**. New members are added on demand, in a batch that
+   names the consumer needing them.
+2. `stack` gains `python-tool`; `package_manager` gains `uv`.
+3. An enum lives in **three** places that move together — the TS union
+   (`runner/src/types.ts`), the runtime array (`runner/src/validate.ts`), and the
+   JSON schema (`schemas/quality.schema.json`, root *and* workspace items).
+   Runtime-vs-schema drift splits the hand validator from Ajv; TS drift splits
+   the compile-time contract from both while those two still agree.
+4. Every schema-touching change adds its accept **and** reject cases to
+   `tests/runner/validate.conformance.test.ts`, for **each** site the enum
+   occupies — a reject case on the root field does not cover the workspace one.
+   The battery does not grow itself. Accept cases assign through the typed
+   `Manifest` fields, so a member dropped from the TS union fails to compile.
+
+Rejected: opening `stack` to an arbitrary string, deleting it, and making it
+drive gate defaults. The last would mean building a template registry, override
+semantics, `--doctor` resolution, a schema plus hand validator plus mutation
+battery, and a manifest migration — and it treats the wrong defect, since the
+drift it is offered against lives in hand-written argv path lists, not in the
+set of checks. It also costs the property the consumer-authored model is held
+for: `quality.json` as the complete literal truth of the pipeline. Revisit
+trigger: a third stack profile with genuinely different defaults, not a second
+consumer of the same shape.
+
+### Consequences
+
+- Neither value branches any runtime behaviour; the members buy
+  representability, not conduct.
+- A consumer manifest using a new member is rejected by any earlier pin, in all
+  three places at once. The rollback unit is therefore gitlink + lockfile + every
+  consumer config that adopted the new member, in **one** commit — reverting the
+  gitlink alone leaves an unvalidatable manifest.

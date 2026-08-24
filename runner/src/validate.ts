@@ -46,7 +46,7 @@ type UniquenessRule =
   | 'workspace-name-unique'
   | 'group-name-unique';
 
-const STACKS = ['node-service', 'frontend-web', 'n8n-ops', 'meta-docs'] as const;
+const STACKS = ['node-service', 'frontend-web', 'n8n-ops', 'meta-docs', 'python-tool'] as const;
 const SCHEDULER_CLASSES = [
   'github-actions-push-and-schedule',
   'n8n-webhook-and-schedule',
@@ -54,7 +54,7 @@ const SCHEDULER_CLASSES = [
   'local-only',
 ] as const;
 const FILESET_SOURCES = ['git_staged', 'repo_all'] as const;
-const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'none'] as const;
+const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'none', 'uv'] as const;
 const CHECK_MODES = ['blocking', 'report-only'] as const;
 
 const TOP_LEVEL_REQUIRED = [

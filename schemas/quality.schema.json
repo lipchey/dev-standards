@@ -9,7 +9,7 @@
   "properties": {
     "version": { "const": 1, "description": "MAJOR schema version. dev-standards supports the current major and the immediately previous major." },
     "repo": { "type": "string", "minLength": 1, "description": "Repository identifier." },
-    "stack": { "enum": ["node-service", "frontend-web", "n8n-ops", "meta-docs"], "description": "Primary stack template. meta-docs = the self-maintaining-system planning repo (lightweight markdown/secret checks)." },
+    "stack": { "enum": ["node-service", "frontend-web", "n8n-ops", "meta-docs", "python-tool"], "description": "Primary stack template. Closed enum: members are added on demand, never opened to arbitrary strings. meta-docs = the self-maintaining-system planning repo (lightweight markdown/secret checks); python-tool = a uv-managed Python tool workspace." },
     "scheduler_class": { "enum": ["github-actions-push-and-schedule", "n8n-webhook-and-schedule", "schedule-only", "local-only"], "description": "Honest declaration of async/scheduled verification capability (plan §9)." },
     "budgets": {
       "type": "object", "additionalProperties": false,
@@ -56,8 +56,8 @@
         "properties": {
           "name": { "type": "string", "minLength": 1 },
           "path": { "type": "string", "minLength": 1 },
-          "stack": { "enum": ["node-service", "frontend-web", "n8n-ops", "meta-docs"] },
-          "package_manager": { "enum": ["npm", "pnpm", "yarn", "none"] }
+          "stack": { "enum": ["node-service", "frontend-web", "n8n-ops", "meta-docs", "python-tool"] },
+          "package_manager": { "enum": ["npm", "pnpm", "yarn", "none", "uv"] }
         }
       }
     },
