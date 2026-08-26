@@ -94,7 +94,7 @@ export default tseslint.config(
 | `inlineLiterals({files, ignores, ignore})` | all | `@typescript-eslint/no-magic-numbers` (error), with `0`, `1`, `-1`, array indexes, enums, numeric literal types, readonly class properties, and type indexes ignored. Consumer `ignore` values extend the pinned numeric list |
 | `comparisonLiterals({files, ignores, severity})` | all | custom `dev-standards/comparison-literals` (default error): a bare string literal in an equality comparison (`tag === "INPUT"`) or a `switch` case is a magic value — compare against a named constant/union member. `typeof` operands, empty string, and union type declarations exempt. `severity` (default `"error"`) exists for the WARN-first ramp — see below |
 | `typesHome({files, ignores, allowNamePattern})` | all | custom `dev-standards/types-home` (error): exported top-level interfaces and type aliases belong in the consumer's types home. `allowNamePattern` defaults to `"Props$"` |
-| `propertyNaming({files, ignores})` | all | custom `dev-standards/property-naming` (error): non-computed identifier keys on TypeScript property signatures must be at least three characters; `_` remains the discard convention |
+| `propertyNaming({files, ignores, allow})` | all | custom `dev-standards/property-naming` (error): statically-known keys on TypeScript property signatures — identifiers, quoted string literals, and computed keys whose expression is a string literal — must be at least three characters; `_` remains the discard convention. `allow` exempts named keys and REQUIRES `files` (see below) |
 | `naming({files, ignores, exemptNamedImports, extraRestrictedSyntax})` | all | the identifier floor: `no-restricted-syntax` min-3-chars over every name the repo's authors choose (vars, functions, classes, params, catch/destructured bindings, class members, ALL import locals incl. aliases) + `id-match` ASCII-only. `_` discard and object PROPERTY keys exempt. **Owns `no-restricted-syntax` in its scope** (see below) |
 | `sonarjs({dispositions, files})` | all (opt-in) | `eslint-plugin-sonarjs`, wired **only** by an explicit consumer disposition map — the factory ships no rule list, no thresholds and never spreads `recommended`. The map must cover `Object.keys(plugin.rules)` of the installed version exactly, carry a closed-vocabulary reason per rule (`enabled`, `overlap:<ruleId>`, `owned-elsewhere:<gate>`, `hotspot-review`, `unproven`, `style-not-defect`, `cost-exceeds-value`) with a non-empty note for every non-`enabled` one, use `error`/`off` only (no `warn`), and — on every enabled rule — restate each value the plugin would otherwise merge in from `meta.defaultOptions`; anything short of that throws at config-build time. See ADR-026 |
 | `devStandardsPlugin` | advanced composition | the single plugin object containing `constants-home`, `types-home`, `property-naming`, and `comparison-literals`; preset factories already register it |
@@ -251,18 +251,39 @@ makes that safe): `typesHome({files: ["**/*.tsx"], allowNamePattern: "Props$"})`
 
 ## `propertyNaming` — the TypeScript property-signature floor
 
-Flags non-computed identifier keys shorter than three characters on
-`TSPropertySignature` nodes in interfaces and type literals. `_` remains allowed.
-Class fields stay owned by `naming`, and object-literal keys are not checked. Exempt
-externally fixed wire keys by ignoring their modules rather than creating a global key
-allowlist:
+Flags statically-known keys shorter than three characters on `TSPropertySignature`
+nodes in interfaces and type literals — identifiers, quoted string literals (`"id":
+string`), and computed keys whose expression is a string literal (`["id"]: string`),
+so a quoted spelling cannot bypass the floor. Genuinely dynamic computed keys
+(`[Symbol.iterator]`) carry no author-chosen name and are exempt. `_` remains allowed.
+Class fields stay owned by `naming`, and object-literal keys are not checked.
+
+`ignores` is for files with no author-chosen names at all — generated output and
+declaration files. A HAND-WRITTEN module that must keep a short key because an
+external contract fixes it (a persisted jsonl field, a wire key, a database column)
+gets a scoped `allow` entry instead, so every OTHER short key in that file is still
+caught:
 
 ```js
 ...propertyNaming({
   files: ["src/**/*.{ts,tsx}"],
-  ignores: ["**/contracts/wire/**", "**/generated/**", "**/*.d.ts"],
+  ignores: ["**/generated/**", "**/*.d.ts", "src/contracts/wire/packet.ts"],
+}),
+...propertyNaming({
+  files: ["src/contracts/wire/packet.ts"],
+  allow: ["id", "t"],
 }),
 ```
+
+The allow-scoped file is listed in the base entry's `ignores` so exactly ONE entry
+governs it. Overlapping the two scopes also works — flat config resolves one rule id
+by last-match-wins, so the later entry would take effect — but then the exemption
+depends on entry ORDER and silently vanishes if the blocks are ever reordered, and
+because options are replaced rather than merged the allow entry pins whatever
+severity it was written with. Disjoint scopes have neither failure mode.
+
+`allow` without `files` throws at config-build time: an unscoped allow list exempts
+those keys in every linted file, which is the one shape this option is not for.
 
 ## Version pins that matter
 

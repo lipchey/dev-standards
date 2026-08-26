@@ -652,6 +652,22 @@ lands.
   main-session lens pass (ADR-016 2026-07-16 rescope: profile bodies/overlays are
   profile-route reads, no longer main-session-gated).
 
+Amendment 2026-08-26 (consumer intake, ariadne — ledger row DS-023): the Decision
+§2 clause "exemptions are file-scoped, never a global key list" is REFINED, not
+reversed. `property-naming` gains an `allow: string[]` option, and the preferred
+exemption for a HAND-WRITTEN module whose external contract fixes a short key is a
+file-scoped `propertyNaming({files: [<module>], allow: [...]})` entry rather than a
+whole-file `ignores` entry; `ignores` narrows to files with no author-chosen names
+(generated output, `*.d.ts`). Reason the original clause was too strict: a whole-file
+ignore blinds the rule for every FUTURE property of that file, so it protects the
+canary class less well than a named allowlist, not more. Reason the original
+prohibition still binds: an UNSCOPED allow list blinds the named keys in every linted
+file, which is strictly worse than either — so the factory now THROWS when `allow` is
+passed without `files`, making the prohibition mechanical instead of documentary. The
+rule diagnostic, which advertised the file-ignore route, was rewritten in the same
+batch; a message pointing at the demoted route would have shipped the option as dead
+weight.
+
 ---
 
 ## ADR-019 — Two-stage development: functional first, standards at review

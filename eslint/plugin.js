@@ -234,7 +234,7 @@ const typesHomeRule = {
 };
 
 const PROPERTY_NAMING_MESSAGE =
-  "dev-standards/property-naming: property '{{ name }}' is too short (min 3 chars); rename it descriptively, or ignore the wire-contract file when the external key is fixed.";
+  "dev-standards/property-naming: property '{{ name }}' is too short (min 3 chars); rename it descriptively, or list the key in a file-scoped `allow` entry when the external contract fixes it.";
 
 /* The statically-known author-chosen key name: identifiers, string-literal keys
    (`"id": string`), and computed keys whose expression is a string literal
@@ -250,14 +250,22 @@ const propertyNamingRule = {
   meta: {
     type: "suggestion",
     docs: { description: "TypeScript property signatures use names of at least three characters" },
-    schema: [],
+    schema: [
+      {
+        type: "object",
+        properties: { allow: { type: "array", items: { type: "string" }, uniqueItems: true } },
+        additionalProperties: false,
+      },
+    ],
     messages: { tooShort: PROPERTY_NAMING_MESSAGE },
   },
   create(context) {
+    const allow = new Set(context.options[0]?.allow ?? []);
     return {
       TSPropertySignature(node) {
         const keyName = staticPropertyKeyName(node);
         if (keyName === undefined || keyName === "_" || keyName.length >= 3) return;
+        if (allow.has(keyName)) return;
         context.report({ node: node.key, messageId: "tooShort", data: { name: keyName } });
       },
     };

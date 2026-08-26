@@ -85,6 +85,11 @@ export default tseslint.config(
     ignores: ["**/src/types/**", "**/types.ts", "**/*.d.ts"],
     allowNamePattern: "Props$",
   }),
+  /* `ignores` is only for files with no author-chosen names — generated output and
+     declarations. A hand-written module that must keep a short key because an external
+     contract fixes it gets its own later `propertyNaming({files: [it], allow: [...]})`
+     entry plus its path in the `ignores` below, so the two scopes stay disjoint and
+     every OTHER short key in that file is still caught. */
   ...propertyNaming({
     files: ["src/**/*.ts", "src/**/*.tsx"],
     ignores: ["**/src/contracts/wire/**", "**/generated/**", "**/*.d.ts"],
