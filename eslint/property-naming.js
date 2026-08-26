@@ -1,9 +1,9 @@
 import { devStandardsPlugin } from "./plugin.js";
 
 export function propertyNaming({ files, ignores, allow } = {}) {
-  /* An unscoped `allow` exempts those keys in every linted file, which blinds the rule's main
-     catch class repo-wide instead of at the one module whose external contract fixes them. */
-  if (allow?.length && !files?.length) {
+  /* An unscoped `allow` exempts those keys in every linted file, blinding the rule's main
+     catch class repo-wide rather than at the module whose contract fixes them. */
+  if (allow !== undefined && !files?.length) {
     throw new Error(
       "propertyNaming: `allow` requires `files` — scope the key exemption to the modules whose external contract fixes those keys.",
     );

@@ -93,3 +93,11 @@ test("an absent allow option leaves the rule exactly as it was", () => {
 test("propertyNaming refuses an allow list that is not scoped to files", () => {
   assert.throws(() => propertyNaming({ allow: ["id"] }), /`allow` requires `files`/);
 });
+
+test("propertyNaming refuses even an empty unscoped allow", () => {
+  assert.throws(() => propertyNaming({ allow: [] }), /`allow` requires `files`/);
+});
+
+test("propertyNaming still accepts a call that passes no allow at all", () => {
+  assert.equal(propertyNaming({})[0].rules["dev-standards/property-naming"], "error");
+});

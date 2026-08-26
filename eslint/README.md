@@ -52,7 +52,7 @@ export default tseslint.config(
   }),
   ...propertyNaming({
     files: ["packages/*/src/**/*.ts", "apps/*/src/**/*.{ts,tsx}"],
-    ignores: ["**/contracts/wire/**", "**/generated/**", "**/*.d.ts"],
+    ignores: ["**/generated/**", "**/*.d.ts"],
   }),
   { /* repo-local overrides: no-restricted-imports boundaries, etc. */ },
 );

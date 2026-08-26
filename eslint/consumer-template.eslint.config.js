@@ -92,7 +92,7 @@ export default tseslint.config(
      every OTHER short key in that file is still caught. */
   ...propertyNaming({
     files: ["src/**/*.ts", "src/**/*.tsx"],
-    ignores: ["**/src/contracts/wire/**", "**/generated/**", "**/*.d.ts"],
+    ignores: ["**/generated/**", "**/*.d.ts"],
   }),
   /* SonarJS — OPT-IN, and deliberately not seeded active (ADR-026): the factory
      ships no rule list, so it only builds once this repo owns a disposition for
