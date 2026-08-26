@@ -540,7 +540,11 @@ const MANIFEST = {
   generated: { hooks_dir: '.githooks' },
   workspaces: [{ name: 'root', path: '.', stack: 'node-service', package_manager: 'npm' }],
   filesets: [],
-  tiers: { staged: [], fast: [], full: [] },
+  tiers: {
+    staged: [],
+    fast: [{ name: 'noop', argv: ['node', '--version'], timeout_seconds: 5, covers: ['.'] }],
+    full: [],
+  },
   deep_review: { enabled: true, modes: ['review-only', 'review-and-refactor'] },
 };
 

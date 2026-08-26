@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { matches } from '../../runner/src/glob.ts';
+import { literalPrefixDir, matches } from '../../runner/src/glob.ts';
 
 test('**/*.ts matches a nested .ts file', () => {
   assert.equal(matches('runner/src/validate.ts', '**/*.ts'), true);
@@ -35,6 +35,21 @@ test('a middle ** matches zero or more intervening directories', () => {
   assert.equal(matches('a/b/c', 'a/**/c'), true);
   assert.equal(matches('a/b/d/c', 'a/**/c'), true);
   assert.equal(matches('a/b/cx', 'a/**/c'), false);
+});
+
+test('literalPrefixDir cuts a pattern back to the directory it is rooted in', () => {
+  assert.equal(literalPrefixDir('packages/api/src/**/*.ts'), 'packages/api/src');
+  assert.equal(literalPrefixDir('packages/api/package.json'), 'packages/api');
+  assert.equal(literalPrefixDir('docs/**'), 'docs');
+  assert.equal(literalPrefixDir('packages/**/*.ts'), 'packages');
+  assert.equal(literalPrefixDir('packages/api-client/**/*.ts'), 'packages/api-client');
+});
+
+test('literalPrefixDir reports the repo root when no directory precedes the first wildcard', () => {
+  assert.equal(literalPrefixDir('package.json'), '');
+  assert.equal(literalPrefixDir('**/*.ts'), '');
+  assert.equal(literalPrefixDir('*/src/**/*.ts'), '');
+  assert.equal(literalPrefixDir('*.md'), '');
 });
 
 test('matches resists catastrophic backtracking on many doublestars (ReDoS)', () => {

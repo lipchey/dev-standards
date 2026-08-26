@@ -22,7 +22,12 @@ const MANIFEST_BASE = {
   generated: { hooks_dir: '.githooks' },
   workspaces: [{ name: 'root', path: '.', stack: 'node-service', package_manager: 'npm' }],
   filesets: [],
-  tiers: { staged: [], fast: [], full: [], audit: [] },
+  tiers: {
+    staged: [],
+    fast: [{ name: 'noop', argv: ['node', '--version'], timeout_seconds: 5, covers: ['.'] }],
+    full: [],
+    audit: [],
+  },
 };
 
 test('deep_review without guides_dir -> loadConfig defaults to .claude/review-guides', () => {

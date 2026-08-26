@@ -116,6 +116,7 @@ function setupRepo(): Fixture {
           operational_exit_codes: [2],
           skip_if_empty: 'manifests_staged',
           timeout_seconds: 10,
+          covers: ['.'],
         },
       ],
       fast: [],

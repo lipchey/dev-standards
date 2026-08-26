@@ -30,6 +30,10 @@ export interface Check {
      as a caught finding or slips through a bypassable check. Integers 1–255, unique. */
   operational_exit_codes?: number[];
   group?: string;
+  /* Workspace paths this check declares it addresses, satisfying workspace-fileset-coverage. Trusted
+     by construction — the runner never interprets argv, so validation stops at the path being a
+     declared workspace. */
+  covers?: string[];
 }
 
 export interface CheckGroupMember {

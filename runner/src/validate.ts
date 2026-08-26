@@ -1,4 +1,5 @@
 import type { Manifest, ValidationError, ValidationResult } from './types.ts';
+import { literalPrefixDir } from './glob.ts';
 
 /**
  * Hand validator for quality manifests. Structural checks mirror the schema
@@ -38,7 +39,9 @@ type RuleName =
   | 'group-eligibility'
   | 'group-tier'
   | 'group-argv-token'
-  | 'group-path';
+  | 'group-path'
+  | 'workspace-fileset-coverage'
+  | 'covers-workspace-reference';
 
 type UniquenessRule =
   | 'fileset-name-unique'
@@ -96,6 +99,7 @@ const CHECK_ALLOWED = [
   'bypassable',
   'operational_exit_codes',
   'group',
+  'covers',
 ] as const;
 const GROUP_REQUIRED = ['name', 'argv', 'artifact_dir', 'members'] as const;
 const GROUP_MEMBER_KEYS = ['check', 'result_key'] as const;
@@ -506,6 +510,9 @@ function validateCheck(value: unknown, path: string, errors: ValidationError[]):
     validateOperationalExitCodes(check['operational_exit_codes'], `${path}.operational_exit_codes`, errors);
   }
   if (Object.hasOwn(check, 'group')) validateNonEmptyString(check['group'], `${path}.group`, errors);
+  if (Object.hasOwn(check, 'covers')) {
+    validateStringArray(check['covers'], `${path}.covers`, 1, errors, true);
+  }
 }
 
 function validateGroups(value: unknown, errors: ValidationError[]): void {
@@ -664,6 +671,7 @@ function validateSemantics(root: Record<string, unknown>, errors: ValidationErro
   validateFilesetSemantics(root, errors);
   validateFormatSemantics(root, errors);
   validateWorkspaceUniqueness(root, errors);
+  validateWorkspaceCoverage(root, errors);
 }
 
 interface LocatedCheck {
@@ -1150,6 +1158,144 @@ function validateDiffFilterScope(
       fileset['diff_filter'],
     );
   }
+}
+
+/* Every declared workspace must sit in the file scope of something that runs, else it silently drops
+   out of every check while the tier still reports green. The rule proves the DECLARATION, not that a
+   file is reachable: `exclude` subtracts after `include`, so an include narrowed to nothing by its
+   own exclude is statically indistinguishable from a live one. Only the degenerate exclude — rooted
+   at or above the workspace — is treated as cancelling a fileset's coverage. */
+function validateWorkspaceCoverage(root: Record<string, unknown>, errors: ValidationError[]): void {
+  const workspaces = root['workspaces'];
+  if (!isUnknownArray(workspaces)) return;
+  const declaredPaths = new Set<string>();
+  for (const entry of workspaces) {
+    if (!isRecord(entry)) continue;
+    const path = entry['path'];
+    if (typeof path === 'string' && path.length > 0) declaredPaths.add(path);
+  }
+
+  const claimed = collectCoverClaims(root, declaredPaths, errors);
+  const referenced = collectTokenReferencedFilesetNames(root);
+  const filesets = isUnknownArray(root['filesets']) ? root['filesets'] : [];
+
+  workspaces.forEach((entry, index) => {
+    if (!isRecord(entry)) return;
+    const path = entry['path'];
+    if (typeof path !== 'string' || path.length === 0) return; /* structural pass already flagged it */
+    if (claimed.has(path)) return;
+    const covering = filesets.some(
+      (fileset) =>
+        isRecord(fileset) &&
+        typeof fileset['name'] === 'string' &&
+        referenced.has(fileset['name']) &&
+        filesetCoversWorkspace(fileset, path),
+    );
+    if (covering) return;
+    addError(
+      errors,
+      `workspaces[${index}].path`,
+      'workspace-fileset-coverage',
+      `workspace path ${JSON.stringify(path)} is in no check's file scope: no fileset referenced by a ` +
+        `{files:<fileset>} token has an include glob rooted at it, and no check declares it in "covers"`,
+      path,
+    );
+  });
+}
+
+/* `skip_if_empty` is deliberately NOT a reference here: it only decides WHETHER a check runs, while
+   the file names reach argv through the token alone — so a fileset referenced that way certifies
+   coverage the execution does not have. A fileset nobody references at all the runner never even
+   expands. A grouped check is skipped for the same reason: the runner spawns the group's argv, never
+   the member's, so a token there expands into nothing that runs — a group covers only via `covers`. */
+function collectTokenReferencedFilesetNames(root: Record<string, unknown>): ReadonlySet<string> {
+  const referenced = new Set<string>();
+  const tiers = root['tiers'];
+  if (!isRecord(tiers)) return referenced;
+  for (const tier of TIER_NAMES) {
+    const checks = tiers[tier];
+    if (!isUnknownArray(checks)) continue;
+    for (const check of checks) {
+      if (!isRecord(check)) continue;
+      if (check['group'] !== undefined) continue;
+      const argv = check['argv'];
+      if (!isUnknownArray(argv)) continue;
+      for (const argument of argv) {
+        if (typeof argument !== 'string') continue;
+        const name = FILES_TOKEN.exec(argument)?.[1];
+        if (name !== undefined) referenced.add(name);
+      }
+    }
+  }
+  return referenced;
+}
+
+/* A claim must name a declared workspace path exactly — "under it" would let a typo or a deleted
+   workspace keep certifying coverage. */
+function collectCoverClaims(
+  root: Record<string, unknown>,
+  declaredPaths: ReadonlySet<string>,
+  errors: ValidationError[],
+): ReadonlySet<string> {
+  const claimed = new Set<string>();
+  const tiers = root['tiers'];
+  if (!isRecord(tiers)) return claimed;
+  for (const tier of TIER_NAMES) {
+    const checks = tiers[tier];
+    if (!isUnknownArray(checks)) continue;
+    checks.forEach((check, checkIndex) => {
+      if (!isRecord(check)) return;
+      const covers = check['covers'];
+      if (!isUnknownArray(covers)) return;
+      covers.forEach((entry, index) => {
+        if (typeof entry !== 'string' || entry.length === 0) return; /* structural pass flagged it */
+        if (declaredPaths.has(entry)) {
+          claimed.add(entry);
+          return;
+        }
+        addError(
+          errors,
+          `tiers.${tier}[${checkIndex}].covers[${index}]`,
+          'covers-workspace-reference',
+          `covers entry ${JSON.stringify(entry)} is not a declared workspace path`,
+          entry,
+        );
+      });
+    });
+  }
+  return claimed;
+}
+
+function filesetCoversWorkspace(fileset: Record<string, unknown>, workspacePath: string): boolean {
+  const include = fileset['include'];
+  if (!isUnknownArray(include)) return false;
+  const included = include.some(
+    (pattern) => typeof pattern === 'string' && prefixIsInsideWorkspace(literalPrefixDir(pattern), workspacePath),
+  );
+  if (!included) return false;
+  const exclude = fileset['exclude'];
+  if (!isUnknownArray(exclude)) return true;
+  return !exclude.some(
+    (pattern) => typeof pattern === 'string' && prefixSwallowsWorkspace(literalPrefixDir(pattern), workspacePath),
+  );
+}
+
+/* Segment-bounded, not bare startsWith, which would read a `packages/api-client` glob as coverage of
+   `packages/api`. The prefix must NAME the workspace or a directory below it, so a workspace added
+   under an existing wildcard is not pre-covered on arrival. Every prefix lies inside the whole-repo
+   workspace ".". */
+function prefixIsInsideWorkspace(prefix: string, workspacePath: string): boolean {
+  if (workspacePath === '.') return true;
+  return prefix === workspacePath || prefix.startsWith(`${workspacePath}/`);
+}
+
+/* The mirror, for `exclude`: a glob rooted at the workspace or above it. Deliberately an
+   over-approximation — the prefix says where the glob starts, not that it matches every file under
+   the workspace — so the error direction is a false red, never a false green. A wildcard-led exclude
+   has the empty repo-root prefix and therefore cancels only the "." workspace. */
+function prefixSwallowsWorkspace(prefix: string, workspacePath: string): boolean {
+  const root = prefix === '' ? '.' : prefix;
+  return root === workspacePath || workspacePath.startsWith(`${root}/`);
 }
 
 function validateWorkspaceUniqueness(root: Record<string, unknown>, errors: ValidationError[]): void {

@@ -41,6 +41,7 @@ const MANIFEST = {
         argv: ['node', '--version'],
         timeout_seconds: 5,
         skip_if_empty: 'repo_ts',
+        covers: ['.'],
       },
     ],
     full: [],
@@ -109,6 +110,7 @@ test('prints each check configured timeout before spawning it', () => {
         argv: [process.execPath, '-e', 'process.stdout.write("child started\\n")'],
         timeout_seconds: 7,
         mode: 'report-only',
+        covers: ['.'],
       },
     ];
     fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
@@ -148,6 +150,7 @@ test('configured timeout line stays truthful when an empty fileset skips the che
         argv: [process.execPath, '-e', 'process.stdout.write("child started\\n")'],
         timeout_seconds: 7,
         skip_if_empty: 'repo_ts',
+        covers: ['.'],
       },
     ];
     fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
@@ -182,7 +185,7 @@ test('a blocking failure ends the run with a failed record that re-prints only t
     const manifestPath = path.join(tmp, 'quality.json');
     const manifest = structuredClone(MANIFEST) as unknown as Manifest;
     manifest.tiers.fast = [
-      { name: 'failing-check', argv: [process.execPath, '-e', 'process.exit(3)'], timeout_seconds: 30 },
+      { name: 'failing-check', argv: [process.execPath, '-e', 'process.exit(3)'], timeout_seconds: 30, covers: ['.'] },
       { name: 'later-pass', argv: [process.execPath, '--version'], timeout_seconds: 30 },
     ];
     fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
@@ -217,7 +220,7 @@ test('a green run ends with a passed record on stdout, after the report line', (
     const manifestPath = path.join(tmp, 'quality.json');
     const manifest = structuredClone(MANIFEST) as unknown as Manifest;
     manifest.tiers.fast = [
-      { name: 'passing-check', argv: [process.execPath, '--version'], timeout_seconds: 30 },
+      { name: 'passing-check', argv: [process.execPath, '--version'], timeout_seconds: 30, covers: ['.'] },
     ];
     fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
 
@@ -249,7 +252,7 @@ test('a group-less manifest serializes the legacy report row shape', () => {
     const manifestPath = path.join(tmp, 'quality.json');
     const manifest = structuredClone(MANIFEST) as unknown as Manifest;
     manifest.tiers.fast = [
-      { name: 'passing-check', argv: [process.execPath, '--version'], timeout_seconds: 30 },
+      { name: 'passing-check', argv: [process.execPath, '--version'], timeout_seconds: 30, covers: ['.'] },
     ];
     fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
 

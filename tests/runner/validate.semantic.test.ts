@@ -34,7 +34,7 @@ const baseManifest: Manifest = {
   filesets: [{ name: 'repo_ts', source: 'repo_all', include: ['src/**/*.ts'] }],
   tiers: {
     staged: [],
-    fast: [{ name: 'typecheck', argv: ['npm', 'run', 'typecheck'], timeout_seconds: 30 }],
+    fast: [{ name: 'typecheck', argv: ['npm', 'run', 'typecheck'], timeout_seconds: 30, covers: ['.'] }],
     full: [],
   },
 };
@@ -443,6 +443,173 @@ test('duplicate workspace names fail with rule workspace-name-unique', () => {
     package_manager: 'npm',
   });
   expectError(validate(manifest), { path: 'workspaces[1].name', rule: 'workspace-name-unique' });
+});
+
+function addWorkspace(manifest: Manifest, path: string): void {
+  manifest.workspaces.push({ name: path, path, stack: 'node-service', package_manager: 'npm' });
+}
+
+function referenceFilesetByToken(manifest: Manifest, name: string): void {
+  firstFastCheck(manifest).argv.push(`{files:${name}}`);
+}
+
+function expectNoErrorAt(result: ValidationResult, path: string): void {
+  assert.equal(
+    findError(result, { path }),
+    undefined,
+    `expected no error at ${path}; received errors:\n${JSON.stringify(result.errors, null, 2)}`,
+  );
+}
+
+test('a workspace no fileset names and no check claims fails with workspace-fileset-coverage', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  expectError(validate(manifest), {
+    path: 'workspaces[1].path',
+    rule: 'workspace-fileset-coverage',
+  });
+});
+
+test('an include glob rooted at the workspace covers it once a {files:} token references the fileset', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  firstFileset(manifest).include.push('packages/api/src/**/*.ts');
+  referenceFilesetByToken(manifest, 'repo_ts');
+  const result = validate(manifest);
+  assert.equal(result.ok, true, `expected coverage to pass; received errors:\n${JSON.stringify(result.errors, null, 2)}`);
+});
+
+test('an include glob whose wildcard stands above the workspace is not coverage', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  firstFileset(manifest).include.push('packages/**/*.ts');
+  referenceFilesetByToken(manifest, 'repo_ts');
+  expectError(validate(manifest), {
+    path: 'workspaces[1].path',
+    rule: 'workspace-fileset-coverage',
+  });
+});
+
+test('a sibling directory sharing the workspace path as a string prefix is not coverage', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  firstFileset(manifest).include.push('packages/api-client/**/*.ts');
+  referenceFilesetByToken(manifest, 'repo_ts');
+  expectError(validate(manifest), {
+    path: 'workspaces[1].path',
+    rule: 'workspace-fileset-coverage',
+  });
+});
+
+test('a fileset referenced only through skip_if_empty is not coverage', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  firstFileset(manifest).include.push('packages/api/src/**/*.ts');
+  firstFastCheck(manifest).skip_if_empty = 'repo_ts';
+  expectError(validate(manifest), {
+    path: 'workspaces[1].path',
+    rule: 'workspace-fileset-coverage',
+  });
+});
+
+test('a {files:} token inside a grouped check is not coverage', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  firstFileset(manifest).include.push('packages/api/src/**/*.ts');
+  referenceFilesetByToken(manifest, 'repo_ts');
+  addValidGroup(manifest);
+  expectError(validate(manifest), {
+    path: 'workspaces[1].path',
+    rule: 'workspace-fileset-coverage',
+  });
+});
+
+/* The exclude clause reads only where a glob starts, so an ancestor-rooted one cancels coverage even
+   when it could not match every file under the workspace. Pinned because the over-approximation is
+   deliberate: it errs red, and narrowing it is a contract change, not a bug fix. */
+test('an ancestor-rooted exclude cancels coverage even when its pattern cannot reach every file', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  const fileset = firstFileset(manifest);
+  fileset.include.push('packages/api/src/**/*.ts');
+  fileset.exclude = ['packages/*'];
+  referenceFilesetByToken(manifest, 'repo_ts');
+  expectError(validate(manifest), {
+    path: 'workspaces[1].path',
+    rule: 'workspace-fileset-coverage',
+  });
+});
+
+test('an exclude rooted at the workspace cancels that fileset coverage', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  const fileset = firstFileset(manifest);
+  fileset.include.push('packages/api/src/**/*.ts');
+  fileset.exclude = ['packages/api/**'];
+  referenceFilesetByToken(manifest, 'repo_ts');
+  expectError(validate(manifest), {
+    path: 'workspaces[1].path',
+    rule: 'workspace-fileset-coverage',
+  });
+});
+
+test('an exclude below the workspace, or one led by a wildcard, leaves its coverage standing', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  const fileset = firstFileset(manifest);
+  fileset.include.push('packages/api/src/**/*.ts');
+  fileset.exclude = ['packages/api/src/generated/**', '**/*.d.ts'];
+  referenceFilesetByToken(manifest, 'repo_ts');
+  expectNoErrorAt(validate(manifest), 'workspaces[1].path');
+});
+
+test('the whole-repo workspace is covered by any token-referenced fileset', () => {
+  const manifest = makeManifest();
+  delete firstFastCheck(manifest).covers;
+  referenceFilesetByToken(manifest, 'repo_ts');
+  const result = validate(manifest);
+  assert.equal(result.ok, true, `expected "." to be covered; received errors:\n${JSON.stringify(result.errors, null, 2)}`);
+});
+
+test('dropping only the covers key reds the workspace that claim carried', () => {
+  const manifest = makeManifest();
+  assert.equal(validate(manifest).ok, true, 'the fixture must be green while the claim stands');
+  delete firstFastCheck(manifest).covers;
+  expectError(validate(manifest), {
+    path: 'workspaces[0].path',
+    rule: 'workspace-fileset-coverage',
+  });
+});
+
+test('a claim counts from any tier: references and claims are manifest-global', () => {
+  const manifest = makeManifest();
+  delete firstFastCheck(manifest).covers;
+  manifest.tiers.full.push({
+    name: 'docs-audit',
+    argv: ['node', '--version'],
+    timeout_seconds: 5,
+    covers: ['.'],
+  });
+  const result = validate(manifest);
+  assert.equal(result.ok, true, `expected the full-tier claim to count; received errors:\n${JSON.stringify(result.errors, null, 2)}`);
+});
+
+test('a covers entry naming no declared workspace fails with covers-workspace-reference', () => {
+  const manifest = makeManifest();
+  firstFastCheck(manifest).covers = ['.', 'packages/ghost'];
+  expectError(validate(manifest), {
+    path: 'tiers.fast[0].covers[1]',
+    rule: 'covers-workspace-reference',
+  });
+});
+
+test('a covers entry below a declared workspace path claims nothing', () => {
+  const manifest = makeManifest();
+  addWorkspace(manifest, 'packages/api');
+  firstFastCheck(manifest).covers = ['.', 'packages/api/src'];
+  const result = validate(manifest);
+  expectError(result, { path: 'tiers.fast[0].covers[1]', rule: 'covers-workspace-reference' });
+  expectError(result, { path: 'workspaces[1].path', rule: 'workspace-fileset-coverage' });
 });
 
 test('independent violations are all collected in one validate() result', () => {

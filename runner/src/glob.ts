@@ -42,6 +42,15 @@ export function matches(path: string, pattern: string): boolean {
   return next[0] === 1;
 }
 
+/* The literal directory a pattern is rooted in, '' being the repo root; scanning to the first `*`
+   suffices because the dialect has no other wildcard. */
+export function literalPrefixDir(pattern: string): string {
+  const firstStar = pattern.indexOf('*');
+  const head = firstStar === -1 ? pattern : pattern.slice(0, firstStar);
+  const lastSlash = head.lastIndexOf('/');
+  return lastSlash === -1 ? '' : head.slice(0, lastSlash);
+}
+
 type Token =
   | { kind: 'lit'; ch: string }
   | { kind: 'star' }

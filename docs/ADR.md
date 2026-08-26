@@ -1492,3 +1492,64 @@ consumer of the same shape.
   three places at once. The rollback unit is therefore gitlink + lockfile + every
   consumer config that adopted the new member, in **one** commit — reverting the
   gitlink alone leaves an unvalidatable manifest.
+
+## ADR-031 — Every declared workspace must sit in the file scope of something that runs
+
+- **Status:** Accepted
+- **Date:** 2026-08-26
+- **Intake:** consumer ledger row `DS-004` (ariadne
+  `docs/plans/roadmap/06-dev-standards-intake-ledger.md`).
+
+### Context
+
+`workspaces[]` was declared and never consumed. Because the file scope of a
+check comes from hand-written globs and argv path lists, a workspace can fall
+out of every check while the tier still reports green — the failure is silent by
+construction, and no gate contradicts it. Measured on the live consumer: two of
+eighteen declared workspaces were in no executed check's scope.
+
+### Decision
+
+1. A semantic rule, `workspace-fileset-coverage`: every declared workspace path
+   is either rooted by an `include` glob of a fileset that some check references
+   with a `{files:<name>}` token, or named in some check's new `covers` array.
+2. Only a `{files:}` reference in a **non-grouped** check counts. `skip_if_empty`
+   decides *whether* a check runs while the file names reach argv through the
+   token alone; a fileset nobody references the runner never expands; and a
+   grouped member's argv is never spawned at all — the runner runs the group's,
+   which may not carry a token. Each would certify a scope the execution does not
+   have, so a grouped check covers only through `covers`.
+3. The prefix test is strict and segment-bounded: the glob's literal prefix must
+   name the workspace or a directory under it. `packages/**` does not cover
+   `packages/api`, so a workspace added under an existing wildcard is not
+   pre-covered on arrival — which is the drift the rule exists to catch. The
+   price is that consumers name workspace paths in globs explicitly.
+4. `covers` is declared on the **check**, not on the workspace, and is trusted:
+   the runner does not interpret argv, so validation goes no further than the
+   claimed path being a declared workspace. A claim dies with the check carrying
+   it; an exemption held on the workspace would outlive the checks it excused and
+   leave the workspace untested under a green gate.
+5. The rule proves the declaration, not that a file is reachable: `exclude`
+   subtracts after `include`, so an include narrowed to nothing by its own
+   exclude is statically indistinguishable from a live one. Only an exclude
+   rooted at or above the workspace cancels a fileset's coverage — an
+   over-approximation, since a prefix says where a glob starts and not that it
+   matches everything below, and one kept because it errs red.
+
+Rejected: covering a workspace with a fileset no check consumes (the runner never
+expands it, so the gate would green on an inert record); narrowing the rule to
+"filesets-addressed workspaces" (circular, and its only non-circular reading keys
+the exemption on `stack`, which nothing reads at runtime); a
+`fileset_coverage: "not_required"` opt-out on the workspace (survives deleting
+the checks it excused); permissive prefix matching (silent in exactly the case
+the gate is built for).
+
+### Consequences
+
+- A manifest that carries no `{files:}` token and no `covers` claim is now
+  invalid, including one that declares no checks at all. The consumer seed
+  therefore ships a `covers` claim on its repo-wide check.
+- Old manifest against the new validator: red only where a workspace is genuinely
+  uncovered. New manifest against an older pin: `covers` fails
+  `rejectUnknownKeys`, so a consumer cannot adopt the claim before its pin moves
+  — the two land in one commit or not at all.

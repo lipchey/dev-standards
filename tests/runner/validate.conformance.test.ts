@@ -219,6 +219,49 @@ const batteryCases: readonly BatteryCase[] = [
     expectValid: false,
   },
   {
+    label: 'check is missing a required key (timeout_seconds deleted)',
+    mutate: (m) => {
+      delete (firstOf(m.tiers.fast, 'fast-tier check') as unknown as { timeout_seconds?: unknown })
+        .timeout_seconds;
+    },
+    expectValid: false,
+  },
+  {
+    label: 'covers: a declared workspace path',
+    mutate: (m) => {
+      firstOf(m.tiers.fast, 'fast-tier check').covers = ['.'];
+    },
+    expectValid: true,
+  },
+  {
+    label: 'covers: empty array',
+    mutate: (m) => {
+      firstOf(m.tiers.fast, 'fast-tier check').covers = [];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'covers: empty string item',
+    mutate: (m) => {
+      firstOf(m.tiers.fast, 'fast-tier check').covers = [''];
+    },
+    expectValid: false,
+  },
+  {
+    label: 'covers: not an array',
+    mutate: (m) => {
+      (firstOf(m.tiers.fast, 'fast-tier check') as unknown as { covers: unknown }).covers = '.';
+    },
+    expectValid: false,
+  },
+  {
+    label: 'covers: non-string item',
+    mutate: (m) => {
+      (firstOf(m.tiers.fast, 'fast-tier check') as unknown as { covers: unknown }).covers = [1];
+    },
+    expectValid: false,
+  },
+  {
     label: 'valid groups declaration and check group reference',
     mutate: (m) => {
       setValidGroup(m);
@@ -864,5 +907,6 @@ test('schema declares nested property groups in canonical order', () => {
     'bypassable',
     'operational_exit_codes',
     'group',
+    'covers',
   ]);
 });

@@ -32,7 +32,11 @@ function baseManifest(): Manifest {
     generated: { hooks_dir: '.githooks' },
     workspaces: [{ name: 'root', path: '.', stack: 'node-service', package_manager: 'npm' }],
     filesets: [{ name: 'staged_fmt', source: 'git_staged', include: ['src/**/*.ts'] }],
-    tiers: { staged: [], fast: [], full: [] },
+    tiers: {
+      staged: [],
+      fast: [{ name: 'noop', argv: ['node', '--version'], timeout_seconds: 5, covers: ['.'] }],
+      full: [],
+    },
     format: { argv: ['prettier', '--write'], fileset: 'staged_fmt', timeout_seconds: 30 },
   };
 }

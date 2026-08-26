@@ -11,7 +11,7 @@
     { "name": "api", "path": "packages/api", "stack": "node-service", "package_manager": "npm" },
     { "name": "web", "path": "packages/web", "stack": "frontend-web", "package_manager": "npm" }
   ],
-  "filesets": [ { "name": "repo_sources", "source": "repo_all", "include": ["packages/**/*.ts", "packages/**/*.tsx"], "exclude": [] } ],
+  "filesets": [ { "name": "repo_sources", "source": "repo_all", "include": ["packages/api/**/*.ts", "packages/web/**/*.ts", "packages/**/*.tsx"], "exclude": [] } ],
   "tiers": {
     "staged": [],
     "fast": [

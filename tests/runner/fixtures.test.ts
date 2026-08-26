@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validate } from '../../runner/src/validate.ts';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const runnerPath = path.join(repoRoot, 'runner', 'dist', 'verify-runner.mjs');
@@ -81,6 +82,24 @@ before(() => {
   assert.equal(build.status, 0, 'esbuild build of verify-runner.ts must succeed');
 
   for (const name of FIXTURES) ensureFixtureRepo(name);
+});
+
+/* This fixture's green rests on per-workspace include globs, so rewriting them back to one shared
+   wildcard must fail here rather than leave the coverage rule passing vacuously. */
+test('fixture workspace-repo: dropping one workspace-rooted include reds that workspace', () => {
+  const raw: unknown = JSON.parse(fs.readFileSync(fixtureManifest('workspace-repo'), 'utf8'));
+  assert.equal(validate(raw).ok, true, 'the fixture must validate before the mutation');
+
+  const manifest = raw as { filesets: Array<{ include: string[] }>; workspaces: Array<{ path: string }> };
+  const fileset = manifest.filesets[0];
+  assert.ok(fileset, 'fixture must declare a fileset');
+  const dropped = 'packages/api/**/*.ts';
+  assert.ok(fileset.include.includes(dropped), `fixture must include ${dropped}`);
+  fileset.include = fileset.include.filter((pattern) => pattern !== dropped);
+
+  const result = validate(manifest);
+  const error = result.errors.find((e) => e.path === 'workspaces[0].path');
+  assert.equal(error?.rule, 'workspace-fileset-coverage', `expected packages/api to lose coverage; got:\n${JSON.stringify(result.errors, null, 2)}`);
 });
 
 for (const name of FIXTURES) {

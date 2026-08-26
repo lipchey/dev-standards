@@ -62,7 +62,7 @@ const NOOP_MANIFEST = {
   filesets: [],
   tiers: {
     staged: [],
-    fast: [{ name: 'noop', argv: ['node', '--version'], timeout_seconds: 5 }],
+    fast: [{ name: 'noop', argv: ['node', '--version'], timeout_seconds: 5, covers: ['.'] }],
     full: [],
     audit: [],
   },

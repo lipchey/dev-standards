@@ -32,7 +32,7 @@ const baseManifest: Manifest = {
   filesets: [{ name: 'repo_ts', source: 'repo_all', include: ['src/**/*.ts'] }],
   tiers: {
     staged: [],
-    fast: [{ name: 'typecheck', argv: ['npm', 'run', 'typecheck'], timeout_seconds: 30 }],
+    fast: [{ name: 'typecheck', argv: ['npm', 'run', 'typecheck'], timeout_seconds: 30, covers: ['.'] }],
     full: [],
   },
 };

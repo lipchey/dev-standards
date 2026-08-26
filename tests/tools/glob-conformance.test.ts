@@ -73,7 +73,11 @@ function withInclude(pattern: string): Manifest {
     generated: { hooks_dir: '.githooks' },
     workspaces: [{ name: 'root', path: '.', stack: 'node-service', package_manager: 'npm' }],
     filesets: [{ name: 'fs', source: 'repo_all', include: [pattern] }],
-    tiers: { staged: [], fast: [], full: [] },
+    tiers: {
+      staged: [],
+      fast: [{ name: 'noop', argv: ['node', '--version'], timeout_seconds: 5, covers: ['.'] }],
+      full: [],
+    },
   };
 }
 

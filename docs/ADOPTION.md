@@ -196,7 +196,13 @@ existing globs/commands do not already reach it:
   the workspace; an unscoped or broad-glob config already covers it.
 - **`quality.json` filesets** — a fileset is a gate only where a check references
   it (`{files:…}`, `skip_if_empty`, formatting); add the workspace to the filesets
-  it must feed, not to every one.
+  it must feed, not to every one. The validator enforces the floor
+  (`workspace-fileset-coverage`, ADR-031): a declared workspace must either be
+  rooted by an include glob of a fileset some check references with `{files:…}` —
+  `skip_if_empty` does not count, it decides only whether a check runs — or be
+  named in a check's `covers: ["<path>"]`, the claim for checks that address a
+  path without a fileset (Nx targets, whole-tree commands). The glob must NAME
+  the path: `packages/**` does not cover `packages/api`.
 - **typecheck chain** — add its `tsconfig`/project reference if typecheck is
   per-project rather than whole-tree.
 - **any deep-review / contract gate** — name the new zone in the relevant check
