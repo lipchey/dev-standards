@@ -46,6 +46,7 @@ current code, so they get no standalone entry here.
 | ADR-028 | Accepted | Shared deep-review core with adaptive tiered topology |
 | ADR-029 | Accepted | Attributed batch execution with distinct timing series |
 | ADR-030 | Accepted | `stack`/`package_manager` stay closed enums; members added on demand |
+| ADR-031 | Accepted | Testing Library preset ships an explicit full-catalog matrix behind the import gate |
 
 ---
 
@@ -1553,3 +1554,106 @@ the gate is built for).
   uncovered. New manifest against an older pin: `covers` fails
   `rejectUnknownKeys`, so a consumer cannot adopt the claim before its pin moves
   — the two land in one commit or not at all.
+
+---
+
+## ADR-031 — The Testing Library preset ships an explicit full-catalog matrix behind the import gate
+
+- **Status:** Accepted
+- **Date:** 2026-08-31
+- **Intake:** consumer ledger row `DS-024` (ariadne
+  `docs/plans/roadmap/06-dev-standards-intake-ledger.md`).
+- **Supersedes:** the `eslint/README.md` §"Deliberately opt-in / not shipped (v1)"
+  item that held `testing-library`/`jest-dom` out of the package.
+- **Follows:** ADR-026 (machinery upstream, curation per repo) — with the opposite
+  answer on WHO owns the matrix, for the reason in Context.
+
+### Context
+
+A consumer with React Testing Library tests had no shared preset: the plugin was on
+the opt-in list, so each repo would install and curate it alone. Two properties of
+this plugin make the SonarJS answer (upstream ships machinery, the consumer authors
+the whole matrix) the wrong one here:
+
+- **The catalog is small and stack-determined.** 29 rules in 7.16.2, all about one
+  library's API. Unlike SonarJS's 279 rules — where which ones collide with the repo's
+  other gates is a property of the repo — a rule like `await-async-queries` is either
+  applicable (the repo uses RTL) or the whole preset is.
+- **Aggressive reporting is on by default.** Any TL-shaped name counts as a Testing
+  Library util even in a file that imports none, so a node test with its own
+  `renderThing()` or `screen.debug()` reports. Every consumer would rediscover this
+  from the false reports and would either hand-narrow its glob to the RTL files or
+  eat them.
+
+The remaining per-repo axis is small and real: whether `@testing-library/jest-dom` is
+installed (its 12 rules suggest matchers that otherwise do not exist), and which files
+are the RTL tests.
+
+### Decision
+
+1. `eslint/testing-library.js` exports `testingLibrary({ files, jestDom = false })`,
+   one flat-config block. `files` has no default and the factory throws a `TypeError`
+   on anything but a non-empty array of strings — the consumer names its own test glob,
+   as with every other scoped preset. `jestDom` must be a boolean.
+2. **The matrix is explicit for the full catalog, and `flat/react` is never spread.**
+   Every rule of the installed plugin carries an `error`/`off` disposition; a plugin
+   upgrade that adds a rule or re-severities one turns the catalog test red instead of
+   changing what consumers lint. `flat/react`'s three option-carrying entries
+   (`await-async-events`, `no-await-sync-events`, `no-dom-import`) are restated verbatim.
+3. **No `warn`.** A lifelong warning is not a decision, and consumers lint with
+   `--max-warnings=0`; `no-debugging-utils` is therefore promoted from `flat/react`'s
+   `warn` to `error`.
+4. **The import gate replaces aggressive reporting.** The preset sets
+   `testing-library/utils-module`, `custom-renders`, and `custom-queries` to `"off"`, so
+   `testing-library/*` judges only files importing an official Testing Library package
+   and `files` may span a whole test tree. Naming one repo's test-utils path here would
+   be wrong for every other consumer, so a consumer with custom renders or queries
+   restates those settings in its own override. Two rules sit outside the gate, in
+   opposite directions: `no-node-access` demands a real import either way, and the
+   jest-dom rules of decision 5 have no gate at all.
+5. `jestDom: true` adds `eslint-plugin-jest-dom` to the same block with all 12 rules at
+   `error`, including `prefer-pressed` (outside the plugin's `recommended` only because
+   `toBePressed()` is young — jest-dom 7 ships it). Those rules match assertion shapes
+   and have no import gate of their own.
+6. Both plugins are exact-pinned `dependencies` (`eslint-plugin-testing-library@7.16.2`,
+   `eslint-plugin-jest-dom@5.10.1`), so consumers inherit the versions through the
+   `file:` dep.
+
+**The 5 rules left `off`, and why:** `prefer-implicit-assert` — mutually exclusive with
+`prefer-explicit-assert`, and an assertion whose intent is invisible is the worse
+default; `consistent-data-testid` — its `testIdPattern` is a consumer policy, and
+`no-test-id-queries` (on) says not to query by test id at all; `prefer-query-matchers` —
+reports nothing without a consumer-supplied `validEntries` map, and no matcher has one
+correct query family across repos; `prefer-user-event` and `prefer-user-event-setup` —
+both require `@testing-library/user-event`, which the preset does not pull in. Each
+returns through a consumer override the moment its premise changes.
+
+**The 24 rules at `error`** are the whole rest of the catalog: the async-correctness
+family (`await-async-queries`, `await-async-utils`, `await-async-events`,
+`no-await-sync-events`, `no-await-sync-queries`, `prefer-find-by`,
+`no-wait-for-multiple-assertions`, `no-wait-for-side-effects`, `no-wait-for-snapshot`,
+`prefer-query-by-disappearance`), the implementation-detail family (`no-container`,
+`no-node-access`, `no-dom-import`, `no-test-id-queries`,
+`render-result-naming-convention`, `prefer-screen-queries`), the intent family
+(`prefer-explicit-assert`, `prefer-presence-queries`, `no-debugging-utils`), and the
+lifecycle/correctness rest (`no-manual-cleanup`, `no-render-in-lifecycle`,
+`no-unnecessary-act`, `no-promise-in-fire-event`, `no-global-regexp-flag-in-query`).
+`await-async-events` is vacuous until `user-event` appears and is kept at `flat/react`'s
+setting so it wakes up on its own.
+
+### Consequences
+
+- A consumer whose auto-cleanup is not globally registered (no `globals: true`, no
+  `afterEach` in a shared setup file) needs `no-manual-cleanup: "off"` in its own
+  override: its manual `cleanup()` calls are load-bearing. The rule stays `error` here
+  because it is correct for every consumer whose cleanup IS registered.
+- A consumer pointing `files` at a whole test tree still accepts `jest-dom` findings in
+  its non-RTL tests: those rules match assertion shapes, gate or no gate.
+- The preset does not carry a suppression or baseline mechanism. A repo adopting it on
+  existing tests rewrites them; a rule it cannot satisfy is an owner decision recorded
+  in that repo, not a silent `off`.
+- `tests/eslint/testing-library.test.mjs` is the guard for 2 and 5: the literal matrix
+  is compared against the preset's `rules` and against `Object.keys(plugin.rules)` for
+  both plugins, so neither a swapped severity here nor a rule appearing or vanishing in
+  an upgrade can land green. A severity `flat/react` changes upstream is invisible to it
+  by construction — the preset never inherits one.

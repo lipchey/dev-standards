@@ -97,6 +97,7 @@ export default tseslint.config(
 | `propertyNaming({files, ignores, allow})` | all | custom `dev-standards/property-naming` (error): statically-known keys on TypeScript property signatures — identifiers, quoted string literals, and computed keys whose expression is a string literal — must be at least three characters; `_` remains the discard convention. `allow` exempts named keys and REQUIRES `files` (see below) |
 | `naming({files, ignores, exemptNamedImports, extraRestrictedSyntax})` | all | the identifier floor: `no-restricted-syntax` min-3-chars over every name the repo's authors choose (vars, functions, classes, params, catch/destructured bindings, class members, ALL import locals incl. aliases) + `id-match` ASCII-only. `_` discard and object PROPERTY keys exempt. **Owns `no-restricted-syntax` in its scope** (see below) |
 | `sonarjs({dispositions, files})` | all (opt-in) | `eslint-plugin-sonarjs`, wired **only** by an explicit consumer disposition map — the factory ships no rule list, no thresholds and never spreads `recommended`. The map must cover `Object.keys(plugin.rules)` of the installed version exactly, carry a closed-vocabulary reason per rule (`enabled`, `overlap:<ruleId>`, `owned-elsewhere:<gate>`, `hotspot-review`, `unproven`, `style-not-defect`, `cost-exceeds-value`) with a non-empty note for every non-`enabled` one, use `error`/`off` only (no `warn`), and — on every enabled rule — restate each value the plugin would otherwise merge in from `meta.defaultOptions`; anything short of that throws at config-build time. See ADR-026 |
+| `testingLibrary({files, jestDom})` | frontend-web (RTL) | `eslint-plugin-testing-library` with an explicit disposition for **every** rule of the installed plugin — 24 `error`, 5 `off`, `recommended` never spread — plus, on `jestDom: true`, all 12 `eslint-plugin-jest-dom` rules at `error`. `files` is required and the factory throws without it. The plugin's aggressive reporting is switched off, so `testing-library/*` judges only files that import Testing Library. See ADR-031 |
 | `devStandardsPlugin` | advanced composition | the single plugin object containing `constants-home`, `types-home`, `property-naming`, and `comparison-literals`; preset factories already register it |
 
 The factory presets (`node`, `frontend*`, `constantsHome`, `inlineLiterals`,
@@ -285,6 +286,49 @@ severity it was written with. Disjoint scopes have neither failure mode.
 `allow` without `files` throws at config-build time: an unscoped allow list exempts
 those keys in every linted file, which is the one shape this option is not for.
 
+## `testingLibrary` — RTL rules behind the import gate
+
+React Testing Library plus, optionally, the `jest-dom` matcher rules — one flat-config
+block over the consumer's test glob:
+
+```js
+...testingLibrary({
+  files: ["apps/web/tests/**/*.{test,spec}.{ts,tsx}"],
+  jestDom: true,
+}),
+```
+
+`files` has no default and the factory throws without a non-empty array of globs: which
+tests are RTL tests is a property of the repo, not of this package. `jestDom` defaults to
+`false` — enabling it without the matchers installed would ship 12 rules whose fix
+suggestions do not exist in the repo.
+
+**The matrix is explicit and `flat/react` is never spread.** Every rule of the installed
+plugin carries an `error`/`off` disposition (no `warn`: a lifelong warning is not a
+decision, and consumers lint with `--max-warnings=0`), so an upstream severity change
+cannot reach a consumer silently, and a rule an upgrade adds or drops turns the catalog
+test red. `flat/react`'s three option-carrying entries are restated verbatim.
+The five `off` rules and why: `prefer-implicit-assert` (mutually exclusive with
+`prefer-explicit-assert`, which is on), `consistent-data-testid` (its pattern is a
+consumer policy, and `no-test-id-queries` is on), `prefer-query-matchers` (reports
+nothing without a consumer-supplied `validEntries` map), `prefer-user-event` and
+`prefer-user-event-setup` (both demand `@testing-library/user-event`; a consumer that
+installs it turns them on in its own override). ADR-031 carries the per-rule rationale.
+
+**The import gate.** By default the plugin reports *aggressively*: any TL-shaped name
+counts as a Testing Library util even in a file that imports none, so a node test with
+its own `renderThing()` or `screen.debug()` under the same glob would report. The preset
+sets `testing-library/utils-module`, `custom-renders`, and `custom-queries` to `"off"`,
+which restores the gate — `testing-library/*` then judges only files importing an
+official Testing Library package, and `files` may span a whole test tree. A consumer with
+a real custom render or query wrapper names it in its own override block; one repo's
+test-utils path here would be wrong for every other.
+
+Two things sit outside that gate, in opposite directions. `no-node-access` demands a real
+Testing Library import either way, so `document.querySelector` in a node test is clean
+even with aggressive reporting on. The `jest-dom` rules have no gate at all: they match
+assertion shapes (`expect(el.disabled).toBe(true)`) wherever they appear under `files`.
+
 ## Version pins that matter
 
 - The plugins are `dependencies` of this package, so a consumer's `file:` install
@@ -315,5 +359,5 @@ Add per-repo only where the trigger is real; none belong in the shared default:
 - **`@eslint-react`** — its render-safety overlaps `react-hooks@6` (already shipped by
   `frontend`), and it needs Node 22; add only for its effect-leak family.
 - **`@tanstack/eslint-plugin-query`** (if react-query), **`eslint-plugin-tailwindcss`**
-  (if Tailwind, `no-contradicting-classname` only), **`testing-library`/`jest-dom`**
-  (if RTL), **`@eslint/json`** (n8n JSON exports), **`i18next`** (scope tightly — noisy).
+  (if Tailwind, `no-contradicting-classname` only), **`@eslint/json`** (n8n JSON
+  exports), **`i18next`** (scope tightly — noisy).

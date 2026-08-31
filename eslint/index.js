@@ -10,3 +10,4 @@ export { typesHome } from "./types-home.js";
 export { propertyNaming } from "./property-naming.js";
 export { naming } from "./naming.js";
 export { sonarjs } from "./sonarjs.js";
+export { testingLibrary } from "./testing-library.js";

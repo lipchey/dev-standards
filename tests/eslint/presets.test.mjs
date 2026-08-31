@@ -13,6 +13,7 @@ import {
   frontendVite,
   frontendNext,
   sonarjs,
+  testingLibrary,
 } from "../../eslint/index.js";
 import { SMOKE_DISPOSITIONS, SMOKE_RULE } from "./sonarjs-fixture.mjs";
 
@@ -36,6 +37,9 @@ const config = [
      generated all-off map with exactly one rule enabled, so the fixture proves
      the factory really wires the plugin in. */
   ...sonarjs({ dispositions: SMOKE_DISPOSITIONS, files: ["**/*.{ts,tsx}"] }),
+  /* `{ts,tsx}`, not `tsx`: the import-gate fixture is a .ts file, and the preset
+     reaches only what its own glob names. */
+  ...testingLibrary({ files: ["tests/eslint/fixtures/**/*.{ts,tsx}"], jestDom: true }),
 ];
 
 const eslint = new ESLint({ cwd: root, overrideConfigFile: true, overrideConfig: config });
@@ -54,6 +58,10 @@ const EXPECT = {
   "tests/eslint/fixtures/bad/vite/bad-export.tsx": "react-refresh/only-export-components",
   "tests/eslint/fixtures/bad/next/img.tsx": "@next/next/no-img-element",
   "tests/eslint/fixtures/bad/sonarjs.ts": `sonarjs/${SMOKE_RULE}`,
+  "tests/eslint/fixtures/bad/tl-node-access.test.tsx": "testing-library/no-node-access",
+  "tests/eslint/fixtures/bad/tl-async-utils.test.tsx": "testing-library/await-async-utils",
+  "tests/eslint/fixtures/bad/tl-render-naming.test.tsx": "testing-library/render-result-naming-convention",
+  "tests/eslint/fixtures/bad/jd-enabled-disabled.test.tsx": "jest-dom/prefer-enabled-disabled",
 };
 
 for (const [file, ruleId] of Object.entries(EXPECT)) {
@@ -67,7 +75,14 @@ for (const [file, ruleId] of Object.entries(EXPECT)) {
   });
 }
 
-for (const file of ["tests/eslint/fixtures/good/clean.ts", "tests/eslint/fixtures/good/component.tsx"]) {
+for (const file of [
+  "tests/eslint/fixtures/good/clean.ts",
+  "tests/eslint/fixtures/good/component.tsx",
+  "tests/eslint/fixtures/good/tl-clean.test.tsx",
+  /* No `@testing-library/*` import: direct DOM access and a home-grown render helper
+     both stay clean, which is the import gate the preset's settings restore. */
+  "tests/eslint/fixtures/good/dom-without-rtl.test.ts",
+]) {
   test(`no errors in ${path.basename(file)}`, () => {
     const r = byName.get(file);
     assert.ok(r, `no lint result for ${file}`);

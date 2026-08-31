@@ -43,6 +43,14 @@ export default tseslint.config(
        ...frontend({ files: ["src/**\/*.tsx"] }),
        ...frontendVite({ files: ["src/**\/*.tsx"] }),   (Vite app only)
        ...frontendNext({ files: ["app/**\/*.tsx"] }),   (Next site only) */
+  /* Testing Library — OPT-IN: add `testingLibrary` to the dev-standards/eslint import
+     and scope it to the RTL tests (delete if this repo has no React tests). `files` is
+     required; pass `jestDom: true` only once @testing-library/jest-dom is installed and
+     registered in the vitest setup, or its 12 rules suggest matchers you do not have:
+       ...testingLibrary({ files: ["tests/**\/*.{test,spec}.{ts,tsx}"], jestDom: false }),
+     Only files importing @testing-library/* get the testing-library rules, so the glob
+     may span the whole test tree; the jest-dom rules match assertion shapes anywhere
+     under it. */
   /* Naming floor — ACTIVE from day one: every identifier the repo's authors
      choose is >=3 chars and ASCII (imports, params, destructuring and class
      members included; `_` discard and object PROPERTY keys exempt). What counts
