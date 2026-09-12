@@ -336,12 +336,23 @@ assertion shapes (`expect(el.disabled).toBe(true)`) wherever they appear under `
 - Everything here is ESLint-9-clean. **When moving consumers to ESLint 10**, that is
   also the moment to add `eslint-plugin-unicorn` (its ≥66 line requires ESLint 10.4;
   the ESLint-9 line is stuck at 65.x — held out of v1 to avoid a compat island).
-- **ESLint 10 is blocked today** by two plugins shipped here as `dependencies`, so a
-  consumer on `eslint@10` hits `ERESOLVE` on install regardless of which presets it
-  uses: `eslint-plugin-jsx-a11y` (latest 6.10.2 peers `^3…^9`, no ^10) and
-  `eslint-plugin-react-hooks@6` (peer `^3…^9`; ^10 lands only in 7.x — a major bump).
-  Revisit the ESLint-10 move — the unicorn moment above — once both ship ^10 peer
-  support.
+- **ESLint 10 works; the peer declarations lag.** The `eslint` peer here accepts
+  `^9.38.0 || ^10.0.0`. Two plugins shipped as `dependencies` still cap their own
+  `eslint` peer at `^9` — `eslint-plugin-jsx-a11y@6.10.2` (no ^10 release exists)
+  and `eslint-plugin-react-hooks@6.1.1` — but both LOAD and run under ESLint 10:
+  measured on a consumer, `--print-config` returns 31 active `jsx-a11y/` rules and
+  3 `react-hooks/` rules. So a pnpm consumer needs a
+  `peerDependencyRules.allowedVersions` waiver per capped plugin, and an npm
+  consumer needs `legacy-peer-deps`; nothing needs a code change.
+- **This package's own dev lane stays on ESLint 9** — bumping its `devDependencies`
+  to `^10` makes `npm install` fail `ERESOLVE` against those two capped peers even
+  on a clean resolve, which would drag in `legacy-peer-deps`, a lockfile
+  regeneration and an `allowScripts` update for a floated esbuild. Widening the
+  peer costs none of that. Move the dev lane when jsx-a11y ships ^10.
+- **`eslint-plugin-react-hooks` 7 is a code change, not a version bump** — v7
+  removed the `configs["flat/recommended"]` key that `frontend.js` reads, so
+  forcing 7.x crashes config load. That is the remaining ESLint-10 work here, and
+  it is also the unicorn moment above.
 
 ## Deliberately opt-in / not shipped (v1)
 

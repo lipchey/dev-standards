@@ -66,7 +66,11 @@ const path = require("path");
 const crypto = require("crypto");
 const pkgPath = process.argv[1];
 /* Add only absent keys — a consumer that already pins a version keeps it. eslint
-   is the consumers own runner (peer of dev-standards), so it is seeded too. */
+   is the consumers own runner (peer of dev-standards), so it is seeded too.
+   The peer accepts ^10, but the seed stays on 9: jsx-a11y and react-hooks still
+   cap their eslint peer at ^9, and a fresh consumer has no waiver wiring yet, so
+   seeding ^10 hands it an install that warns under pnpm and fails under npm.
+   Move both keys to ^10 once jsx-a11y ships a ^10 peer. */
 const WANT = {
   "dev-standards": "file:vendor/dev-standards",
   "eslint": "^9.38.0",
