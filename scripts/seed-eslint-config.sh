@@ -70,7 +70,8 @@ const pkgPath = process.argv[1];
    The peer accepts ^10, but the seed stays on 9: jsx-a11y and react-hooks still
    cap their eslint peer at ^9, and a fresh consumer has no waiver wiring yet, so
    seeding ^10 hands it an install that warns under pnpm and fails under npm.
-   Move both keys to ^10 once jsx-a11y ships a ^10 peer. */
+   Move both keys to ^10 only once BOTH those plugins accept ^10 — clearing one
+   leaves the other still producing ERESOLVE. */
 const WANT = {
   "dev-standards": "file:vendor/dev-standards",
   "eslint": "^9.38.0",

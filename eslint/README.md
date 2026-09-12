@@ -333,9 +333,10 @@ assertion shapes (`expect(el.disabled).toBe(true)`) wherever they appear under `
 
 - The plugins are `dependencies` of this package, so a consumer's `file:` install
   pins them centrally — bump here once, every consumer inherits it on the next pin.
-- Everything here is ESLint-9-clean. **When moving consumers to ESLint 10**, that is
-  also the moment to add `eslint-plugin-unicorn` (its ≥66 line requires ESLint 10.4;
-  the ESLint-9 line is stuck at 65.x — held out of v1 to avoid a compat island).
+- Everything here is clean on both ESLint 9 and 10. `eslint-plugin-unicorn` is a
+  separate optional follow-up, not part of the ESLint-10 move: its ≥66 line needs
+  ESLint 10.4, and the ESLint-9 line is stuck at 65.x, so it became addable once a
+  consumer reached 10 — it was never a prerequisite for getting there.
 - **ESLint 10 works; the peer declarations lag.** The `eslint` peer here accepts
   `^9.38.0 || ^10.0.0`. Two plugins shipped as `dependencies` still cap their own
   `eslint` peer at `^9` — `eslint-plugin-jsx-a11y@6.10.2` (no ^10 release exists)
@@ -348,11 +349,13 @@ assertion shapes (`expect(el.disabled).toBe(true)`) wherever they appear under `
   to `^10` makes `npm install` fail `ERESOLVE` against those two capped peers even
   on a clean resolve, which would drag in `legacy-peer-deps`, a lockfile
   regeneration and an `allowScripts` update for a floated esbuild. Widening the
-  peer costs none of that. Move the dev lane when jsx-a11y ships ^10.
+  peer costs none of that. Move the dev lane only when BOTH capped plugins accept
+  ^10 — clearing one still leaves the other producing the same `ERESOLVE`. The same
+  condition retires a consumer's waivers and unblocks seeding ^10.
 - **`eslint-plugin-react-hooks` 7 is a code change, not a version bump** — v7
   removed the `configs["flat/recommended"]` key that `frontend.js` reads, so
-  forcing 7.x crashes config load. That is the remaining ESLint-10 work here, and
-  it is also the unicorn moment above.
+  forcing 7.x crashes config load. It is an optional follow-up, not unfinished
+  ESLint-10 work: consumers run on 10 without it.
 
 ## Deliberately opt-in / not shipped (v1)
 
